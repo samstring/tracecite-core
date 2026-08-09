@@ -28,7 +28,7 @@
 ## 安装
 
 ```bash
-pip install tracecite-core
+pip install -e .
 ```
 
 零依赖。Python 3.10+。

@@ -28,7 +28,7 @@ Three things that make log analysis harder than it should be:
 ## Install
 
 ```bash
-pip install tracecite-core
+pip install -e .
 ```
 
 Zero dependencies. Python 3.10+.
