@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tracecite-core"
+version = "0.1.0"
+description = "Stdlib-only primitives for turning text into line-addressable evidence."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "TraceCite Contributors" }]
+keywords = ["text", "evidence", "filter", "agents", "log-analysis"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["build>=1", "pytest>=7"]
+
+[project.scripts]
+tracecite-core = "tracecite_core.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["tracecite_core*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
