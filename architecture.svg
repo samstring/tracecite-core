@@ -1,0 +1,57 @@
+<svg role="img" viewBox="0 0 680 240" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <title>TraceCite Core Execution Flow</title>
+  <desc>Data flows from Source through Segment, Match, Filter, Fold, Events to Run</desc>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  </style>
+
+  <rect x="20" y="15" width="640" height="215" rx="16" fill="#F1EFE8" stroke="#D3D1C7" stroke-width="0.5"/>
+
+  <!-- Row 1 -->
+  <rect x="40" y="50" width="118" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="99" y="68" text-anchor="middle" font-size="13" fill="#0C447C" font-weight="500">Source</text>
+  <text x="99" y="84" text-anchor="middle" font-size="11" fill="#378ADD" font-weight="400">file/archive/stream</text>
+
+  <line x1="166" y1="76" x2="198" y2="76" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
+
+  <rect x="206" y="50" width="118" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="265" y="68" text-anchor="middle" font-size="13" fill="#0C447C" font-weight="500">Segment</text>
+  <text x="265" y="84" text-anchor="middle" font-size="11" fill="#378ADD" font-weight="400">split into records</text>
+
+  <line x1="332" y1="76" x2="364" y2="76" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
+
+  <rect x="372" y="50" width="118" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="431" y="68" text-anchor="middle" font-size="13" fill="#0C447C" font-weight="500">Match</text>
+  <text x="431" y="84" text-anchor="middle" font-size="11" fill="#378ADD" font-weight="400">fastest engine</text>
+
+  <line x1="498" y1="76" x2="530" y2="76" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
+
+  <rect x="538" y="50" width="118" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="597" y="68" text-anchor="middle" font-size="13" fill="#0C447C" font-weight="500">Filter</text>
+  <text x="597" y="84" text-anchor="middle" font-size="11" fill="#378ADD" font-weight="400">time/PID scope</text>
+
+  <!-- Arrow: Filter → Fold -->
+  <polyline points="597,102 597,128 265,128 265,144" fill="none" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
+
+  <!-- Row 2 -->
+  <rect x="206" y="156" width="118" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+  <text x="265" y="174" text-anchor="middle" font-size="13" fill="#085041" font-weight="500">Fold</text>
+  <text x="265" y="190" text-anchor="middle" font-size="11" fill="#1D9E75" font-weight="400">group similar</text>
+
+  <line x1="332" y1="182" x2="364" y2="182" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
+
+  <rect x="372" y="156" width="118" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+  <text x="431" y="174" text-anchor="middle" font-size="13" fill="#085041" font-weight="500">Events</text>
+  <text x="431" y="190" text-anchor="middle" font-size="11" fill="#1D9E75" font-weight="400">structured output</text>
+
+  <line x1="498" y1="182" x2="530" y2="182" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
+
+  <rect x="538" y="156" width="118" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+  <text x="597" y="174" text-anchor="middle" font-size="13" fill="#085041" font-weight="500">Run</text>
+  <text x="597" y="190" text-anchor="middle" font-size="11" fill="#1D9E75" font-weight="400">freeze + verify</text>
+</svg>
