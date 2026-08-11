@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import random
+import hashlib
 import re
 import shutil
 from collections import Counter
@@ -227,9 +227,19 @@ def _build_unmatched_summary(
     chosen_ids = {id(s) for row in samples.values() for s in row}
     rest = [s for s in pool if id(s) not in chosen_ids]
     if rest:
-        rand = random.sample(rest, min(3, len(rest)))
-        if rand:
-            samples["random"] = rand
+        # Stable pseudo-random coverage: same input produces the same summary,
+        # while hash ordering avoids always selecting only adjacent head rows.
+        selected = sorted(
+            enumerate(rest),
+            key=lambda item: (
+                hashlib.sha256(item[1].encode("utf-8", errors="replace")).hexdigest(),
+                item[0],
+            ),
+        )[:3]
+        if selected:
+            # Keep the published key for schema compatibility; selection is now
+            # deterministic even though the historical name is ``random``.
+            samples["random"] = [value for _, value in selected]
     summary["samples"] = samples  # type: ignore[assignment]
     return summary
 

@@ -10,19 +10,28 @@ ROOT = Path(__file__).parents[1]
 
 def test_core_has_no_application_or_device_format_dependency() -> None:
     package = ROOT / "src" / "tracecite_core"
-    upper_layers = ("tracecite_mobile", "tracecite_" + "liz" + "hi")
+    upper_layers = (
+        "tracecite.runtime",
+        "tracecite.extension",
+        "tracecite.integrations",
+        "tracecite_agent",
+        "tracecite_mobile",
+        "tracecite_ci",
+        "tracecite_" + "liz" + "hi",
+    )
     for path in package.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 assert all(
-                    not alias.name.startswith(upper_layers)
+                    alias.name != "tracecite"
+                    and not alias.name.startswith(upper_layers)
                     for alias in node.names
                 )
             if isinstance(node, ast.ImportFrom):
-                assert not (node.module or "").startswith(
-                    upper_layers
-                )
+                module = node.module or ""
+                assert module != "tracecite"
+                assert not module.startswith(upper_layers)
             if isinstance(node, ast.ClassDef):
                 assert node.name != "DeviceLogSegmenter"
     assert not (package / "processor.py").exists()
@@ -30,7 +39,25 @@ def test_core_has_no_application_or_device_format_dependency() -> None:
 
 def test_core_declares_no_runtime_dependencies() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'name = "tracecite"' in pyproject
     assert "dependencies = []" in pyproject
+
+
+def test_main_layers_do_not_import_domain_extensions() -> None:
+    forbidden = ("tracecite_mobile", "tracecite_ci")
+    for package in (
+        ROOT / "src" / "tracecite_core",
+        ROOT / "src" / "tracecite" / "runtime",
+        ROOT / "src" / "tracecite" / "extension",
+        ROOT / "src" / "tracecite" / "integrations",
+    ):
+        for path in package.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    assert all(not alias.name.startswith(forbidden) for alias in node.names)
+                elif isinstance(node, ast.ImportFrom):
+                    assert not (node.module or "").startswith(forbidden)
 
 
 def test_core_gitignore_covers_local_graph_cache_and_evidence() -> None:

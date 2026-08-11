@@ -3,7 +3,7 @@
 
 import pytest
 
-from tracecite_core.segmenter import FormatSegmenter, build_segmenter
+from tracecite_core.segmenter import FormatSegmenter, JsonLineSegmenter, build_segmenter
 
 CUSTOM_SAMPLE = """\
 [2026-08-08 10:00:01.123] INFO  user-42 action=login
@@ -74,3 +74,29 @@ class TestFormatSegmenter:
         assert records[1].timestamp is None
 
 
+def test_jsonline_preserves_invalid_rows_as_evidence() -> None:
+    segmenter = JsonLineSegmenter()
+    records = list(
+        segmenter.segment_lines(
+            [
+                (1, '{"message":"ok"}\n'),
+                (2, "not-json\n"),
+                (3, "[1, 2]\n"),
+            ]
+        )
+    )
+
+    assert len(records) == 3
+    assert records[1].fields["raw_fallback"] is True
+    assert records[2].fields["raw_fallback"] is True
+
+
+def test_jsonline_honors_custom_level_and_message_fields() -> None:
+    segmenter = JsonLineSegmenter(level_field="severity_name", msg_field="body")
+    record = next(
+        segmenter.segment_lines(
+            [(1, '{"severity_name":"WARN","body":"custom"}\n')]
+        )
+    )
+
+    assert record.fields == {"level": "WARN", "msg": "custom"}

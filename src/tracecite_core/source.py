@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """文本来源：引擎的输入接缝。
 
-现有 ``platforms/`` 解决的是「真机设备」这一类来源（list/stream/session/capture），
-本模块解决的是更泛化的「一坨文本从哪来」：本地文件、目录、压缩包、外部命令实时输出。
+本模块只解决通用的「文本从哪来」：本地文件、目录、压缩包、外部命令实时输出。
+具体设备、产品或平台的采集适配由上层包提供。
 
 核心约定 —— ``snapshot()`` 是唯一的归一化边界：
 
@@ -154,6 +154,10 @@ class ArchiveSource:
 
     path: Path
     extract_dir: Optional[Path] = None
+    max_members: int = 10_000
+    max_total_size: int = 2 * 1024 * 1024 * 1024
+    max_member_size: int = 512 * 1024 * 1024
+    max_compression_ratio: float = 1_000.0
     _members: List[Path] = field(default_factory=list, init=False)
     _target_dir: Optional[Path] = field(default=None, init=False, repr=False)
 
@@ -161,6 +165,14 @@ class ArchiveSource:
         self.path = Path(self.path).expanduser()
         if not self.path.exists():
             raise SourceError(f"压缩包不存在: {self.path}")
+        for name, value in (
+            ("max_members", self.max_members),
+            ("max_total_size", self.max_total_size),
+            ("max_member_size", self.max_member_size),
+            ("max_compression_ratio", self.max_compression_ratio),
+        ):
+            if value <= 0:
+                raise SourceError(f"{name} 必须大于 0")
 
     @staticmethod
     def is_archive(path: Path) -> bool:
@@ -190,41 +202,97 @@ class ArchiveSource:
         target.mkdir(parents=True, exist_ok=True)
         self._target_dir = target
         target_root = target.resolve()
+        extracted_members = 0
+        extracted_size = 0
+        extracted_paths: List[Path] = []
 
-        if zipfile.is_zipfile(self.path):
-            with zipfile.ZipFile(self.path) as zf:
-                for member in zf.infolist():
-                    dest = (target / member.filename).resolve()
-                    mode = (member.external_attr >> 16) & 0o170000
-                    if not dest.is_relative_to(target_root) or mode == 0o120000:
-                        continue
-                    if member.is_dir():
-                        dest.mkdir(parents=True, exist_ok=True)
-                        continue
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    with zf.open(member) as source, dest.open("wb") as output:
-                        shutil.copyfileobj(source, output)
-        elif tarfile.is_tarfile(self.path):
-            with tarfile.open(self.path) as tf:
-                for member in tf.getmembers():
-                    dest = (target / member.name).resolve()
-                    if (
-                        not dest.is_relative_to(target_root)
-                        or not member.isfile()
-                        or member.issym()
-                        or member.islnk()
-                    ):
-                        continue
-                    source = tf.extractfile(member)
-                    if source is None:
-                        continue
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    with source, dest.open("wb") as output:
-                        shutil.copyfileobj(source, output)
-        else:
-            raise SourceError(f"不是可识别的压缩包: {self.path}")
+        def check_limits(name: str, size: int, compressed_size: Optional[int] = None) -> None:
+            nonlocal extracted_members, extracted_size
+            extracted_members += 1
+            extracted_size += max(0, int(size))
+            if extracted_members > self.max_members:
+                raise SourceError(
+                    f"压缩包成员过多: {extracted_members} > {self.max_members}"
+                )
+            if size > self.max_member_size:
+                raise SourceError(
+                    f"压缩包成员过大: {name}: {size} > {self.max_member_size}"
+                )
+            if extracted_size > self.max_total_size:
+                raise SourceError(
+                    f"压缩包解压总量过大: {extracted_size} > {self.max_total_size}"
+                )
+            if compressed_size is not None and size > 0:
+                ratio = size / max(1, compressed_size)
+                if ratio > self.max_compression_ratio:
+                    raise SourceError(
+                        f"压缩比异常: {name}: {ratio:.1f} > {self.max_compression_ratio:g}"
+                    )
 
-        self._members = sorted(p for p in target.rglob("*") if p.is_file())
+        try:
+            if zipfile.is_zipfile(self.path):
+                with zipfile.ZipFile(self.path) as zf:
+                    safe_members = []
+                    for member in zf.infolist():
+                        dest = (target / member.filename).resolve()
+                        mode = (member.external_attr >> 16) & 0o170000
+                        if member.is_dir():
+                            continue
+                        if not dest.is_relative_to(target_root) or mode == 0o120000:
+                            raise SourceError(
+                                f"压缩包含不安全成员: {member.filename}"
+                            )
+                        check_limits(member.filename, member.file_size, member.compress_size)
+                        safe_members.append((member, dest))
+                    for member, dest in safe_members:
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(member) as source, dest.open("wb") as output:
+                            shutil.copyfileobj(source, output)
+                        extracted_paths.append(dest)
+            elif tarfile.is_tarfile(self.path):
+                with tarfile.open(self.path) as tf:
+                    safe_members = []
+                    for member in tf:
+                        dest = (target / member.name).resolve()
+                        if member.isdir():
+                            continue
+                        if (
+                            not dest.is_relative_to(target_root)
+                            or not member.isfile()
+                            or member.issym()
+                            or member.islnk()
+                        ):
+                            raise SourceError(
+                                f"压缩包含不安全成员: {member.name}"
+                            )
+                        check_limits(member.name, member.size)
+                        safe_members.append((member, dest))
+                    archive_size = max(1, self.path.stat().st_size)
+                    archive_ratio = extracted_size / archive_size
+                    if archive_ratio > self.max_compression_ratio:
+                        raise SourceError(
+                            f"压缩包总体压缩比异常: {archive_ratio:.1f} > "
+                            f"{self.max_compression_ratio:g}"
+                        )
+                    for member, dest in safe_members:
+                        source = tf.extractfile(member)
+                        if source is None:
+                            continue
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        with source, dest.open("wb") as output:
+                            shutil.copyfileobj(source, output)
+                        extracted_paths.append(dest)
+            else:
+                raise SourceError(f"不是可识别的压缩包: {self.path}")
+        except Exception:
+            for path in reversed(extracted_paths):
+                path.unlink(missing_ok=True)
+            if self.extract_dir is None:
+                shutil.rmtree(target, ignore_errors=True)
+                self._target_dir = None
+            raise
+
+        self._members = sorted(extracted_paths)
         return list(self._members)
 
     def snapshot(self) -> Path:
@@ -244,8 +312,7 @@ class ArchiveSource:
 class LiveSource:
     """实时来源：跑一个外部命令，把 stdout 落盘，再冻结成快照。
 
-    命令可以是任意语言的任意程序（idevicesyslog / adb logcat / 自研 collector / 一段脚本），
-    引擎只负责启动、落盘、冻结，不理解命令语义。
+    命令可以是任意语言的任意程序；Core 只负责启动、落盘、冻结，不理解命令语义。
 
     两种用法：
 

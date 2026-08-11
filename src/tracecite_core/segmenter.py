@@ -180,7 +180,24 @@ class JsonLineSegmenter(Segmenter):
                 continue
             try:
                 obj = _json.loads(stripped)
-            except _json.JSONDecodeError:
+            except _json.JSONDecodeError as exc:
+                yield Record(
+                    text=line,
+                    start_line=line_number,
+                    end_line=line_number,
+                    fields={"parse_error": str(exc), "raw_fallback": True},
+                )
+                continue
+            if not isinstance(obj, dict):
+                yield Record(
+                    text=line,
+                    start_line=line_number,
+                    end_line=line_number,
+                    fields={
+                        "parse_error": f"JSON 顶层必须是对象，实际为 {type(obj).__name__}",
+                        "raw_fallback": True,
+                    },
+                )
                 continue
             fields: Dict[str, Any] = {}
             ts = None
@@ -206,11 +223,13 @@ class JsonLineSegmenter(Segmenter):
                             break
                         except ValueError:
                             continue
-            for k in _JSON_LEVEL_KEYS:
+            level_keys = (self._level_field,) if self._level_field else _JSON_LEVEL_KEYS
+            for k in level_keys:
                 if k in obj:
                     fields["level"] = obj[k]
                     break
-            for k in _JSON_MSG_KEYS:
+            message_keys = (self._msg_field,) if self._msg_field else _JSON_MSG_KEYS
+            for k in message_keys:
                 if k in obj:
                     fields["msg"] = str(obj[k])[:200]
                     break

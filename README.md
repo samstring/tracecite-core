@@ -1,145 +1,120 @@
-<p align="center">
-  <strong>TraceCite Core</strong>
-</p>
+# TraceCite
 
-<p align="center">
-  <strong>Turn logs into structured evidence agents can read directly.</strong>
-</p>
+**Extensible evidence runtime for AI debugging agents.**
 
-<p align="center">
-  <a href="#"><img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue"></a>
-  <a href="#"><img alt="license" src="https://img.shields.io/badge/license-MIT-green"></a>
-  <a href="#"><img alt="python" src="https://img.shields.io/badge/python-3.10%2B-blue"></a>
-  <a href="#"><img alt="deps" src="https://img.shields.io/badge/zero%20deps-brightgreen"></a>
-</p>
+Give an agent large, changing logs without putting all of those logs into its
+context. TraceCite freezes inputs, returns bounded evidence pointers, verifies
+their provenance, and lets domain packages add investigation capabilities
+without modifying TraceCite itself.
 
----
+```text
+Raw data -> Core evidence -> Runtime tools -> Your Agent
+                                  ^
+                                  |
+                       Domain extensions
+                  Mobile / CI / third-party
+```
 
-## The Problem
-
-Three things that make log analysis harder than it should be:
-
-**You found something, but you can't point to it.** An error is discovered, but the connection to the exact source line is lost. Another person, another session — the conclusion can't be traced back.
-
-**Repeated lines drown the signal.** The same error appears 500 times. The output is 500 nearly identical lines. You have to count and categorize them yourself.
-
-**You found nothing, and don't know what to try next.** You searched for `"OOM"` — no hits. What else in the log is worth searching for? Pure guesswork.
+TraceCite is infrastructure **for** Codex, Claude, ChatGPT, or a custom agent.
+It does not embed another LLM agent.
 
 ## Install
 
 ```bash
-pip install -e .
+pip install tracecite
 ```
 
-Zero dependencies. Python 3.10+.
+The package has no runtime dependencies outside the Python standard library.
 
-## Usage
+## Agent-facing tools
 
 ```bash
-# Search with keywords, limit to the last 5 minutes, collapse repeated lines
-tracecite-core filter app.log --grep "Error|timeout" --last 5m --fold --json
+tracecite probe ./logs --glob "*.log" --recursive
+tracecite search app.log "timeout|OOM" --regex --snapshot
+tracecite expand .tracecite/snapshots/app.log 120 --before 5 --after 10
+tracecite verify .tracecite/runs/<run-id>/manifest.json
+tracecite run scenario.json
 ```
 
-That one command:
+Every command returns deterministic JSON. `status` describes whether execution
+succeeded; `outcome` separately describes what the evidence supports. A valid
+zero-match search is not an execution error and does not prove absence.
 
-1. Extracts the last 5 minutes from `app.log`
-2. Finds lines containing `Error` or `timeout`
-3. Groups similar lines, showing distribution (e.g. `"status:500" × 47` instead of 47 repeated lines)
-4. Outputs structured JSON
+Before connecting Codex, Claude, or another host, read the
+[external Agent integration guide](docs/agent-integration.md). It includes the
+tool loop, Result JSON contract, exit codes, safety rules, and a reusable test
+prompt.
 
-Three output files:
+The lower-level evidence CLI remains available as `tracecite-core`.
 
-```bash
-# Every hit: source file, line number, timestamp, what matched
-result.jsonl
+## Stable kernel, public extension boundary
 
-# Similar lines grouped, no repetition
-result_tmpl.jsonl
+One main distribution contains four logical layers:
 
-# High-frequency words that didn't match — tells you what to search next
-summary.jsonl
+- `tracecite_core`: evidence, source, segment, transform, snapshot, manifest,
+  verification, and the low-level plugin SDK.
+- `tracecite.runtime`: scenario, assertion, reporting, result schema, budgets,
+  stop/safety gates, and agent-facing tools.
+- `tracecite.extension`: the versioned third-party registration contract.
+- `tracecite.integrations`: CLI now; MCP and agent-platform adapters later.
+
+Domain semantics do not belong in the main package. The official
+`tracecite-mobile` project is an extension and a contract dogfood project.
+
+## Build an extension without forking TraceCite
+
+```toml
+[project]
+name = "my-company-tracecite"
+dependencies = ["tracecite>=0.1,<0.2"]
+
+[project.entry-points."tracecite.extensions"]
+my_domain = "my_tracecite.extension"
 ```
-
-More examples:
-
-```bash
-# Everything from process 1234 between 2 PM and 3 PM
-tracecite-core filter app.log --grep "." --pid 1234 --since 14:00 --until 15:00 --json
-
-# Safe with active logs (snapshot before analyzing)
-tracecite-core filter live.log --grep "CRASH" --snapshot --json
-
-# Save parameters by tagging the run
-tracecite-core filter app.log --grep "Error" --last 5m --fold --json --tag error-check
-```
-
-## vs. Dumping Raw Logs to AI
-
-| | Raw logs to AI | TraceCite Core |
-|---|---|---|
-| Input | Tens of MB of raw text; AI filters on its own | You specify keywords and time window; only relevant lines extracted |
-| Output format | Free text; AI parses and categorizes | Structured JSON — line numbers, timestamps, match labels are explicit |
-| Repeated lines | AI decides which are duplicates | Auto-grouped with distribution counts (`×500`) |
-| Nothing found? | AI re-scans full text and retries | Unmatched high-frequency words point to next search direction |
-| Reproducibility | Intermediate steps differ across runs; conclusions misalign | Input frozen, parameters recorded — same input, same output |
-
-## Architecture
-
-<img src="architecture.svg" alt="Core execution flow: Source → Segment → Match → Filter → Fold → Events → Run" width="100%"/>
-
-Seven steps, each producing inspectable files. Mobile extends this pipeline with device collection and behavior analysis.
-
-## Customization
-
-**Custom log format.** Not a standard format? Describe it:
 
 ```python
-from tracecite_core import register_format, FormatSegmenter
+from tracecite.extension import ExtensionAPI
+from tracecite.runtime import ScenarioRuntime
 
-register_format("my-app", FormatSegmenter(
-    start_re=r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})",
-    timestamp_formats=["%Y-%m-%d %H:%M:%S.%f"]
-))
-# tracecite-core filter app.log --segmenter my-app --grep "error"
+TRACECITE_EXTENSION_API = "1"
+MY_RUNTIME = ScenarioRuntime(
+    load_profile=load_profile,
+    resolve_scenario_pattern=resolve_pattern,
+)
+
+def register(api: ExtensionAPI) -> None:
+    api.register_runtime("my-domain", MY_RUNTIME)
 ```
 
-**Save your workflow as config.** No need to remember flags:
+Loading third-party code is explicit:
 
-```json
-{
-  "name": "crash-check",
-  "source": { "type": "file", "path": "crash.log" },
-  "filter": {
-    "grep": "SIGABRT|SIGSEGV",
-    "scope": { "last": "5m" },
-    "fold": true
-  }
-}
+```bash
+tracecite extension load
+tracecite run scenario.json --runtime my-domain --load-extensions
 ```
 
-**Chain multiple steps.** Search for crash signals, then search for stack traces within those results — progressively narrowing.
+Importing `tracecite` alone never executes installed extension registration
+code. Registration conflicts fail by default, API versions are checked, and
+the default Runtime does not grant live-source or action capabilities.
 
-```json
-{
-  "filter": {
-    "stages": [
-      { "grep": "SIGABRT|SIGSEGV", "tag": "signal" },
-      { "grep": "backtrace|Thread \\d+", "tag": "stack" }
-    ]
-  }
-}
-```
+See [the extension contract](docs/extension-contract.md) and the
+[pending domain-validation checklist](docs/validation-checklist.md).
 
-**Write extensions.** When you need behavior beyond built-ins, register a plugin — core code stays untouched:
+## Design principles
 
-```python
-from tracecite_core import register_preprocessor_action
-register_preprocessor_action("normalize", lambda t, **kw: t.replace("WARNING", "WARN"))
-```
+- Evidence is traceable, not automatically complete or true.
+- `unknown` and `missing_evidence` are first-class results.
+- Agent conclusions never promote themselves into trusted knowledge.
+- Extensions add capabilities and semantics; Runtime retains execution,
+  evidence, verification, budget, and safety control.
+- Core never imports Runtime or domain packages; Runtime never imports domains.
 
-## See Also
+## Status
 
-- [**tracecite-mobile**](../tracecite-mobile/) — the phone version. Connect iOS/Android devices for capture and analysis.
+The internal Runtime consolidation and compatibility layer are implemented.
+Mobile and CI cross-domain acceptance is intentionally pending; MCP, Codex
+Skill, and other agent-platform adapters follow only after that contract is
+validated.
 
 ## License
 
