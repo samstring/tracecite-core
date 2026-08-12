@@ -98,7 +98,9 @@ code. Registration conflicts fail by default, API versions are checked, and
 the default Runtime does not grant live-source or action capabilities.
 
 See [the extension contract](docs/extension-contract.md) and the
-[pending domain-validation checklist](docs/validation-checklist.md).
+[pending domain-validation checklist](docs/validation-checklist.md). Agent
+knowledge uses the separate
+[proposal, verification, and promotion lifecycle](docs/knowledge-governance.md).
 
 ## Design principles
 

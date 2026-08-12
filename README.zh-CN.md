@@ -77,7 +77,7 @@ tracecite run scenario.json --runtime my-domain --load-extensions
 
 仅仅 `import tracecite` 不会执行第三方注册代码。API 版本会校验，注册冲突默认失败，默认 Runtime 不授权 live source 和 action。
 
-详细约束见[扩展契约](docs/extension-contract.md)；第 7 步暂未执行，执行前问题与验收流程见[领域验证清单](docs/validation-checklist.md)。
+详细约束见[扩展契约](docs/extension-contract.md)；第 7 步暂未执行，执行前问题与验收流程见[领域验证清单](docs/validation-checklist.md)。Agent 知识写入遵循独立的[提案、验证与晋升流程](docs/knowledge-governance.zh-CN.md)。
 
 ## 核心原则
 

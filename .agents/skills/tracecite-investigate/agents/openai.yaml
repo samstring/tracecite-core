@@ -1,0 +1,4 @@
+interface:
+  display_name: "TraceCite Investigation"
+  short_description: "Run evidence-bounded investigations safely"
+  default_prompt: "Use $tracecite-investigate to investigate this data with traceable evidence and explicit uncertainty."

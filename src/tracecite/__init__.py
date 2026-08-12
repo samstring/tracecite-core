@@ -20,6 +20,13 @@ from .runtime import (
     search,
     verify,
 )
+from .knowledge import (
+    GovernancePolicy,
+    KnowledgeCandidate,
+    KnowledgeGovernanceError,
+    KnowledgeGovernanceStore,
+    KnowledgeVerification,
+)
 
 __all__ = [
     "AgentResult",
@@ -31,6 +38,11 @@ __all__ = [
     "ScenarioError",
     "ScenarioProfile",
     "ScenarioRuntime",
+    "GovernancePolicy",
+    "KnowledgeCandidate",
+    "KnowledgeGovernanceError",
+    "KnowledgeGovernanceStore",
+    "KnowledgeVerification",
     "probe",
     "search",
     "expand",
