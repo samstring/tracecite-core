@@ -63,6 +63,7 @@ from tracecite_core.text_filter import (
     FilterError,
     FilterResult,
     _safe_tag,
+    combine_patterns,
     filter_text,
     resolve_preset,
 )
@@ -83,6 +84,30 @@ _TIMESTAMP_PREFIX_RE = re.compile(
 
 class ScenarioError(RuntimeError):
     """场景配置或执行错误。"""
+
+
+_PROVENANCE_TEXT_MAX_CHARS = 256
+_COMPONENT_PATTERN_MAX_CHARS = 4096
+_COMPONENT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,95}$")
+
+
+def _bounded_provenance_text(value: Any, *, field: str) -> Tuple[str, bool]:
+    text = "" if value is None else str(value)
+    if len(text) <= _PROVENANCE_TEXT_MAX_CHARS:
+        return text, False
+    return text[:_PROVENANCE_TEXT_MAX_CHARS], True
+
+
+def _safe_component_id(prefix: str, name: Any) -> str:
+    """Keep historical IDs when safe; hash-suffix unsafe/long names."""
+    raw = str(name)
+    candidate = f"{prefix}{raw}"
+    if _COMPONENT_ID_RE.fullmatch(candidate):
+        return candidate
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-._") or "item"
+    digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
+    available = max(1, 96 - len(prefix) - 1 - len(digest))
+    return f"{prefix}{safe[:available]}-{digest}"
 
 
 def _enforce_runtime_capabilities(
@@ -503,6 +528,210 @@ def resolve_segmenter(
         raise ScenarioError(str(exc)) from exc
 
 
+def _pattern_component(
+    component_id: str,
+    pattern: str,
+    *,
+    kind: str,
+    effective: bool = True,
+    **metadata: Any,
+) -> Dict[str, Any]:
+    """Build a bounded provenance component declaration for Core filtering."""
+    raw_pattern = str(pattern)
+    resolved_pattern = raw_pattern
+    pattern_truncated = False
+    # Patterns need a larger budget than names, but still cannot duplicate
+    # unbounded extension/user input in a manifest.  The final top-level
+    # pattern remains the compatibility expression; a truncated component is
+    # marked so per-hit matching can use the reserved fallback when needed.
+    if len(raw_pattern) > _COMPONENT_PATTERN_MAX_CHARS:
+        resolved_pattern = raw_pattern[:_COMPONENT_PATTERN_MAX_CHARS]
+        pattern_truncated = True
+    out: Dict[str, Any] = {
+        "id": str(component_id),
+        "kind": str(kind),
+        "pattern": resolved_pattern,
+        "effective": bool(effective),
+    }
+    if pattern_truncated:
+        out["pattern_truncated"] = True
+    for key, value in metadata.items():
+        if value is not None:
+            out[str(key)] = value
+    return out
+
+
+def _preset_provenance(profile: Any, name: str, pattern: str) -> Dict[str, Any]:
+    """Extract optional extension metadata without importing a domain package."""
+    if hasattr(profile, "filter_preset_metadata"):
+        raw = dict(profile.filter_preset_metadata(name))
+    else:
+        presets = getattr(profile, "filter_presets", {}) or {}
+        item = presets.get(name)
+        raw = {"name": str(name), "version": "unknown"}
+        if isinstance(item, Mapping):
+            getter = item.get
+        else:
+            getter = lambda field, default=None: getattr(item, field, default)
+        for field in (
+            "version",
+            "source",
+            "source_path",
+            "sha256",
+            "hash",
+            "content_hash",
+        ):
+            value = getter(field)
+            if value is not None and str(value).strip():
+                target = (
+                    "sha256"
+                    if field in {"hash", "content_hash"}
+                    else "source"
+                    if field == "source_path"
+                    else field
+                )
+                raw[target] = str(value)
+        source_path = getattr(profile, "source_path", None)
+        if source_path and "source" not in raw:
+            raw["source"] = str(source_path)
+    bounded: Dict[str, Any] = {}
+    raw.setdefault("name", str(name))
+    for field in ("name", "tag", "version", "source", "sha256"):
+        value = raw.get(field)
+        if value is None:
+            continue
+        text, truncated = _bounded_provenance_text(value, field=field)
+        bounded[field] = text
+        if truncated or bool(raw.get(f"{field}_truncated")):
+            bounded[f"{field}_truncated"] = True
+    if not str(bounded.get("version") or "").strip():
+        bounded["version"] = "unknown"
+    # The resolved pattern lives exactly once in the corresponding component.
+    return bounded
+
+
+def resolve_pattern_details(
+    spec: Dict[str, Any],
+    *,
+    platform: str = "",
+    start_dir: Optional[Path] = None,
+    profile: Optional[Any] = None,
+    runtime: ScenarioRuntime = DEFAULT_RUNTIME,
+) -> Dict[str, Any]:
+    """Resolve a filter and retain component-level provenance.
+
+    ``grep`` 与 ``preset`` 同时存在时按 OR 合并（+可选 ``scenario``）。
+    preset / scenario 由调用方注入的 runtime profile 提供，规则是数据而不是代码。
+
+    A scenario resolver receives the already-combined pattern and may return a
+    domain-specific expression that cannot be losslessly decomposed in Core.
+    In that case the returned expression is one effective ``scenario:<name>``
+    component; preset/grep remain provenance inputs only and are never reported
+    as per-hit matchers.
+    """
+    flt = spec.get("filter") or {}
+    if not isinstance(flt, dict):
+        raise ScenarioError("filter 段必须是对象")
+
+    tag = flt.get("tag")
+    grep = flt.get("grep")
+    preset = flt.get("preset")
+    if not preset and not grep:
+        raise ScenarioError("filter 段需要 grep 或 preset")
+
+    resolved_profile = profile
+    components: List[Dict[str, Any]] = []
+    preset_metadata: Optional[Dict[str, Any]] = None
+    default_tag: Optional[str] = None
+    base_patterns: List[str] = []
+    if preset:
+        resolved_profile = resolved_profile or runtime.load_profile(
+            start_dir or Path.cwd(), platform
+        )
+        pattern, default_tag = resolve_preset(
+            str(preset), resolved_profile.filter_preset_table()
+        )
+        preset_metadata = _preset_provenance(resolved_profile, str(preset), pattern)
+        if not str(preset_metadata.get("version") or "").strip():
+            preset_metadata["version"] = "unknown"
+        components.append(
+            _pattern_component(
+                _safe_component_id("preset:", preset),
+                pattern,
+                kind="preset",
+                name=preset_metadata.get("name", str(preset)),
+            )
+        )
+        base_patterns.append(pattern)
+    if grep:
+        grep_pattern = str(grep)
+        components.append(
+            _pattern_component("grep", grep_pattern, kind="grep")
+        )
+        base_patterns.append(grep_pattern)
+
+    pattern = combine_patterns(*base_patterns)
+    tag = tag or default_tag
+
+    sub_scenario = flt.get("scenario")
+    scenario_metadata: Optional[Dict[str, Any]] = None
+    if sub_scenario:
+        if resolved_profile is None:
+            resolved_profile = runtime.load_profile(
+                start_dir or Path.cwd(), platform
+            )
+        input_ids = [str(item["id"]) for item in components]
+        try:
+            resolved_pattern = runtime.resolve_scenario_pattern(
+                str(preset or ""),
+                str(sub_scenario),
+                start_dir or Path.cwd(),
+                pattern,
+                platform,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ScenarioError(str(exc)) from exc
+        resolved_pattern = str(resolved_pattern or "")
+        if not resolved_pattern:
+            raise ScenarioError(f"scenario {sub_scenario!r} 解析为空 pattern")
+        # The resolver owns the final expression.  Do not append it to the
+        # existing OR expression: that would broaden semantics and make
+        # matched_by claim that preset/grep matched when only the resolved
+        # scenario expression did.
+        for item in components:
+            item["effective"] = False
+            item["provenance_only"] = True
+        scenario_metadata = {
+            "name": str(sub_scenario),
+            "version": "unknown",
+            "inputs": input_ids,
+        }
+        bounded_scenario_name, scenario_name_truncated = _bounded_provenance_text(
+            sub_scenario, field="name"
+        )
+        scenario_metadata["name"] = bounded_scenario_name
+        if scenario_name_truncated:
+            scenario_metadata["name_truncated"] = True
+        components.append(
+            _pattern_component(
+                _safe_component_id("scenario:", sub_scenario),
+                resolved_pattern,
+                kind="scenario",
+                name=bounded_scenario_name,
+            )
+        )
+        pattern = resolved_pattern
+
+    return {
+        "pattern": pattern,
+        "tag": tag,
+        "match_mode": "or",
+        "components": components,
+        "preset": preset_metadata,
+        "scenario": scenario_metadata,
+    }
+
+
 def resolve_pattern(
     spec: Dict[str, Any],
     *,
@@ -511,45 +740,20 @@ def resolve_pattern(
     profile: Optional[Any] = None,
     runtime: ScenarioRuntime = DEFAULT_RUNTIME,
 ) -> Tuple[str, Optional[str]]:
-    """解析 filter 段的匹配规则，返回 (pattern, tag)。
-
-    优先级：``grep`` > ``preset``（+可选 ``scenario``）。
-    preset / scenario 由调用方注入的 runtime profile 提供，规则是数据而不是代码。
-    """
-    flt = spec.get("filter") or {}
-    if not isinstance(flt, dict):
-        raise ScenarioError("filter 段必须是对象")
-
-    tag = flt.get("tag")
-    grep = flt.get("grep")
-    if grep:
-        return str(grep), tag
-
-    preset = flt.get("preset")
-    if not preset:
-        raise ScenarioError("filter 段需要 grep 或 preset")
-
-    resolved_profile = profile or runtime.load_profile(
-        start_dir or Path.cwd(), platform
+    """Backward-compatible ``(pattern, tag)`` resolver wrapper."""
+    details = resolve_pattern_details(
+        spec,
+        platform=platform,
+        start_dir=start_dir,
+        profile=profile,
+        runtime=runtime,
     )
-    pattern, default_tag = resolve_preset(
-        str(preset), resolved_profile.filter_preset_table()
-    )
-    tag = tag or default_tag
+    return str(details["pattern"]), details.get("tag")
 
-    sub_scenario = flt.get("scenario")
-    if sub_scenario:
-        try:
-            pattern = runtime.resolve_scenario_pattern(
-                str(preset),
-                str(sub_scenario),
-                start_dir or Path.cwd(),
-                pattern,
-                platform,
-            )
-        except (TypeError, ValueError) as exc:
-            raise ScenarioError(str(exc)) from exc
-    return pattern, tag
+
+def _filter_provenance(details: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return the canonical bounded filter provenance (final pattern stays top-level)."""
+    return {str(key): value for key, value in details.items() if key != "pattern"}
 
 
 def _read_text_tail(path: Path, limit: int = 2000) -> str:
@@ -784,6 +988,8 @@ def _run_one_filter(
     flt: Dict[str, Any],
     pattern: str,
     tag: Optional[str],
+    pattern_components: Optional[Sequence[Mapping[str, Any]]] = None,
+    match_mode: str = "or",
     segmenter: Segmenter,
     output_path: Optional[Path] = None,
     encoding: str = "utf-8",
@@ -799,6 +1005,8 @@ def _run_one_filter(
             path,
             pattern=pattern,
             tag=tag,
+            pattern_components=pattern_components,
+            match_mode=match_mode,
             output_path=output_path,
             snapshot=bool(flt.get("snapshot", False)),
             pid=flt.get("pid"),
@@ -1001,6 +1209,7 @@ def _run_scenario_impl(
 
     stages_spec = flt.get("stages")
     stage_summaries: List[Dict[str, Any]] = []
+    filter_details: Optional[Dict[str, Any]] = None
     if isinstance(stages_spec, list) and stages_spec:
         # 多 stage 编排：每段独立 resolve pattern 并过滤同一 source，
         # 先粗后精看各段命中数收敛；断言按最后一段（精筛结果）评估。
@@ -1014,13 +1223,16 @@ def _run_scenario_impl(
             for key in ("grep", "preset", "scenario", "tag"):
                 if key in stage:
                     stage_filter[key] = stage[key]
-            stage_pattern, stage_tag = resolve_pattern(
+            stage_filter_details = resolve_pattern_details(
                 {"filter": stage_filter},
                 platform=platform,
                 start_dir=start_dir,
                 profile=profile,
                 runtime=runtime,
             )
+            filter_details = stage_filter_details
+            stage_pattern = str(stage_filter_details["pattern"])
+            stage_tag = stage_filter_details.get("tag")
             stage_name = str(stage.get("name") or f"stage{idx}")
             safe_name = _safe_tag(stage_name)
             stage_tag = f"{stage_tag or 'scenario'}_{safe_name}"
@@ -1033,6 +1245,8 @@ def _run_scenario_impl(
                     flt=flt,
                     pattern=stage_pattern,
                     tag=stage_tag,
+                    pattern_components=stage_filter_details.get("components"),
+                    match_mode=str(stage_filter_details.get("match_mode") or "or"),
                     segmenter=file_segmenter,
                     output_path=_scenario_output_path(
                         output_dir,
@@ -1063,6 +1277,8 @@ def _run_scenario_impl(
                     "name": stage_name,
                     "pattern": stage_pattern,
                     "tag": stage_tag,
+                    "match_mode": stage_filter_details.get("match_mode", "or"),
+                    "filter": _filter_provenance(stage_filter_details),
                     "match_records": sum(
                         int(o.get("match_records") or 0) for o in ok
                     ),
@@ -1077,13 +1293,15 @@ def _run_scenario_impl(
             tag = stage_tag
     else:
         # 单段路径：结果结构不包含 stages 字段
-        pattern, tag = resolve_pattern(
+        filter_details = resolve_pattern_details(
             spec,
             platform=platform,
             start_dir=start_dir,
             profile=profile,
             runtime=runtime,
         )
+        pattern = str(filter_details["pattern"])
+        tag = filter_details.get("tag")
         outputs = []
         for file_index, (path, file_segmenter, file_seg_kind) in enumerate(parsed_files):
             payload, result = _run_one_filter(
@@ -1091,6 +1309,8 @@ def _run_scenario_impl(
                 flt=flt,
                 pattern=pattern,
                 tag=tag,
+                pattern_components=filter_details.get("components"),
+                match_mode=str(filter_details.get("match_mode") or "or"),
                 segmenter=file_segmenter,
                 output_path=_scenario_output_path(
                     output_dir,
@@ -1197,6 +1417,13 @@ def _run_scenario_impl(
             for path, _, kind in parsed_files
         ],
         "pattern": pattern,
+        "filter": _filter_provenance(filter_details or {
+            "tag": tag,
+            "match_mode": "or",
+            "components": [],
+            "preset": None,
+            "scenario": None,
+        }),
         "input_files": [str(p) for p in files],
         "input_lineage": input_lineage,
         "source_provider": source_provider,
@@ -1403,6 +1630,7 @@ def run_scenario(
                 "segmenter": summary.get("segmenter"),
                 "segmenters": summary.get("segmenters"),
                 "pattern": summary.get("pattern"),
+                "filter": summary.get("filter"),
                 "source_provider": summary.get("source_provider"),
                 "source_policy": (summary.get("source_completeness") or {}).get("policy"),
             }
@@ -1564,23 +1792,39 @@ def explain_scenario(
         for index, stage in enumerate(filter_spec["stages"]):
             merged = {k: value for k, value in filter_spec.items() if k != "stages"}
             merged.update(stage)
-            pattern, tag = resolve_pattern(
+            details = resolve_pattern_details(
                 {"filter": merged},
                 platform=platform,
                 start_dir=start_dir,
                 profile=profile,
                 runtime=runtime,
             )
-            patterns.append({"stage": stage.get("name") or index, "pattern": pattern, "tag": tag})
+            patterns.append(
+                {
+                    "stage": stage.get("name") or index,
+                    "pattern": details["pattern"],
+                    "tag": details.get("tag"),
+                    "match_mode": details.get("match_mode", "or"),
+                    "filter": _filter_provenance(details),
+                }
+            )
     else:
-        pattern, tag = resolve_pattern(
+        details = resolve_pattern_details(
             spec,
             platform=platform,
             start_dir=start_dir,
             profile=profile,
             runtime=runtime,
         )
-        patterns = [{"stage": None, "pattern": pattern, "tag": tag}]
+        patterns = [
+            {
+                "stage": None,
+                "pattern": details["pattern"],
+                "tag": details.get("tag"),
+                "match_mode": details.get("match_mode", "or"),
+                "filter": _filter_provenance(details),
+            }
+        ]
 
     return {
         "valid": True,
@@ -1610,6 +1854,12 @@ def explain_scenario(
 def cmd_scenario(args, *, runtime: ScenarioRuntime = DEFAULT_RUNTIME) -> int:
     """CLI entry point shared by Agent and domain packages."""
     spec_path = Path(getattr(args, "spec", "")).expanduser()
+    explicit_base_dir = getattr(args, "base_dir", None)
+    base_dir = (
+        Path(explicit_base_dir).expanduser().resolve()
+        if explicit_base_dir
+        else spec_path.parent
+    )
     try:
         command = getattr(args, "scenario_command", "run")
         if command == "verify":
@@ -1628,7 +1878,7 @@ def cmd_scenario(args, *, runtime: ScenarioRuntime = DEFAULT_RUNTIME) -> int:
         if command in {"validate", "explain"}:
             explanation = explain_scenario(
                 spec,
-                base_dir=spec_path.parent,
+                base_dir=base_dir,
                 platform=getattr(args, "platform", "") or "",
                 runtime=runtime,
             )
@@ -1641,7 +1891,7 @@ def cmd_scenario(args, *, runtime: ScenarioRuntime = DEFAULT_RUNTIME) -> int:
             return 0
         summary = run_scenario(
             spec,
-            base_dir=spec_path.parent,
+            base_dir=base_dir,
             platform=getattr(args, "platform", "") or "",
             spec_path=spec_path,
             runtime=runtime,

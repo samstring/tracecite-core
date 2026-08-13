@@ -20,13 +20,175 @@
 from __future__ import annotations
 
 from collections import deque
+import math
 import re
-from typing import Any, List, Optional, Set, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
 # 正则结构元字符：出现（且未转义）即判定为「非纯字面量」
 _STRUCT_META = frozenset("()[]{}*+?^$")
 # 未转义的 . 是通配符，同样拒绝
 _DOT = "."
+_COMPONENT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,95}$")
+_MAX_COMPONENT_ID_CHARS = 96
+_MAX_COMPONENT_METADATA_DEPTH = 3
+_MAX_COMPONENT_METADATA_ITEMS = 32
+_MAX_COMPONENT_METADATA_STRING_CHARS = 1024
+_MAX_PATTERN_COMPONENTS = 64
+_COMPONENT_RESERVED_KEYS = frozenset({"id", "pattern", "effective", "kind"})
+
+
+@dataclass(frozen=True)
+class PatternComponent:
+    """One bounded, independently matchable filter component.
+
+    ``component_id`` is the stable provenance identity exposed in hit metadata.
+    ``effective=False`` keeps an input component in provenance while preventing
+    it from being reported as the matcher when a resolver replaced the final
+    expression (for example, a domain scenario resolver).
+    """
+
+    component_id: str
+    pattern: str
+    kind: Optional[str] = None
+    effective: bool = True
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def id(self) -> str:
+        return self.component_id
+
+    def to_dict(self) -> Dict[str, Any]:
+        component = _validate_component(self, index=0)
+        out: Dict[str, Any] = {
+            "id": component.component_id,
+            "pattern": component.pattern,
+            "effective": bool(component.effective),
+        }
+        if component.kind:
+            out["kind"] = component.kind
+        if component.metadata:
+            metadata = _bounded_component_metadata(component.metadata)
+            for key, value in metadata.items():
+                # Provenance extensions cannot replace the stable identity or
+                # matcher fields supplied by Core.
+                if key not in _COMPONENT_RESERVED_KEYS:
+                    out[key] = value
+        return out
+
+
+def _bounded_json_value(value: Any, *, depth: int = 0) -> Any:
+    """Validate and copy JSON-safe bounded extension metadata."""
+    if value is None or isinstance(value, (str, bool, int)):
+        if isinstance(value, str) and len(value) > _MAX_COMPONENT_METADATA_STRING_CHARS:
+            raise ValueError("pattern component metadata 字符串超过 1024 字符")
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("pattern component metadata 浮点值必须有限")
+        return value
+    if depth >= _MAX_COMPONENT_METADATA_DEPTH:
+        raise ValueError("pattern component metadata 嵌套超过 3 层")
+    if isinstance(value, Mapping):
+        if len(value) > _MAX_COMPONENT_METADATA_ITEMS:
+            raise ValueError("pattern component metadata 对象字段超过 32 个")
+        copied: Dict[str, Any] = {}
+        for key in sorted(value, key=lambda item: str(item)):
+            if not isinstance(key, str):
+                raise ValueError("pattern component metadata 对象键必须是字符串")
+            copied[key] = _bounded_json_value(value[key], depth=depth + 1)
+        return copied
+    if isinstance(value, (list, tuple)):
+        if len(value) > _MAX_COMPONENT_METADATA_ITEMS:
+            raise ValueError("pattern component metadata 数组元素超过 32 个")
+        return [_bounded_json_value(item, depth=depth + 1) for item in value]
+    raise ValueError(
+        "pattern component metadata 只能包含 JSON-safe 的 null/bool/number/string/array/object"
+    )
+
+
+def _bounded_component_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
+    if not isinstance(metadata, Mapping):
+        raise ValueError("pattern component metadata 必须是对象")
+    if len(metadata) > _MAX_COMPONENT_METADATA_ITEMS:
+        raise ValueError("pattern component metadata 字段超过 32 个")
+    copied: Dict[str, Any] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str):
+            raise ValueError("pattern component metadata 对象键必须是字符串")
+        copied[key] = _bounded_json_value(value)
+    return copied
+
+
+def _validate_component(component: PatternComponent, *, index: int) -> PatternComponent:
+    component_id = str(component.component_id).strip()
+    if not component_id:
+        raise ValueError(f"pattern_components[{index}] 缺少非空 id")
+    if len(component_id) > _MAX_COMPONENT_ID_CHARS or not _COMPONENT_ID_RE.fullmatch(component_id):
+        raise ValueError(
+            f"pattern_components[{index}] id 必须匹配 [A-Za-z][A-Za-z0-9_.:-]{{0,95}}"
+        )
+    if not isinstance(component.pattern, str) or not component.pattern:
+        raise ValueError(f"pattern_components[{index}] 缺少非空 pattern")
+    kind: Optional[str] = None
+    if component.kind is not None:
+        kind = str(component.kind).strip()
+        if kind and not _COMPONENT_ID_RE.fullmatch(kind):
+            raise ValueError(f"pattern_components[{index}] kind 格式无效")
+    metadata = _bounded_component_metadata(component.metadata)
+    return PatternComponent(
+        component_id=component_id,
+        pattern=component.pattern,
+        kind=kind,
+        effective=bool(component.effective),
+        metadata=metadata,
+    )
+
+
+def coerce_pattern_components(
+    components: Optional[Iterable[Union[PatternComponent, Mapping[str, Any]]]],
+) -> List[PatternComponent]:
+    """Normalize public mapping/dataclass component declarations.
+
+    The normalizer deliberately accepts only small scalar metadata and leaves
+    unknown values untouched for Runtime-owned provenance fields.  Callers are
+    responsible for bounding any values they put in ``metadata``.
+    """
+
+    if components is None:
+        return []
+    out: List[PatternComponent] = []
+    seen: Set[str] = set()
+    for index, raw in enumerate(components):
+        if index >= _MAX_PATTERN_COMPONENTS:
+            raise ValueError("pattern_components 元素超过 64 个")
+        if isinstance(raw, PatternComponent):
+            component = raw
+        elif isinstance(raw, Mapping):
+            component_id = str(raw.get("id") or raw.get("component_id") or "").strip()
+            pattern = str(raw.get("pattern") or "")
+            kind = str(raw.get("kind") or "").strip() or None
+            effective = bool(raw.get("effective", True))
+            metadata = {
+                key: value
+                for key, value in raw.items()
+                if key not in {"id", "component_id", "pattern", "kind", "effective"}
+            }
+            component = PatternComponent(
+                component_id=component_id,
+                pattern=pattern,
+                kind=kind,
+                effective=effective,
+                metadata=metadata,
+            )
+        else:
+            raise TypeError(f"pattern_components[{index}] 必须是 PatternComponent 或对象")
+        component = _validate_component(component, index=index)
+        if component.component_id in seen:
+            raise ValueError(f"pattern_components 含重复 id: {component.component_id}")
+        seen.add(component.component_id)
+        out.append(component)
+    return out
 
 
 def _split_top_level(pattern: str) -> Optional[List[str]]:
@@ -215,6 +377,7 @@ class Matcher:
         self.regex: Optional[re.Pattern] = None
         self.automaton: Optional[Any] = None
         self.pure_ac: Optional[_PureAhoCorasick] = None
+        self._component_cache: Dict[str, "Matcher"] = {}
         if self.terms is not None:
             self.automaton = _build_automaton(self.terms)
             if self.automaton is not None:
@@ -227,6 +390,50 @@ class Matcher:
                     self.engine = "literal"
         else:
             self.regex = re.compile(pattern)
+
+    def match_with_components(
+        self,
+        text: str,
+        components: Optional[Iterable[Union[PatternComponent, Mapping[str, Any]]]] = None,
+    ) -> Tuple[bool, Optional[str], Set[str], List[str]]:
+        """Match text and return deterministic component provenance.
+
+        The final ``pattern`` remains the compatibility source of truth.  When
+        component declarations are supplied, each effective component is
+        evaluated independently; this is equivalent to the OR combination used
+        by ``combine_patterns`` while preserving regex/literal semantics.  A
+        fallback ``pattern`` identity is emitted only for malformed or
+        resolver-specific expressions that cannot be attributed to a declared
+        component.
+        """
+
+        matched, term, terms_hit = self.match(text)
+        if not matched:
+            return False, term, terms_hit, []
+        normalized = coerce_pattern_components(components)
+        if not normalized:
+            return True, term, terms_hit, ["pattern"]
+
+        matched_by: List[str] = []
+        for component in normalized:
+            if not component.effective:
+                continue
+            try:
+                component_matcher = self._component_cache.get(component.pattern)
+                if component_matcher is None:
+                    component_matcher = Matcher(component.pattern)
+                    self._component_cache[component.pattern] = component_matcher
+                component_hit = component_matcher.match(text)[0]
+            except re.error:
+                # The final matcher was already compiled successfully.  A
+                # component's independent compilation failure is provenance
+                # only; do not change the historical final-match result.
+                component_hit = False
+            if component_hit:
+                matched_by.append(component.component_id)
+        if not matched_by:
+            matched_by = ["pattern"]
+        return True, term, terms_hit, matched_by
 
     def match(self, text: str) -> Tuple[bool, Optional[str], Set[str]]:
         if self.automaton is not None:

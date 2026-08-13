@@ -9,3 +9,6 @@
 - Mobile, CI, and third-party projects are extensions that depend only on public TraceCite APIs.
 - Preserve evidence and run schema semantics unless a migration is documented and tested.
 - Keep the public `tracecite_core` import stable until a documented schema migration replaces it.
+- Treat `docs/architecture.md` and `docs/architecture.zh-CN.md` as the normative architecture contract.
+- Any change to dependency direction, investigation concepts or required stages, public evidence/result/investigation/knowledge semantics, extension boundaries, trust or budget rules, or implementation status must update both architecture documents in the same change.
+- Record incompatible architectural changes and long-lived trade-offs as an ADR under `docs/adr/`; public schema/API changes also require a migration note and tests.

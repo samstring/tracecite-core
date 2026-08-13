@@ -12,16 +12,95 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 
+PROVENANCE_TEXT_MAX_CHARS = 256
+
+
+def _bounded_provenance_text(value: Any, *, field: str) -> Tuple[str, bool]:
+    """Convert extension metadata to a small JSON-safe scalar."""
+    text = "" if value is None else str(value)
+    if len(text) <= PROVENANCE_TEXT_MAX_CHARS:
+        return text, False
+    return text[:PROVENANCE_TEXT_MAX_CHARS], True
+
+
 @dataclass(frozen=True)
 class ScenarioProfile:
     """Generic project settings consumed by the scenario runner."""
 
     analysis: Mapping[str, Any] = field(default_factory=dict)
     formats: Mapping[str, Any] = field(default_factory=dict)
-    filter_presets: Mapping[str, Tuple[str, str]] = field(default_factory=dict)
+    filter_presets: Mapping[str, Any] = field(default_factory=dict)
 
     def filter_preset_table(self) -> Dict[str, Tuple[str, str]]:
-        return dict(self.filter_presets)
+        """Return the historical ``name -> (pattern, tag)`` compatibility table."""
+        out: Dict[str, Tuple[str, str]] = {}
+        for name, raw in self.filter_presets.items():
+            key = str(name)
+            if isinstance(raw, Mapping):
+                pattern = str(raw.get("pattern") or "")
+                tag = str(raw.get("tag") or key)
+            elif isinstance(raw, (tuple, list)) and len(raw) >= 2:
+                pattern, tag = str(raw[0] or ""), str(raw[1] or key)
+            else:
+                pattern = str(getattr(raw, "pattern", "") or "")
+                tag = str(getattr(raw, "tag", "") or key)
+            out[key] = (pattern, tag)
+        return out
+
+    def filter_preset_metadata(self, name: str) -> Dict[str, Any]:
+        """Return bounded preset provenance without changing the v1 table API.
+
+        Extension profiles may expose ``version``, ``source`` and ``sha256``
+        on either mapping or object values.  Missing version metadata is
+        explicitly represented as ``unknown``; Runtime never invents a version.
+        """
+        key = str(name)
+        raw = self.filter_presets.get(key)
+        _pattern, tag = self.filter_preset_table().get(key, ("", key))
+        metadata: Dict[str, Any] = {
+            "name": key,
+            "tag": tag,
+            "version": "unknown",
+        }
+        if raw is not None:
+            if isinstance(raw, Mapping):
+                getter = raw.get
+            else:
+                getter = lambda field, default=None: getattr(raw, field, default)
+            for field in (
+                "version",
+                "source",
+                "source_path",
+                "sha256",
+                "hash",
+                "content_hash",
+            ):
+                value = getter(field)
+                if value is not None and str(value).strip():
+                    target = (
+                        "sha256"
+                        if field in {"hash", "content_hash"}
+                        else "source"
+                        if field == "source_path"
+                        else field
+                    )
+                    metadata[target] = str(value)
+        source_path = getattr(self, "source_path", None)
+        if "source" not in metadata and source_path:
+            metadata["source"] = str(source_path)
+        bounded: Dict[str, Any] = {}
+        for field in ("name", "tag", "version", "source", "sha256"):
+            value = metadata.get(field)
+            if value is None:
+                continue
+            text, truncated = _bounded_provenance_text(value, field=field)
+            bounded[field] = text
+            if truncated:
+                bounded[f"{field}_truncated"] = True
+        bounded.setdefault("name", key[:PROVENANCE_TEXT_MAX_CHARS])
+        if not str(bounded.get("version") or "").strip():
+            bounded["version"] = "unknown"
+        return bounded
 
 
 ProfileLoader = Callable[[Path, str], Any]

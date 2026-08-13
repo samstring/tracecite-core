@@ -45,6 +45,10 @@ Before connecting Codex, Claude, or another host, read the
 tool loop, Result JSON contract, exit codes, safety rules, and a reusable test
 prompt.
 
+The normative [architecture design](docs/architecture.md) defines the common
+investigation protocol, evidence and knowledge model, extension boundaries,
+implementation status, and the rules for future architectural evolution.
+
 The lower-level evidence CLI remains available as `tracecite-core`.
 
 ## Stable kernel, public extension boundary
@@ -114,9 +118,10 @@ knowledge uses the separate
 ## Status
 
 The internal Runtime consolidation and compatibility layer are implemented.
-Mobile and CI cross-domain acceptance is intentionally pending; MCP, Codex
-Skill, and other agent-platform adapters follow only after that contract is
-validated.
+Mobile's public-extension and PlatformBackend contracts pass offline iOS and
+Android fixtures; real-device acceptance and the CI domain pilot remain
+pending. MCP and other agent-platform adapters follow only after those
+contracts are validated.
 
 ## License
 

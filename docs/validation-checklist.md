@@ -1,6 +1,11 @@
-# 第 7 步：Mobile / CI 领域验收（尚未执行）
+# 第 7 步：Mobile / CI 领域验收（部分执行）
 
-本轮只固化流程与问题，不执行 Mobile/CI 真实场景验收，也不推进第 8 步 MCP、Codex Skill 或其他 Agent 平台接入。
+Mobile 公共扩展与 PlatformBackend 的 iOS/Android 离线 fixture 已完成验证；
+真实设备验收未执行，CI 最小试点也尚未开始。第 8 步 MCP 或其他 Agent 平台
+Adapter 继续以后两项完成为前提。
+
+当前共享工作树的离线回归记录（2026-08-13）：Core `221 passed, 1 skipped`；
+Mobile `246 passed`，另有 `4` 个 unittest subtests。
 
 ## 执行前必须回答的问题
 
@@ -84,3 +89,12 @@
 - [ ] 记录首次与重复定位成本；Schema 更完整但定位成本上升视为不通过。
 - [ ] Mobile 与 CI 均通过前不删除兼容入口。
 - [ ] 验收通过后再决定 Knowledge registry、MCP 与 Agent 平台 adapter。
+
+## I. 架构演进与文档治理
+
+- [ ] 变更符合 `docs/architecture.md` 与 `docs/architecture.zh-CN.md` 的架构不变量。
+- [ ] 依赖方向、调查协议、公共 Schema、扩展边界、知识生命周期、预算或可信语义发生变化时，中英文架构文档已在同一变更中更新。
+- [ ] 不兼容变更或长期权衡已在 `docs/adr/` 记录 ADR，并包含迁移、回滚和验证计划。
+- [ ] 公共 API/Schema 变化具有版本策略、迁移说明和自动化测试。
+- [ ] 主包边界新增能力已由至少两个领域用例验证；否则该能力保留在领域扩展。
+- [ ] `architecture` 的实现状态表已与实际代码同步，没有把规划能力描述为已实现。

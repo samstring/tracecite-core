@@ -232,6 +232,7 @@ def events_from_filter_result(result: Any) -> List[AnalysisEvent]:
                 attributes={
                     "term": term,
                     "terms": list(meta.get("terms") or []),
+                    "matched_by": list(meta.get("matched_by") or []),
                     "pattern": pattern,
                     "record_index": index,
                     "original_source": original_source,

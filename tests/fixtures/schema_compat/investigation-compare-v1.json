@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "kind": "compare",
+  "status": "ok",
+  "valid": true,
+  "left": {
+    "source_kind": "path",
+    "investigation_id": "I-fixture",
+    "revision": 1,
+    "status": "active"
+  },
+  "right": {
+    "source_kind": "path",
+    "investigation_id": "I-fixture",
+    "revision": 1,
+    "status": "active"
+  },
+  "revision_delta": 0,
+  "status_changed": false,
+  "counts": {},
+  "omitted": {
+    "events": 0,
+    "items": 0,
+    "transitions": 0
+  },
+  "truncated": false
+}

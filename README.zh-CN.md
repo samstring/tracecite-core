@@ -30,6 +30,8 @@ tracecite run scenario.json
 
 准备让 Codex、Claude 或其他自研 Agent 直接测试时，请先阅读[外部 Agent 接入指南](docs/agent-integration.zh-CN.md)。其中包含调用顺序、Result JSON、退出码、安全规则和可复制的测试 Prompt。
 
+规范性的[架构设计](docs/architecture.zh-CN.md)定义了通用调查协议、证据与知识模型、扩展边界、当前实现状态以及后续架构演进的维护规则。
+
 低层证据命令仍可通过 `tracecite-core` 使用。
 
 ## 一个主项目，清晰的逻辑边界
@@ -77,7 +79,7 @@ tracecite run scenario.json --runtime my-domain --load-extensions
 
 仅仅 `import tracecite` 不会执行第三方注册代码。API 版本会校验，注册冲突默认失败，默认 Runtime 不授权 live source 和 action。
 
-详细约束见[扩展契约](docs/extension-contract.md)；第 7 步暂未执行，执行前问题与验收流程见[领域验证清单](docs/validation-checklist.md)。Agent 知识写入遵循独立的[提案、验证与晋升流程](docs/knowledge-governance.zh-CN.md)。
+详细约束见[扩展契约](docs/extension-contract.md)；第 7 步已完成 Mobile 离线契约验证，真机与 CI 试点仍待执行，具体流程见[领域验证清单](docs/validation-checklist.md)。Agent 知识写入遵循独立的[提案、验证与晋升流程](docs/knowledge-governance.zh-CN.md)。
 
 ## 核心原则
 
@@ -89,7 +91,7 @@ tracecite run scenario.json --runtime my-domain --load-extensions
 
 ## 当前状态
 
-主项目 Runtime 合并与旧 API 兼容层已实现。Mobile/CI 双领域验收仍有意保留为待执行步骤；通过前不推进 MCP、Codex Skill 或其他 Agent 平台接入。
+主项目 Runtime 合并与旧 API 兼容层已实现。Mobile 公共扩展和 PlatformBackend 契约已通过 iOS/Android 离线 fixture；真机验收与 CI 领域试点仍待执行，通过前不推进 MCP 或其他 Agent 平台 Adapter。
 
 ## License
 

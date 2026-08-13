@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "name": "compatibility-fixture",
+  "source": {
+    "type": "file",
+    "path": "fixture.log"
+  },
+  "parse": {
+    "segmenter": "rawtext"
+  },
+  "filter": {
+    "grep": "target"
+  }
+}

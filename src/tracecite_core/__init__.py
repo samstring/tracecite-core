@@ -79,6 +79,26 @@ from .text_filter import (
     text_time_range,
     top_terms_in_text,
 )
+from .matcher import PatternComponent, coerce_pattern_components
+from .survey import (
+    SurveyError,
+    SurveySummary,
+    survey,
+    survey_file,
+)
+from .sample import (
+    DEFAULT_SAMPLE_CHARS,
+    DEFAULT_SAMPLE_COUNT,
+    MAX_SAMPLE_CHARS,
+    MAX_SAMPLE_COUNT,
+    MAX_SAMPLE_RECORDS,
+    SAMPLE_STRATEGIES,
+    SampleError,
+    SampleSummary,
+    peek,
+    sample,
+    sample_file,
+)
 
 __all__ = [
     "Record", "estimate_tokens",
@@ -96,4 +116,9 @@ __all__ = [
     "FilterError", "FilterResult", "filter_text", "filter_texts",
     "pattern_from_terms", "parse_time_arg", "record_timestamp", "reference_datetime",
     "text_time_range", "top_terms_in_text",
+    "PatternComponent", "coerce_pattern_components",
+    "SurveyError", "SurveySummary", "survey", "survey_file",
+    "SampleError", "SampleSummary", "sample", "sample_file", "peek",
+    "DEFAULT_SAMPLE_CHARS", "DEFAULT_SAMPLE_COUNT", "MAX_SAMPLE_CHARS",
+    "MAX_SAMPLE_COUNT", "MAX_SAMPLE_RECORDS", "SAMPLE_STRATEGIES",
 ]

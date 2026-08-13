@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "timeline",
+  "status": "ok",
+  "valid": true,
+  "source_kind": "path",
+  "investigation_id": "I-fixture",
+  "revision": 1,
+  "events": [],
+  "counts": {
+    "total": 0,
+    "reported": 0,
+    "omitted": 0
+  },
+  "timestamps": {
+    "missing": 0
+  },
+  "omitted": {
+    "events": 0,
+    "items": 0,
+    "transitions": 0
+  },
+  "truncated": false
+}

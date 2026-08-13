@@ -185,6 +185,10 @@ class AgentResult:
                                         "event_id": event.get("event_id"),
                                         "category": event.get("category"),
                                         "name": event.get("name"),
+                                        "matched_by": list(
+                                            (event.get("attributes") or {}).get("matched_by")
+                                            or []
+                                        ),
                                     },
                                 ).to_dict()
                             )
@@ -264,5 +268,6 @@ class AgentResult:
                 "scenario": summary.get("scenario"),
                 "manifest_path": summary.get("manifest_path"),
                 "run_dir": summary.get("run_dir"),
+                "filter": summary.get("filter"),
             },
         )

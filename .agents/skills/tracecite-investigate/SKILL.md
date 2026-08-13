@@ -19,12 +19,46 @@ Use TraceCite as an evidence tool, not as a source of automatic conclusions. Kee
 
 1. Establish the user's question, allowed inputs, time range, and stop conditions.
 2. Call `tracecite probe` before reading or searching large inputs directly.
-3. State one falsifiable hypothesis. Keep observations separate from the hypothesis.
-4. Call `tracecite search` with literal matching by default and snapshots enabled. Narrow by time or source when possible.
-5. Parse the JSON contract. Inspect `status`, `outcome`, `coverage`, `missing_evidence`, `warnings`, `verification`, and `evidence_truncated` independently.
-6. Call `tracecite expand` only around relevant EvidencePointers and provide the expected SHA-256 when available.
-7. Use a versioned Scenario when repeatable assertions are needed. After `tracecite run`, call `tracecite verify` on its manifest before relying on the result.
-8. Stop when the hypothesis is resolved, evidence is exhausted, the budget is reached, or the next step needs new authorization. Report the stopping reason.
+3. For a non-trivial investigation with multiple hypotheses, tests, or tool
+   calls, optionally create an `InvestigationState` with
+   `tracecite investigation create`. Tiny, one-shot questions may continue
+   without a state file.
+4. Sampling is an optional free observation, not a mandatory funnel stage. If
+   raw context is useful, or a frequency-oriented survey could bias the first
+   view, call `tracecite sample` (or its `peek` alias) after probe. Keep the
+   default immutable snapshot, choose `head-tail` or deterministic `uniform`,
+   and inspect scan/scope coverage plus every omission or character
+   truncation. Sampling always has `outcome=not_assessed`; it never supplies a
+   root-cause conclusion. With `--no-snapshot`, treat snippets as mutable
+   context and do not cite them as immutable evidence.
+5. If the input is unfamiliar or there is no defensible first query, call
+   `tracecite survey` after probe. Survey is a bounded descriptive overview:
+   inspect its scan/time-parse coverage, `data.time_range`, `levels`,
+   `top_templates`, and `spikes`, but do not present those observations as a
+   root-cause conclusion. Use its observations to write at least two competing
+   falsifiable hypotheses, then call `tracecite search` separately for each.
+   There is no `search-batch` command. A survey candidate must not be promoted
+   to Knowledge automatically.
+6. If a clear clue already exists, state one falsifiable hypothesis and go
+   directly from `probe` to `search`.
+7. Call `tracecite search` with literal matching by default and snapshots enabled. Narrow by time or source when possible. When a state file is used, pass its `--investigation-path`, the relevant `--hypothesis-id`, and `--test-id`.
+8. Parse the JSON contract. Inspect `status`, `outcome`, `coverage`, `missing_evidence`, `warnings`, `verification`, and `evidence_truncated` independently.
+9. Call `tracecite expand` around relevant EvidencePointers, including both
+   supporting and contradicting observations, and provide the expected SHA-256
+   when available. When a state file is used, associate the expansion with the
+   same Test using the optional link flags.
+10. Use a versioned Scenario when repeatable assertions are needed. After `tracecite run`, call `tracecite verify` on its manifest before relying on the result.
+11. For a state-backed investigation, optionally run `tracecite investigation
+    summary STATE_PATH` before stopping. Use its bounded IDs, counts, gaps, and
+    suggested action categories as advisory coordination metadata only; it does
+    not diagnose the issue or make any stage mandatory.
+    Use `investigation timeline STATE` or `investigation compare BEFORE AFTER`
+    only when an audit/resume task needs bounded structural history or deltas;
+    never reinterpret those deltas as anomalies or Findings.
+12. Record a `Finding` for each evaluated Hypothesis and finish with
+    `investigation stop`. Stop when the hypothesis is resolved, evidence is
+    exhausted, the budget is reached, or the next step needs new authorization.
+    Report the stopping reason.
 
 Do not `cat`, fully ingest, or upload a large raw source merely to understand it. Use bounded evidence and artifacts instead.
 
