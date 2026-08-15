@@ -352,11 +352,40 @@ def probe(
                 reservation=prepared.get("reservation"),
             )
         sources: List[Dict[str, Any]] = []
+        recommendations: List[str] = []
         for path in files:
             kind = detect_segmenter_kind(path) if segmenter == "auto" else segmenter
             seg = build_segmenter(kind)
             source = RunFile.from_path("source", path)
             time_info = text_time_range(path, segmenter=seg)
+            line_lengths: List[int] = []
+            json_like_lines = 0
+            sampled_lines = 0
+            try:
+                with path.open("r", encoding="utf-8", errors="replace") as handle:
+                    for line in handle:
+                        sampled_lines += 1
+                        if sampled_lines > 1000:
+                            break
+                        stripped = line.strip()
+                        line_lengths.append(len(line))
+                        if stripped.startswith("{") and stripped.endswith("}"):
+                            json_like_lines += 1
+            except OSError:
+                line_lengths = []
+            if line_lengths:
+                ordered = sorted(line_lengths)
+                p99 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.99))]
+                if p99 > 2048:
+                    recommendations.append(
+                        f"{path.name}: line_length_p99={p99}; "
+                        "use filter --max-line-chars 1024 or search --max-line-chars N"
+                    )
+                if json_like_lines >= max(3, sampled_lines // 10):
+                    recommendations.append(
+                        f"{path.name}: single_line_json_detected; "
+                        "prefer records_path + expand over reading filter output_path"
+                    )
             sources.append(
                 {
                     "path": str(path.resolve()),
@@ -374,6 +403,7 @@ def probe(
             outcome="not_assessed",
             data={"sources": sources, "source_count": len(sources)},
             coverage={"files": len(sources)},
+            next_queries=recommendations[:5],
         ).to_dict()
         cache_meta = prepared.get("cache_meta")
         if cache_meta is not None:
@@ -426,6 +456,8 @@ def search(
     since: Optional[str] = None,
     until: Optional[str] = None,
     fold: bool = False,
+    max_evidence: Optional[int] = None,
+    max_line_chars: Optional[int] = None,
     investigation_path: Optional[Union[str, Path]] = None,
     hypothesis_id: Optional[str] = None,
     test_id: Optional[str] = None,
@@ -443,7 +475,10 @@ def search(
         "since": since,
         "until": until,
         "fold": fold,
+        "max_evidence": max_evidence,
+        "max_line_chars": max_line_chars,
     }
+    evidence_limit = MAX_RESULT_EVIDENCE if max_evidence is None else max(1, int(max_evidence))
     try:
         source = Path(input_path).expanduser().resolve()
         cache_safe = bool(snapshot and output_path is None)
@@ -457,7 +492,7 @@ def search(
                 # Search may return any number of pointers up to the public
                 # result bound. Reserve that bound before scanning so a hard
                 # pointer policy can never be exceeded after finalization.
-                "recorded_evidence_pointers": MAX_RESULT_EVIDENCE,
+                "recorded_evidence_pointers": evidence_limit,
             },
             cache_enabled=cache,
             cache_safe=cache_safe,
@@ -517,6 +552,7 @@ def search(
             since=since,
             until=until,
             template_threshold=10 if fold else 0,
+            max_line_chars=max_line_chars,
         )
         evidence_source = Path(result.work_input).resolve()
         digest = _sha256(evidence_source)
@@ -524,7 +560,7 @@ def search(
         if result.records_path and result.records_path.is_file():
             with result.records_path.open("r", encoding="utf-8") as handle:
                 for line in handle:
-                    if len(evidence) >= MAX_RESULT_EVIDENCE:
+                    if len(evidence) >= evidence_limit:
                         break
                     row = json.loads(line)
                     meta = row.get("metadata") or {}

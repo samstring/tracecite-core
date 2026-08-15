@@ -4,7 +4,56 @@
 
 This guide is for Codex, Claude, ChatGPT, custom agents, and any Agent Host that can invoke shell commands or Python functions.
 
-TraceCite is an evidence tool used by an agent; it is not an embedded LLM agent. The current stable integration surfaces are the CLI and Python API, including the versioned InvestigationState lifecycle. The repository ships a textual investigation Skill for capable hosts; MCP and other executable platform adapters are not available yet.
+TraceCite is an **agent context gateway** used by an agent; it is not an embedded
+LLM agent. The current stable integration surfaces are the CLI and Python API,
+including the versioned InvestigationState lifecycle. The repository ships a
+textual investigation Skill for capable hosts; MCP and other executable platform
+adapters are not available yet.
+
+## 0. Positioning: gateway, not grep replacement
+
+TraceCite controls **what crosses the agent context boundary**. Full evidence
+stays on disk — frozen snapshots, filter artifacts, and manifests — and any
+citation can be expanded back with SHA-256 verification.
+
+| TraceCite adds | `grep` alone provides |
+|---|---|
+| Bounded evidence count (agent profile default 30, configurable; canonical ≤100) | Manual `head` / truncation |
+| Frozen snapshot + `evidence://sha256/...#L123` pointers | No reproducible line anchor |
+| `status=ok` separate from `outcome=unknown` | Zero hits easily read as "no problem" |
+| `coverage.evidence_truncated` and `missing_evidence` | Silent omission when output is cut |
+
+**TraceCite is not a token optimizer.** Benchmarks show that against skilled
+`grep | head` usage, the default canonical JSON path is often **more expensive**
+in tokens. Use TraceCite when conclusions must survive review, not when the only
+goal is the smallest possible context.
+
+**Token-efficient agent integration** (recommended defaults; budgets apply automatically with `--agent-profile agent`):
+
+```bash
+tracecite search app.log "pattern" --no-snapshot \
+  --agent-profile agent --ledger-dir /tmp/ledger --lightweight
+```
+
+Agent-profile defaults: `--max-evidence 30`, `--max-line-chars 1024`,
+`--max-output-chars 12000`. Omit explicit flags unless you need a different budget.
+
+For single-line crash JSON or long `exceptionReason` payloads, raise the line and
+output budgets:
+
+```bash
+tracecite search app.log "crash_log|exceptionReason" --regex --no-snapshot \
+  --agent-profile agent --ledger-dir /tmp/ledger \
+  --max-line-chars 4096 --max-output-chars 16000
+```
+
+Prefer `search` + `expand-many` over reading filter output files directly.
+Domain tools such as `tracecite-mobile filter` write full-line artifacts to disk;
+treat those as audit storage, not as material to load wholesale into the model.
+
+**When to use grep directly:** stack already fully symbolicated, file is small
+(<100KB), structured input (use `jq`/Python extract), personal triage with no
+audit trail required.
 
 ## 1. Prerequisites
 
@@ -167,8 +216,17 @@ truncation in `coverage`, and retains a recovery artifact. It never slices the
 serialized JSON at an arbitrary character:
 
 ```bash
-tracecite search app.log "timeout" --snapshot --max-output-chars 6000
+tracecite search app.log "timeout" --snapshot --max-output-chars 12000
 ```
+
+`--max-evidence N` caps how many evidence rows the agent view returns (default
+**30** for agent profiles). `--max-line-chars N` truncates matched line text in
+the agent view (default **1024**; full lines remain in ledger /
+`*.records.jsonl`). Both flags apply only with agent transport profiles
+(`agent`, `frame`, `portable-json`, etc.).
+
+When `--max-output-chars` is omitted, agent profiles default to **12000**.
+`expand-many` also defaults to **12000** when `--max-output-chars` is omitted.
 
 The full canonical Result, cache entry, InvestigationState recording, frozen
 snapshot, and generated artifacts are unchanged by this CLI projection.
@@ -179,9 +237,10 @@ verified `data.result_id`; an Agent host can keep the ledger directory private:
 
 ```bash
 tracecite search app.log "timeout" --snapshot \
-  --ledger-dir /tmp/tracecite-ledger \
-  --max-output-chars 6000
+  --ledger-dir /tmp/tracecite-ledger
 ```
+
+(Omit `--max-output-chars` to use the agent default of **12000**.)
 
 The ledger entry is immutable and its identifier is the SHA-256 digest of the
 canonical search Result. Loading an entry verifies the digest before any
@@ -235,9 +294,10 @@ truncation status are reported together:
 tracecite expand-many /tmp/tracecite-ledger RESULT_ID \
   '#L120' '#L188-L190' \
   --before 3 --after 3 \
-  --max-output-chars 6000 \
   --agent-profile stateful-index
 ```
+
+(Omit `--max-output-chars` to use the default of **12000**.)
 
 `expand-many` verifies the ledger entry and each snapshot digest. Overlapping
 or adjacent windows are returned once in `contexts`; columnar Evidence rows

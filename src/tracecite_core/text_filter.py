@@ -126,6 +126,7 @@ _UNMATCHED_SAMPLE_CHARS = 300
 # 开启（--fold / scenario fold:true）。折叠绝不替代全量：正文 .filtered/ 始终
 # 完整，命中侧 term_usage + 未命中侧 unmatched_summary 才是「环境无遗漏」的双侧覆盖。
 DEFAULT_TEMPLATE_THRESHOLD = 10
+DEFAULT_MAX_LINE_CHARS = 1024
 # 模板折叠后的样本截断长度
 _TEMPLATE_SAMPLE_CHARS = 300
 # 模板 count 达到该阈值才输出 value_distribution（碎片模板不输出，控体积）
@@ -444,9 +445,11 @@ class FilterResult:
     pattern_components: Optional[List[Dict[str, Any]]] = None
     matched_by_counts: Optional[Dict[str, int]] = None
     matched_by_fallback: bool = False
+    lines_truncated: int = 0
+    max_line_chars: Optional[int] = None
 
     def to_dict(self) -> Dict[str, object]:
-        return {
+        payload = {
             "original_source": str(self.original_source),
             "original_total_lines_at_run": self.original_total_lines_at_run,
             "output_path": str(self.output_path),
@@ -474,6 +477,11 @@ class FilterResult:
             "matched_by_counts": self.matched_by_counts,
             "matched_by_fallback": self.matched_by_fallback,
         }
+        if self.lines_truncated:
+            payload["lines_truncated"] = self.lines_truncated
+        if self.max_line_chars is not None:
+            payload["max_line_chars"] = self.max_line_chars
+        return payload
 
     def metadata_header(self) -> str:
         lines = [
@@ -494,6 +502,9 @@ class FilterResult:
             lines.append(f"# time_to: {self.time_to}")
         if self.history_path is not None:
             lines.append(f"# history: {self.history_path}")
+        if self.lines_truncated:
+            lines.append(f"# lines_truncated: {self.lines_truncated}")
+            lines.append(f"# max_line_chars: {self.max_line_chars}")
         lines.extend(
             [
                 f"# work_input: {self.work_input}",
@@ -893,6 +904,15 @@ def resolve_preset(
     return pattern, tag
 
 
+def _truncate_output_line(text: str, *, max_line_chars: int, start_line: int) -> tuple[str, bool]:
+    body = text.rstrip("\n")
+    if max_line_chars <= 0 or len(body) <= max_line_chars:
+        return body + ("\n" if text.endswith("\n") else ""), False
+    suffix = f"...[trunc, expand:#L{start_line}]"
+    keep = max(0, max_line_chars - len(suffix))
+    return body[:keep] + suffix + "\n", True
+
+
 def filter_text(
     input_path: Path,
     *,
@@ -914,6 +934,7 @@ def filter_text(
     segmenter: Optional[Segmenter] = None,
     template_threshold: int = 0,
     encoding: str = "utf-8",
+    max_line_chars: Optional[int] = DEFAULT_MAX_LINE_CHARS,
 ) -> FilterResult:
     """
     过滤运行日志。
@@ -1045,6 +1066,7 @@ def filter_text(
     term_usage: Dict[str, int] = {}
     matched_by_counts: Counter = Counter()
     template_items: List[Dict[str, object]] = []
+    lines_truncated = 0
     for record in _iter_merged_records(
         work_input, segmenter=segmenter, encoding=encoding
     ):
@@ -1192,8 +1214,21 @@ def filter_text(
         with records_path.open("r", encoding="utf-8") as records_handle:
             for line in records_handle:
                 row = json.loads(line)
-                output_handle.write(str(row.get("text") or ""))
+                text = str(row.get("text") or "")
+                metadata = row.get("metadata") or {}
+                start_line = int(metadata.get("start_line") or 0)
+                if max_line_chars is not None:
+                    text, truncated = _truncate_output_line(
+                        text,
+                        max_line_chars=max_line_chars,
+                        start_line=start_line,
+                    )
+                    if truncated:
+                        lines_truncated += 1
+                output_handle.write(text)
 
+    result.lines_truncated = lines_truncated
+    result.max_line_chars = max_line_chars
     return result
 
 
@@ -1256,6 +1291,7 @@ def filter_texts(
     encoding: str = "utf-8",
     template_threshold: int = 0,
     output_dir: Optional[Path] = None,
+    max_line_chars: Optional[int] = DEFAULT_MAX_LINE_CHARS,
 ) -> MultiFilterResult:
     """对多份日志跑同一 scope/pattern；可选合并时间线。"""
     if not input_paths:
@@ -1303,6 +1339,7 @@ def filter_texts(
             segmenter=segmenter_for(idx),
             encoding=encoding,
             template_threshold=template_threshold,
+            max_line_chars=max_line_chars,
         )
         results.append(result)
         row = result.to_dict()

@@ -1,11 +1,15 @@
 # TraceCite
 
-**Extensible evidence runtime for AI debugging agents.**
+**Agent context gateway for AI debugging agents.**
 
-Give an agent a bounded, provenance-checked view of large, changing logs.
-TraceCite freezes inputs, returns evidence pointers, verifies their provenance,
-and lets domain packages add investigation capabilities without modifying
-TraceCite itself.
+TraceCite controls what log evidence enters the agent's context window.
+It freezes inputs, returns line-addressable evidence pointers, verifies their
+provenance, and keeps the full record on disk for on-demand expansion.
+Domain packages add collection and semantics without modifying the gateway kernel.
+
+TraceCite is **not a replacement for grep** and is **not a token optimizer**.
+Against skilled `grep | head` usage it is typically not cheaper in tokens — it
+is **bounded, auditable, and resistant to over-inference**.
 
 ```text
 Raw data -> Core evidence -> Runtime tools -> Your Agent
@@ -108,6 +112,7 @@ knowledge uses the separate
 
 ## Design principles
 
+- **Bounded output, not bounded cost** — search caps evidence count (agent default 30, configurable via `--max-evidence`); `--max-line-chars` and `--max-output-chars` cap agent-facing text; full artifacts remain on disk.
 - Evidence is traceable, not automatically complete or true.
 - `unknown` and `missing_evidence` are first-class results.
 - Agent conclusions never promote themselves into trusted knowledge.

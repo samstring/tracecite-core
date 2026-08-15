@@ -4,7 +4,43 @@
 
 本文面向 Codex、Claude、ChatGPT、自研 Agent 或任何可以调用 shell / Python 函数的 Agent Host。
 
-TraceCite 是 Agent 使用的证据工具，不是内置 LLM Agent。当前稳定接入方式是 CLI 或 Python API，其中包括版本化 InvestigationState 生命周期；仓库已提供供兼容宿主使用的文字调查 Skill，MCP 等可执行平台 Adapter 尚未提供。
+TraceCite 是 **Agent 上下文网关**，不是内置 LLM Agent。当前稳定接入方式是 CLI 或 Python API，其中包括版本化 InvestigationState 生命周期；仓库已提供供兼容宿主使用的文字调查 Skill，MCP 等可执行平台 Adapter 尚未提供。
+
+## 0. 定位：网关，不是 grep 替代品
+
+TraceCite 控制**什么进入 Agent 上下文**。全量证据留在磁盘——冻结快照、filter 产物、manifest——任何引用都可通过 SHA-256 校验 expand 回取。
+
+| TraceCite 提供 | 仅用 `grep` |
+|---|---|
+| 有界证据数量（agent profile 默认 30，可配；canonical ≤100） | 需人工 `head` / 截断 |
+| 冻结快照 + `evidence://sha256/...#L123` 行级指针 | 无可复现行锚点 |
+| `status=ok` 与 `outcome=unknown` 分离 | 零命中易被理解成「没问题」 |
+| `coverage.evidence_truncated` 与 `missing_evidence` | 截断时静默丢失 |
+
+**TraceCite 不是 token 优化器。** 基准测试表明，相对熟练的 `grep | head`，默认 canonical JSON 路径往往**更贵**。应在结论需要经受 review 时使用，而非仅追求最小上下文。
+
+**省 token 的推荐接入方式**（使用 `--agent-profile agent` 时预算自动生效）：
+
+```bash
+tracecite search app.log "pattern" --no-snapshot \
+  --agent-profile agent --ledger-dir /tmp/ledger --lightweight
+```
+
+Agent profile 默认值：`--max-evidence 30`、`--max-line-chars 1024`、
+`--max-output-chars 12000`。除非需要不同预算，否则不必显式传这些 flag。
+
+单行 crash JSON 或超长 `exceptionReason` 时可提高行宽与输出预算：
+
+```bash
+tracecite search app.log "crash_log|exceptionReason" --regex --no-snapshot \
+  --agent-profile agent --ledger-dir /tmp/ledger \
+  --max-line-chars 4096 --max-output-chars 16000
+```
+
+优先 `search` + `expand-many`，不要直接把 filter 输出文件整份读进模型。
+`tracecite-mobile filter` 写入磁盘的是审计级全行 artifact，不是默认的 Agent 视图。
+
+**可直接用 grep 的场景：** 栈已 100% 符号化、文件很小（<100KB）、结构化输入（用 jq/Python 提取）、个人快速排查且不需要审计链。
 
 ## 1. 接入前提
 
@@ -159,8 +195,16 @@ tracecite search app.log "timeout" --snapshot --compact
 中标记正文或指针截断，并保留恢复 Artifact；不会从任意字符位置截断序列化 JSON：
 
 ```bash
-tracecite search app.log "timeout" --snapshot --max-output-chars 6000
+tracecite search app.log "timeout" --snapshot --max-output-chars 12000
 ```
+
+`--max-evidence N` 限制 agent 视图返回的证据条数（agent profile 默认 **30**）。
+`--max-line-chars N` 截断 agent 视图中的匹配行文本（默认 **1024**；完整行仍在
+ledger / `*.records.jsonl`）。这两个 flag 仅在使用 agent 传输 profile（`agent`、
+`frame`、`portable-json` 等）时生效。
+
+省略 `--max-output-chars` 时，agent profile 默认 **12000**；`expand-many` 省略该
+参数时同样默认 **12000**。
 
 该 CLI 投影不会修改完整 canonical Result、缓存、InvestigationState 记录、冻结快照
 或磁盘上的中间产物。
@@ -171,9 +215,10 @@ Evidence Ledger。该参数隐含 `--compact`，响应只增加一个经过校�
 
 ```bash
 tracecite search app.log "timeout" --snapshot \
-  --ledger-dir /tmp/tracecite-ledger \
-  --max-output-chars 6000
+  --ledger-dir /tmp/tracecite-ledger
 ```
+
+（省略 `--max-output-chars` 时使用 agent 默认值 **12000**。）
 
 Ledger 条目不可变，标识符是 canonical search Result 的 SHA-256；展开证据前会重新
 计算摘要，防止读取被篡改的中间结果。
@@ -224,9 +269,10 @@ tracecite expand SNAPSHOT_PATH START_LINE \
 tracecite expand-many /tmp/tracecite-ledger RESULT_ID \
   '#L120' '#L188-L190' \
   --before 3 --after 3 \
-  --max-output-chars 6000 \
   --agent-profile stateful-index
 ```
+
+（省略 `--max-output-chars` 时使用默认值 **12000**。）
 
 `expand-many` 会校验 Ledger 条目和每个快照摘要。重叠或相邻窗口只在 `contexts`
 返回一次，列式 Evidence 行把每个 ref 关联到 Context ID；Coverage 会明确报告请求、

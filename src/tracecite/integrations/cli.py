@@ -29,6 +29,15 @@ from tracecite.runtime.schema import AgentResult
 from tracecite.runtime.tools import expand, probe, run, sample, search, survey, verify
 
 from .agent_profile import get_agent_profile, profile_names, render_frame
+from .agent_projection import (
+    DEFAULT_AGENT_MAX_EVIDENCE,
+    DEFAULT_AGENT_MAX_OUTPUT_CHARS,
+    DEFAULT_FILTER_MAX_LINE_CHARS,
+    apply_survey_brief,
+    dedupe_evidence_labels,
+    encoded_json,
+    lightweight_result,
+)
 from .evidence_ledger import EvidenceLedger, expand_many as expand_many_from_ledger
 
 
@@ -161,8 +170,28 @@ def build_parser(*, prog: str = "tracecite") -> argparse.ArgumentParser:
         type=_compact_output_chars,
         metavar="N",
         help=(
-            "bound the compact JSON document structurally (minimum 1024; "
-            "implies --compact)"
+            f"bound the compact JSON document structurally (minimum {MIN_COMPACT_OUTPUT_CHARS}; "
+            f"default {DEFAULT_AGENT_MAX_OUTPUT_CHARS} for agent profiles; implies --compact)"
+        ),
+    )
+    search_parser.add_argument(
+        "--max-evidence",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            f"maximum evidence rows in the agent view "
+            f"(default {DEFAULT_AGENT_MAX_EVIDENCE} for agent profiles)"
+        ),
+    )
+    search_parser.add_argument(
+        "--max-line-chars",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            f"truncate matched evidence lines to N characters "
+            f"(default {DEFAULT_FILTER_MAX_LINE_CHARS} for agent profiles)"
         ),
     )
     search_parser.add_argument(
@@ -176,8 +205,13 @@ def build_parser(*, prog: str = "tracecite") -> argparse.ArgumentParser:
     search_parser.add_argument(
         "--agent-profile",
         choices=profile_names(),
-        default="canonical",
-        help="selected Agent transport profile (default: canonical)",
+        default="agent",
+        help="selected Agent transport profile (default: agent)",
+    )
+    search_parser.add_argument(
+        "--lightweight",
+        action="store_true",
+        help="omit empty investigation envelope fields from the agent response",
     )
     _add_investigation_link_args(search_parser)
     _add_cache_arg(search_parser)
@@ -222,6 +256,16 @@ def build_parser(*, prog: str = "tracecite") -> argparse.ArgumentParser:
         default=2,
         metavar="N",
         help="maximum immutable samples per template (default: 2)",
+    )
+    survey_parser.add_argument(
+        "--brief",
+        action="store_true",
+        help="emit a token-efficient survey view without sample text payloads",
+    )
+    survey_parser.add_argument(
+        "--lightweight",
+        action="store_true",
+        help="omit empty investigation envelope fields from the agent response",
     )
     _add_investigation_link_args(survey_parser)
     _add_cache_arg(survey_parser)
@@ -314,7 +358,10 @@ def build_parser(*, prog: str = "tracecite") -> argparse.ArgumentParser:
         "--max-output-chars",
         type=_compact_output_chars,
         metavar="N",
-        help="bound the complete JSON response structurally (minimum 1024)",
+        help=(
+            f"bound the complete JSON response structurally "
+            f"(minimum {MIN_COMPACT_OUTPUT_CHARS}; default {DEFAULT_AGENT_MAX_OUTPUT_CHARS})"
+        ),
     )
     expand_many_parser.add_argument(
         "--agent-profile",
@@ -543,12 +590,7 @@ def _json_argument(value: str, *, field_name: str) -> Any:
 
 
 def _encoded_json(payload: Any) -> str:
-    return json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    return encoded_json(payload)
 
 
 def _primary_artifact(artifacts: Any) -> list[dict[str, Any]]:
@@ -668,6 +710,9 @@ def _compact_search_result(
     coverage["evidence_truncated"] = bool(
         original_coverage.get("evidence_truncated", False)
     )
+    label_index = evidence_columns.index("label") if "label" in evidence_columns else -1
+    if label_index >= 0:
+        dedupe_evidence_labels(evidence_rows, label_index=label_index, coverage=coverage)
     result["coverage"] = coverage
 
     original_artifacts = result.get("artifacts") or []
@@ -812,6 +857,28 @@ def _invoke(args: argparse.Namespace) -> Mapping[str, Any]:
             **_link_kwargs(args),
         )
     if args.command == "search":
+        selected_profile = getattr(args, "agent_profile", "agent")
+        agent_transport = selected_profile in {
+            "agent",
+            "portable-json",
+            "strict-json",
+            "stateful-index",
+            "frame",
+        }
+        max_evidence = (
+            args.max_evidence
+            if args.max_evidence is not None
+            else (DEFAULT_AGENT_MAX_EVIDENCE if agent_transport else None)
+        )
+        max_line_chars = (
+            args.max_line_chars
+            if args.max_line_chars is not None
+            else (DEFAULT_FILTER_MAX_LINE_CHARS if agent_transport else None)
+        )
+        if max_evidence is not None and max_evidence < 1:
+            raise ValueError("max-evidence must be at least 1")
+        if max_line_chars is not None and max_line_chars < 1:
+            raise ValueError("max-line-chars must be at least 1")
         return search(
             Path(args.input),
             args.query,
@@ -823,6 +890,8 @@ def _invoke(args: argparse.Namespace) -> Mapping[str, Any]:
             since=args.since,
             until=args.until,
             fold=args.fold,
+            max_evidence=max_evidence,
+            max_line_chars=max_line_chars,
             cache=args.cache,
             **_link_kwargs(args),
         )
@@ -1034,10 +1103,7 @@ def _print_payload(payload: Any, *, compact: bool = False, frame: bool = False) 
     if frame:
         print(render_frame(payload if isinstance(payload, Mapping) else {}))
         return
-    if compact:
-        print(_encoded_json(payload))
-    else:
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+    print(_encoded_json(payload))
 
 
 def main(
@@ -1052,10 +1118,17 @@ def main(
     """
 
     args = build_parser(prog=prog).parse_args(argv)
-    profile_name = getattr(args, "agent_profile", "canonical")
+    profile_name = getattr(args, "agent_profile", "agent")
     profile = get_agent_profile(profile_name)
     if args.command == "search" and getattr(args, "compact", False) and profile_name == "canonical":
         profile = get_agent_profile("portable-json")
+    max_output_chars = getattr(args, "max_output_chars", None)
+    if max_output_chars is None and args.command in {"search", "expand-many"}:
+        if args.command == "search" and profile.transport != "canonical-json":
+            max_output_chars = DEFAULT_AGENT_MAX_OUTPUT_CHARS
+        elif args.command == "expand-many":
+            max_output_chars = DEFAULT_AGENT_MAX_OUTPUT_CHARS
+        args.max_output_chars = max_output_chars
     profile_error = (
         f"agent profile {profile.name!r} requires --ledger-dir"
         if args.command == "search" and profile.requires_ledger and args.ledger_dir is None
@@ -1079,7 +1152,12 @@ def main(
             payload = copy.deepcopy(dict(payload))
             data = dict(payload.get("data") or {})
             data["result_id"] = result_id
+            if profile.compact_history:
+                data["compact_history"] = True
+                data["history_mode"] = "ledger"
             payload["data"] = data
+        if args.command == "survey" and getattr(args, "brief", False):
+            payload = apply_survey_brief(payload)
         if args.command == "search" and compact:
             payload = _compact_search_result(
                 payload,
@@ -1090,6 +1168,8 @@ def main(
                 payload,
                 max_output_chars=args.max_output_chars,
             )
+        if getattr(args, "lightweight", False):
+            payload = lightweight_result(payload)
         if frame and args.max_output_chars is not None:
             rendered = render_frame(payload)
             if len(rendered) > args.max_output_chars:

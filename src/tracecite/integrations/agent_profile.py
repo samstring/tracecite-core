@@ -48,6 +48,7 @@ class AgentProfile:
 
 _PROFILES: dict[str, AgentProfile] = {
     "canonical": AgentProfile("canonical", "canonical-json"),
+    "agent": AgentProfile("agent", "columnar-json"),
     "portable-json": AgentProfile("portable-json", "columnar-json"),
     "strict-json": AgentProfile(
         "strict-json",
@@ -101,7 +102,11 @@ def select_agent_profile(
     if name == "auto":
         if _PROFILES["stateful-index"].supports(available):
             return _PROFILES["stateful-index"]
+        return _PROFILES["agent"]
+    if name == "portable-json":
         return _PROFILES["portable-json"]
+    if name == "agent":
+        return _PROFILES["agent"]
     profile = get_agent_profile(name)
     if not profile.supports(available):
         raise ValueError(

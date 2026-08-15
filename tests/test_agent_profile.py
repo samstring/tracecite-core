@@ -42,7 +42,7 @@ def _canonical_search() -> dict[str, object]:
 
 
 def test_auto_profile_prefers_stateful_index_only_when_capable() -> None:
-    assert select_agent_profile("auto").name == "portable-json"
+    assert select_agent_profile("auto").name == "agent"
     assert select_agent_profile(
         "auto", AgentCapabilities(stateful_history=True, batch_expand=True)
     ).name == "stateful-index"

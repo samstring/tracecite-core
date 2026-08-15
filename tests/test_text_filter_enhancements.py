@@ -450,3 +450,20 @@ class TestTimeRange:
         assert info["time_from"] == "2026-08-08T14:10:00"
         assert info["time_to"] == "2026-08-08T14:12:00"
         assert len(info["minute_distribution"]) == 3
+
+
+def test_filter_output_truncates_long_lines_but_records_stay_full(tmp_path):
+    src = tmp_path / "big.log"
+    giant = "X" * 5000
+    src.write_text(f"2026-08-08 14:10:00 INFO hit {giant}\n", encoding="utf-8")
+    out = tmp_path / "filtered.log"
+
+    result = filter_text(src, pattern="hit", output_path=out, max_line_chars=512)
+
+    body = out.read_text(encoding="utf-8")
+    assert "...[trunc, expand:#L1]" in body
+    assert len(body.splitlines()[-1]) <= 520
+    records = (tmp_path / "filtered.log.records.jsonl").read_text(encoding="utf-8")
+    assert giant in records
+    assert result.lines_truncated == 1
+    assert result.max_line_chars == 512

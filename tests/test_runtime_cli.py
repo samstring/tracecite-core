@@ -133,6 +133,17 @@ def _search_payload(count: int = 2) -> dict[str, object]:
     return payload
 
 
+def test_default_agent_profile_compacts_without_explicit_flag(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "search", lambda *_args, **_kwargs: _search_payload())
+
+    assert cli.main(["search", "events.log", "matching"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["data"]["view"] == "compact"
+    assert isinstance(payload["evidence"], dict)
+    assert "columns" in payload["evidence"]
+
+
 def test_search_compact_is_cli_projection_not_runtime_argument(monkeypatch, capsys) -> None:
     calls: dict[str, object] = {}
 
@@ -184,6 +195,44 @@ def test_search_compact_budget_trims_structurally_and_keeps_recovery(
     assert payload["artifacts"] == [
         {"role": "matched_records", "path": "/tmp/evidence.log.records.jsonl"}
     ]
+
+
+def test_search_agent_limits_are_configurable(monkeypatch, capsys) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_search(*args, **kwargs):
+        calls.update(kwargs)
+        return _search_payload()
+
+    monkeypatch.setattr(cli, "search", fake_search)
+
+    assert cli.main(
+        [
+            "search",
+            "events.log",
+            "matching",
+            "--max-evidence",
+            "45",
+            "--max-line-chars",
+            "2048",
+        ]
+    ) == 0
+    assert calls["max_evidence"] == 45
+    assert calls["max_line_chars"] == 2048
+
+
+def test_search_agent_limits_use_updated_defaults(monkeypatch, capsys) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_search(*args, **kwargs):
+        calls.update(kwargs)
+        return _search_payload()
+
+    monkeypatch.setattr(cli, "search", fake_search)
+
+    assert cli.main(["search", "events.log", "matching"]) == 0
+    assert calls["max_evidence"] == cli.DEFAULT_AGENT_MAX_EVIDENCE
+    assert calls["max_line_chars"] == cli.DEFAULT_FILTER_MAX_LINE_CHARS
 
 
 def test_search_compact_keeps_full_identity_when_sources_are_not_shared() -> None:
