@@ -230,9 +230,9 @@ The link's status is a creation-time snapshot: review/promotion does not
 silently rewrite InvestigationState, and hosts must explicitly refresh it when
 they need current candidate status.
 
-## 8. Token and execution budgets
+## 8. Context and execution budgets
 
-Progressive disclosure is the primary token strategy:
+Progressive disclosure is the primary context-management strategy:
 
 ```text
 metadata -> bounded sample/survey -> EvidencePointer -> lazy expand -> full Artifact
@@ -242,6 +242,24 @@ metadata -> bounded sample/survey -> EvidencePointer -> lazy expand -> full Arti
 - Large or changing inputs return metadata, statistics, and pointers rather than full text.
 - Deterministic operations may cache by input digest and parameters.
 - Large bodies live in Artifacts; AgentResult remains bounded.
+- Agent adapters may expose an opt-in compact projection, but must preserve
+  losslessly reconstructable evidence identities, epistemic status, essential
+  coverage/truncation signals, and a recovery Artifact whenever inline evidence
+  is omitted. The canonical Runtime Result and stored Artifacts remain unchanged.
+- Agent adapters may keep canonical Results in a content-addressed Evidence
+  Ledger and expose only a verified result identifier. Ledger entries are
+  immutable, batch expansion revalidates source digests, and missing or
+  truncated refs remain explicit coverage rather than silent omission.
+- Conversation adapters may compact a tool result only after the model has
+  observed it, while retaining the newest result and a deterministic recovery
+  path. History compaction is a transport optimization, not evidence deletion.
+- Compact projections may use declared-once columnar rows and shared merged
+  contexts. Every evidence identity must still map deterministically to its
+  exact selected line range and immutable source.
+- Agent transport profiles are selected per analysis run and live only in
+  ``tracecite.integrations``. A profile may alter transport encoding and
+  consumed-history compaction, but must not alter canonical Result semantics,
+  select another Agent, or introduce a Core-to-Integration dependency.
 - InvestigationState stores decisions, not duplicated raw logs.
 - Every Test links to a Hypothesis to prevent aimless query chains.
 - Budget exhaustion is a stop reason, never permission to hide truncation or missing evidence.

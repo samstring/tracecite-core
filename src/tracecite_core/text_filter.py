@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""通用文本过滤：快照定界 + scope + grep，供 Agent 分析（省 token）。"""
+"""通用文本过滤：快照定界 + scope + grep，供 Agent 分析。"""
 
 from __future__ import annotations
 
@@ -337,7 +337,7 @@ def _fold_templates(
     for group in sorted(groups.values(), key=lambda g: -int(g["count"])):  # type: ignore[arg-type]
         terms = sorted(str(t) for t in group["terms"])  # type: ignore[union-attr]
         # 值分布只对高频模板输出（count 达到阈值）：碎片模板（count=1 等）输出空，
-        # 否则值分布会把 JSONL 体积放大 2-3 倍，省 token 的目的落空
+        # 否则值分布会把 JSONL 体积放大 2-3 倍，输出会变得难以使用
         count = int(group["count"])  # type: ignore[arg-type]
         if count >= _VALUE_DIST_MIN_COUNT:
             value_dist = {
@@ -365,7 +365,7 @@ def template_stats(
     """折叠质量指标：碎片率/覆盖率 —— 帮助判断「折叠是否还有效」。
 
     碎片化时（url/接口名等字符串字段各异）模板数 ≈ 命中数、fold_ratio 很低，
-    此时折叠视图既不能省 token 也不能看分布，应提示直接看原文或按字段收窄。
+        此时折叠视图既不能提供有效摘要也不能看分布，应提示直接看原文或按字段收窄。
     """
     if not entries or match_records <= 0:
         return {

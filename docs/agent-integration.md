@@ -146,6 +146,72 @@ tracecite search app.log "timeout|ECONNRESET|HTTP 5[0-9]{2}" --regex --snapshot
 
 `search` freezes the source by default. Evidence line numbers and hashes then refer to that immutable snapshot, not to a log that may continue changing.
 
+To project the CLI response into an Agent view without changing the canonical
+Runtime result, use `--compact`. Shared snapshot path, digest, and
+Evidence URI base move to `data.evidence_source`; Evidence uses one column
+declaration plus compact rows such as `[["#L12",12,12,"label"]]`. Zip
+`evidence.columns` with each item in `evidence.rows`. Reconstruct the complete
+URI by concatenating `data.evidence_source.uri_base` and the row's `ref`.
+Intermediate artifacts remain on disk and are omitted from the response unless
+evidence was truncated, in which case one recovery artifact is retained.
+Essential coverage and every truncation flag remain visible:
+
+```bash
+tracecite search app.log "timeout" --snapshot --compact
+```
+
+Use `--max-output-chars N` to impose a structural JSON budget (minimum 1024;
+it implies `--compact`). TraceCite removes optional labels and then whole
+evidence rows until the serialized document fits, marks content/pointer
+truncation in `coverage`, and retains a recovery artifact. It never slices the
+serialized JSON at an arbitrary character:
+
+```bash
+tracecite search app.log "timeout" --snapshot --max-output-chars 6000
+```
+
+The full canonical Result, cache entry, InvestigationState recording, frozen
+snapshot, and generated artifacts are unchanged by this CLI projection.
+
+For multi-turn Agents, add `--ledger-dir` to store that canonical Result in a
+content-addressed Evidence Ledger. This implies `--compact` and returns only a
+verified `data.result_id`; an Agent host can keep the ledger directory private:
+
+```bash
+tracecite search app.log "timeout" --snapshot \
+  --ledger-dir /tmp/tracecite-ledger \
+  --max-output-chars 6000
+```
+
+The ledger entry is immutable and its identifier is the SHA-256 digest of the
+canonical search Result. Loading an entry verifies the digest before any
+evidence is expanded.
+
+### Select one Agent transport profile
+
+Profiles are selected per analysis run. They are integration-only views over
+the same canonical Result; they do not select, replace, or coordinate multiple
+Agents:
+
+| Profile | Intended host capability | Transport |
+| --- | --- | --- |
+| `portable-json` | any Agent | columnar JSON |
+| `strict-json` | Agent requires JSON | columnar JSON |
+| `stateful-index` | stateful history and batch tools | Ledger id + columnar JSON + consumed-history compaction |
+| `frame` | stateful Agent that declares TCF support | Ledger id + TCF text frame |
+
+Use `stateful-index` when the selected Agent can call `expand-many` in the
+same investigation. It requires a private ledger directory:
+
+```bash
+tracecite search app.log "timeout" --snapshot \
+  --agent-profile stateful-index \
+  --ledger-dir /tmp/tracecite-ledger
+```
+
+`frame` is opt-in and also requires `--ledger-dir`. A host that cannot parse
+TCF must select `portable-json`; no evidence is silently reformatted or lost.
+
 ### Step 4: Expand important evidence
 
 Read `source_path`, `start_line`, `end_line`, and `sha256` from an item in `evidence[]`:
@@ -157,6 +223,28 @@ tracecite expand SNAPSHOT_PATH START_LINE \
   --after 10 \
   --expected-sha256 SHA256
 ```
+
+For a compact response, read the shared path and digest from
+`data.evidence_source` and the line range from the selected `evidence[]` row.
+The complete Evidence URI is `evidence_source.uri_base + row.ref`.
+
+When several refs are relevant, expand them in one call so their coverage and
+truncation status are reported together:
+
+```bash
+tracecite expand-many /tmp/tracecite-ledger RESULT_ID \
+  '#L120' '#L188-L190' \
+  --before 3 --after 3 \
+  --max-output-chars 6000 \
+  --agent-profile stateful-index
+```
+
+`expand-many` verifies the ledger entry and each snapshot digest. Overlapping
+or adjacent windows are returned once in `contexts`; columnar Evidence rows
+link every ref to a context id. Its coverage reports requested, returned,
+merged, missing, failed, and truncated refs explicitly.
+An Agent host may replace an older, already-observed tool result with its
+`result_id`, but must keep the newest result intact and provide a recovery tool.
 
 Always pass `--expected-sha256`. If the file has changed, TraceCite returns a structured error and the agent must stop citing that pointer.
 

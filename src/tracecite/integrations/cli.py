@@ -1,14 +1,14 @@
-"""Command-line interface for the generic TraceCite Runtime tools.
+"""Command-line interface and bounded Agent adapter for TraceCite.
 
-The command line is deliberately a thin adapter over :mod:`tracecite.runtime.tools`.
-The tools already provide the public result envelope, so the CLI only needs to
-parse arguments, serialize that envelope, and map an error status to a non-zero
-process exit code.
+Default commands serialize the public Runtime Result unchanged. Opt-in compact
+views and the Evidence Ledger keep the canonical Result and immutable evidence
+recoverable outside the Agent response.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -27,6 +27,24 @@ from tracecite.runtime.investigation_compare import (
 )
 from tracecite.runtime.schema import AgentResult
 from tracecite.runtime.tools import expand, probe, run, sample, search, survey, verify
+
+from .agent_profile import get_agent_profile, profile_names, render_frame
+from .evidence_ledger import EvidenceLedger, expand_many as expand_many_from_ledger
+
+
+MIN_COMPACT_OUTPUT_CHARS = 1024
+
+
+def _compact_output_chars(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < MIN_COMPACT_OUTPUT_CHARS:
+        raise argparse.ArgumentTypeError(
+            f"must be at least {MIN_COMPACT_OUTPUT_CHARS} characters"
+        )
+    return parsed
 
 
 def _add_investigation_link_args(parser: argparse.ArgumentParser) -> None:
@@ -129,6 +147,37 @@ def build_parser(*, prog: str = "tracecite") -> argparse.ArgumentParser:
         "--fold",
         action="store_true",
         help="emit repeated-line template artifacts",
+    )
+    search_parser.add_argument(
+        "--compact",
+        action="store_true",
+        help=(
+            "emit a bounded agent view with reconstructable evidence "
+            "URIs, coverage, and recovery metadata"
+        ),
+    )
+    search_parser.add_argument(
+        "--max-output-chars",
+        type=_compact_output_chars,
+        metavar="N",
+        help=(
+            "bound the compact JSON document structurally (minimum 1024; "
+            "implies --compact)"
+        ),
+    )
+    search_parser.add_argument(
+        "--ledger-dir",
+        metavar="DIR",
+        help=(
+            "store the canonical search Result in a content-addressed Evidence "
+            "Ledger (implies --compact)"
+        ),
+    )
+    search_parser.add_argument(
+        "--agent-profile",
+        choices=profile_names(),
+        default="canonical",
+        help="selected Agent transport profile (default: canonical)",
     )
     _add_investigation_link_args(search_parser)
     _add_cache_arg(search_parser)
@@ -244,6 +293,35 @@ def build_parser(*, prog: str = "tracecite") -> argparse.ArgumentParser:
     expand_parser.add_argument("--max-chars", type=int, default=20_000, metavar="N")
     _add_investigation_link_args(expand_parser)
     _add_cache_arg(expand_parser)
+
+    expand_many_parser = sub.add_parser(
+        "expand-many",
+        help="expand several refs from one immutable Evidence Ledger result",
+    )
+    expand_many_parser.add_argument("ledger_dir", metavar="LEDGER_DIR")
+    expand_many_parser.add_argument("result_id", metavar="RESULT_ID")
+    expand_many_parser.add_argument("refs", nargs="+", metavar="REF")
+    expand_many_parser.add_argument("--before", type=int, default=3, metavar="N")
+    expand_many_parser.add_argument("--after", type=int, default=3, metavar="N")
+    expand_many_parser.add_argument(
+        "--max-chars",
+        type=int,
+        default=20_000,
+        metavar="N",
+        help="aggregate returned context budget (default: 20000)",
+    )
+    expand_many_parser.add_argument(
+        "--max-output-chars",
+        type=_compact_output_chars,
+        metavar="N",
+        help="bound the complete JSON response structurally (minimum 1024)",
+    )
+    expand_many_parser.add_argument(
+        "--agent-profile",
+        choices=("portable-json", "strict-json", "stateful-index", "frame"),
+        default="portable-json",
+        help="selected Agent transport profile (default: portable-json)",
+    )
 
     verify_parser = sub.add_parser("verify", help="verify a completed evidence manifest")
     verify_parser.add_argument("manifest", metavar="MANIFEST")
@@ -464,6 +542,256 @@ def _json_argument(value: str, *, field_name: str) -> Any:
         raise ValueError(f"{field_name} 不是合法 JSON: {exc}") from exc
 
 
+def _encoded_json(payload: Any) -> str:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _primary_artifact(artifacts: Any) -> list[dict[str, Any]]:
+    rows = [dict(item) for item in artifacts or [] if isinstance(item, Mapping)]
+    for role in ("matched_records", "filtered_log"):
+        selected = next((item for item in rows if item.get("role") == role), None)
+        if selected is not None:
+            return [selected]
+    return rows[:1]
+
+
+def _compact_search_result(
+    payload: Mapping[str, Any],
+    *,
+    max_output_chars: int | None = None,
+) -> dict[str, Any]:
+    """Project a canonical search Result into a bounded agent-facing view.
+
+    The canonical Runtime result, cache entry, investigation recording, and
+    artifacts remain unchanged. The projection removes repeated pointer fields,
+    hoists the immutable source and URI base once, trims descriptive coverage,
+    and only exposes an artifact path when it is needed to recover omitted
+    evidence.
+    """
+
+    result = copy.deepcopy(dict(payload))
+    if result.get("operation") != "search":
+        return result
+
+    original_evidence = [
+        dict(item)
+        for item in result.get("evidence") or []
+        if isinstance(item, Mapping)
+    ]
+    sources: set[tuple[str, str]] = set()
+    for item in original_evidence:
+        source_path = str(item.get("source_path") or "")
+        digest = str(item.get("sha256") or "")
+        if source_path and digest:
+            sources.add((source_path, digest))
+
+    shared_source = next(iter(sources)) if len(sources) == 1 else None
+    uri_base = (
+        f"evidence://sha256/{shared_source[1]}"
+        if shared_source is not None
+        else None
+    )
+    evidence_columns = (
+        ["ref", "start", "end", "label"]
+        if shared_source is not None
+        else ["uri", "source_path", "sha256", "start", "end", "label"]
+    )
+    evidence_rows: list[list[Any]] = []
+    for item in original_evidence:
+        uri = str(item.get("uri") or "")
+        if uri_base is not None and uri.startswith(f"{uri_base}#"):
+            identity = uri[len(uri_base) :]
+            row = [
+                identity,
+                item.get("start_line"),
+                item.get("end_line"),
+                item.get("label") or "",
+            ]
+        elif uri and shared_source is not None:
+            row = [
+                uri,
+                item.get("start_line"),
+                item.get("end_line"),
+                item.get("label") or "",
+            ]
+        elif uri:
+            identity = uri
+            row = [
+                identity,
+                item.get("source_path"),
+                item.get("sha256"),
+                item.get("start_line"),
+                item.get("end_line"),
+                item.get("label") or "",
+            ]
+        else:
+            continue
+        evidence_rows.append(row)
+
+    data = dict(result.get("data") or {})
+    data["view"] = "compact"
+    if shared_source is not None:
+        source_path, digest = shared_source
+        data["evidence_source"] = {
+            "path": source_path,
+            "sha256": digest,
+            "uri_base": uri_base,
+        }
+    result["data"] = data
+    result["evidence"] = {
+        "columns": evidence_columns,
+        "rows": evidence_rows,
+    }
+
+    original_coverage = dict(result.get("coverage") or {})
+    keep_coverage = (
+        "scoped_lines",
+        "match_records",
+        "match_lines",
+        "evidence_returned",
+        "evidence_truncated",
+    )
+    coverage = {
+        key: original_coverage[key]
+        for key in keep_coverage
+        if key in original_coverage
+    }
+    coverage["evidence_available"] = int(
+        original_coverage.get("match_records") or len(original_evidence)
+    )
+    coverage["evidence_returned"] = len(evidence_rows)
+    coverage["evidence_truncated"] = bool(
+        original_coverage.get("evidence_truncated", False)
+    )
+    result["coverage"] = coverage
+
+    original_artifacts = result.get("artifacts") or []
+    result["artifacts"] = (
+        _primary_artifact(original_artifacts)
+        if coverage["evidence_truncated"]
+        else []
+    )
+
+    if max_output_chars is None:
+        return result
+
+    if len(_encoded_json(result)) > max_output_chars:
+        # Budget trimming may omit labels or pointers. Account for the recovery
+        # artifact before trimming so the final fit calculation includes it.
+        result["artifacts"] = _primary_artifact(original_artifacts)
+
+    content_trimmed = False
+    label_index = evidence_columns.index("label")
+    while len(_encoded_json(result)) > max_output_chars:
+        labeled = next(
+            (row for row in reversed(evidence_rows) if row[label_index]),
+            None,
+        )
+        if labeled is None:
+            break
+        if not content_trimmed:
+            coverage["evidence_content_truncated"] = True
+            content_trimmed = True
+        labeled[label_index] = ""
+
+    if (
+        len(_encoded_json(result)) > max_output_chars
+        and all(not row[label_index] for row in evidence_rows)
+    ):
+        evidence_columns.pop(label_index)
+        for row in evidence_rows:
+            row.pop(label_index)
+
+    evidence_removed = False
+    while evidence_rows and len(_encoded_json(result)) > max_output_chars:
+        if not evidence_removed:
+            coverage["evidence_truncated"] = True
+            evidence_removed = True
+        evidence_rows.pop()
+        coverage["evidence_returned"] = len(evidence_rows)
+
+    while result.get("next_queries") and len(_encoded_json(result)) > max_output_chars:
+        coverage["next_queries_truncated"] = True
+        result["next_queries"].pop()
+
+    if len(_encoded_json(result)) > max_output_chars:
+        raise ValueError(
+            f"compact search result cannot fit within {max_output_chars} characters"
+        )
+    return result
+
+
+def _fit_expand_many_result(
+    payload: Mapping[str, Any],
+    *,
+    max_output_chars: int | None,
+) -> dict[str, Any]:
+    """Fit an expandable Ledger response without ever slicing serialized JSON."""
+
+    result = copy.deepcopy(dict(payload))
+    if max_output_chars is None or len(_encoded_json(result)) <= max_output_chars:
+        return result
+
+    coverage = dict(result.get("coverage") or {})
+    result["coverage"] = coverage
+    coverage["output_truncated"] = True
+    coverage["truncated"] = True
+    result["outcome"] = "unknown"
+    contexts = [dict(item) for item in result.get("contexts") or []]
+    result["contexts"] = contexts
+    evidence = dict(result.get("evidence") or {})
+    evidence_columns = list(evidence.get("columns") or [])
+    evidence_rows = [list(row) for row in evidence.get("rows") or []]
+    evidence = {"columns": evidence_columns, "rows": evidence_rows}
+    result["evidence"] = evidence
+
+    while len(_encoded_json(result)) > max_output_chars:
+        candidates = [item for item in contexts if str(item.get("text") or "")]
+        if not candidates:
+            break
+        item = max(candidates, key=lambda row: len(str(row.get("text") or "")))
+        text = str(item.get("text") or "")
+        over = len(_encoded_json(result)) - max_output_chars
+        item["text"] = text[: max(0, len(text) - max(1, over + 16))]
+        item["truncated"] = True
+
+    failed_refs = list(coverage.get("failed_refs") or [])
+    context_index = evidence_columns.index("context") if "context" in evidence_columns else -1
+    ref_index = evidence_columns.index("ref") if "ref" in evidence_columns else -1
+    while contexts and len(_encoded_json(result)) > max_output_chars:
+        removed = contexts.pop()
+        context_id = str(removed.get("id") or "")
+        retained_rows: list[list[Any]] = []
+        for row in evidence_rows:
+            if context_index >= 0 and str(row[context_index]) == context_id:
+                ref = str(row[ref_index]) if ref_index >= 0 else ""
+                if ref and ref not in failed_refs:
+                    failed_refs.append(ref)
+            else:
+                retained_rows.append(row)
+        evidence_rows[:] = retained_rows
+        coverage["failed_refs"] = failed_refs
+        coverage["returned"] = len(evidence_rows)
+        coverage["contexts"] = len(contexts)
+        coverage["merged_contexts"] = max(0, len(evidence_rows) - len(contexts))
+
+    coverage["text_chars"] = sum(
+        len(str(context.get("text") or "")) for context in contexts
+    )
+    if not evidence_rows:
+        result["status"] = "error"
+    if len(_encoded_json(result)) > max_output_chars:
+        raise ValueError(
+            f"expand-many result cannot fit within {max_output_chars} characters"
+        )
+    return result
+
+
 def _investigation_snapshot(store: InvestigationStore, result: Any = None) -> dict[str, Any]:
     payload = store.load().to_dict()
     if result is not None:
@@ -536,6 +864,15 @@ def _invoke(args: argparse.Namespace) -> Mapping[str, Any]:
             max_chars=args.max_chars,
             cache=args.cache,
             **_link_kwargs(args),
+        )
+    if args.command == "expand-many":
+        return expand_many_from_ledger(
+            EvidenceLedger(Path(args.ledger_dir)),
+            args.result_id,
+            args.refs,
+            before=args.before,
+            after=args.after,
+            max_chars=args.max_chars,
         )
     if args.command == "verify":
         return verify(Path(args.manifest), **_link_kwargs(args))
@@ -691,10 +1028,16 @@ def _invoke(args: argparse.Namespace) -> Mapping[str, Any]:
     raise ValueError(f"unknown command: {args.command!r}")
 
 
-def _print_json(payload: Any) -> None:
-    """Print one deterministic JSON document to stdout."""
+def _print_payload(payload: Any, *, compact: bool = False, frame: bool = False) -> None:
+    """Print one deterministic Agent response to stdout."""
 
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+    if frame:
+        print(render_frame(payload if isinstance(payload, Mapping) else {}))
+        return
+    if compact:
+        print(_encoded_json(payload))
+    else:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
 
 
 def main(
@@ -709,11 +1052,53 @@ def main(
     """
 
     args = build_parser(prog=prog).parse_args(argv)
+    profile_name = getattr(args, "agent_profile", "canonical")
+    profile = get_agent_profile(profile_name)
+    if args.command == "search" and getattr(args, "compact", False) and profile_name == "canonical":
+        profile = get_agent_profile("portable-json")
+    profile_error = (
+        f"agent profile {profile.name!r} requires --ledger-dir"
+        if args.command == "search" and profile.requires_ledger and args.ledger_dir is None
+        else None
+    )
+    compact = bool(
+        (args.command == "search" and (
+            profile.transport != "canonical-json"
+            or args.max_output_chars is not None
+            or args.ledger_dir is not None
+        ))
+        or args.command == "expand-many"
+    )
+    frame = profile.transport == "frame"
     try:
+        if profile_error:
+            raise ValueError(profile_error)
         payload = _invoke(args)
+        if args.command == "search" and args.ledger_dir is not None:
+            result_id = EvidenceLedger(Path(args.ledger_dir)).store(payload)
+            payload = copy.deepcopy(dict(payload))
+            data = dict(payload.get("data") or {})
+            data["result_id"] = result_id
+            payload["data"] = data
+        if args.command == "search" and compact:
+            payload = _compact_search_result(
+                payload,
+                max_output_chars=args.max_output_chars,
+            )
+        elif args.command == "expand-many":
+            payload = _fit_expand_many_result(
+                payload,
+                max_output_chars=args.max_output_chars,
+            )
+        if frame and args.max_output_chars is not None:
+            rendered = render_frame(payload)
+            if len(rendered) > args.max_output_chars:
+                raise ValueError(
+                    f"frame result cannot fit within {args.max_output_chars} characters"
+                )
     except Exception as exc:  # keep the command boundary machine-readable
         payload = _error_payload(args.command, exc)
-    _print_json(payload)
+    _print_payload(payload, compact=compact, frame=frame)
     return 1 if isinstance(payload, Mapping) and payload.get("status") == "error" else 0
 
 

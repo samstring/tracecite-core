@@ -291,9 +291,9 @@ ID、Coverage/记录缺口、停止状态和领域无关的建议动作类别，
 不是异常或 Finding。参见 [Investigation 摘要](investigation-summary.zh-CN.md)和
 [时间线/结构比较](investigation-compare.zh-CN.md)。
 
-## 8. Token 与执行预算
+## 8. 上下文与执行预算
 
-省 Token 依赖渐进式披露：
+渐进式披露用于控制上下文范围：
 
 ```text
 元数据 -> 有界抽样/概览 -> EvidencePointer -> 按需 expand -> 完整 Artifact
@@ -305,11 +305,24 @@ Runtime 和扩展应遵守：
 - 大型或变化输入优先返回元数据、统计和引用，而不是正文。
 - 相同输入哈希和参数的确定性操作可以复用缓存。
 - 大正文写入 Artifact；AgentResult 只返回有限 EvidencePointer 和 Coverage。
+- Agent 适配层可以提供可选的紧凑投影，但必须保留可无损还原的 Evidence 身份、
+  认识状态和必要的 Coverage/截断信号；省略内联证据时必须保留一个恢复 Artifact。
+  canonical Runtime Result 与磁盘 Artifact 不得因投影而改变。
+- Agent 适配层可以把 canonical Result 保存到按内容寻址的 Evidence Ledger，只暴露
+  经过校验的结果标识。Ledger 条目必须不可变；批量展开必须重新校验源摘要；缺失或
+  截断引用必须显式进入 Coverage，不能静默省略。
+- 对话适配层只能压缩模型已经读取过的工具结果，并保留最新结果与确定性恢复路径。
+  历史压缩只是传输优化，不是删除证据。
+- 紧凑投影可以使用只声明一次列名的行式编码和共享合并 Context，但每个 Evidence
+  身份仍必须确定性映射到其精确选中行范围和不可变来源。
+- Agent 传输 Profile 按单次分析选择，并且只存在于 ``tracecite.integrations``。Profile
+  可以改变传输编码和已读历史压缩，但不得改变 canonical Result 语义、选择另一个 Agent，
+  也不得引入 Core 到 Integration 的依赖。
 - InvestigationState 保存结构化决策，不复制日志正文。
 - 每个 Test 关联 Hypothesis，避免没有验证目标的连续搜索。
-- 达到 Token、查询、时间或证据预算时停止，并记录 `stop_reason`。
+- 达到用量、查询、时间或证据预算时停止，并记录 `stop_reason`。
 
-不能为了节省 Token 隐藏截断、近似、解析失败或缺失证据。
+不能为了满足预算隐藏截断、近似、解析失败或缺失证据。
 
 ## 9. 知识生命周期
 

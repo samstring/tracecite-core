@@ -52,3 +52,4 @@ filter_history.jsonl.lock
 *.log
 *.trace
 *.trace.zip
+experiments

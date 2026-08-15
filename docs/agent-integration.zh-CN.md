@@ -141,6 +141,67 @@ tracecite search app.log "timeout|ECONNRESET|HTTP 5[0-9]{2}" --regex --snapshot
 
 `search` 默认冻结源文件。后续证据行号与哈希指向冻结副本，而不是可能继续变化的原日志。
 
+如需将 CLI 响应投影为 Agent 紧凑视图且不改变 Runtime 的 canonical Result，可使用
+`--compact`。公共快照路径、摘要和 Evidence URI 基础部分提升到
+`data.evidence_source`；Evidence 只声明一次列名，并使用类似
+`[["#L12",12,12,"label"]]` 的紧凑行。将 `evidence.columns` 与
+`evidence.rows` 的每行组合即可读取字段；完整 URI 可由
+`data.evidence_source.uri_base + row.ref` 无损还原。中间 Artifact
+仍完整保存在磁盘上，正常情况下不进入响应；只有证据发生截断时才保留一个用于
+恢复完整结果的 Artifact。必要 Coverage 与所有截断标记始终保留：
+
+```bash
+tracecite search app.log "timeout" --snapshot --compact
+```
+
+`--max-output-chars N` 可对完整 JSON 设置结构化字符预算（最小 1024，并隐含
+`--compact`）。TraceCite 会先去掉可选标签，再按条目裁剪 Evidence，在 Coverage
+中标记正文或指针截断，并保留恢复 Artifact；不会从任意字符位置截断序列化 JSON：
+
+```bash
+tracecite search app.log "timeout" --snapshot --max-output-chars 6000
+```
+
+该 CLI 投影不会修改完整 canonical Result、缓存、InvestigationState 记录、冻结快照
+或磁盘上的中间产物。
+
+多轮 Agent 可增加 `--ledger-dir`，把完整 canonical Result 写入按内容寻址的
+Evidence Ledger。该参数隐含 `--compact`，响应只增加一个经过校验的
+`data.result_id`；Agent Host 可以不向模型暴露 Ledger 目录：
+
+```bash
+tracecite search app.log "timeout" --snapshot \
+  --ledger-dir /tmp/tracecite-ledger \
+  --max-output-chars 6000
+```
+
+Ledger 条目不可变，标识符是 canonical search Result 的 SHA-256；展开证据前会重新
+计算摘要，防止读取被篡改的中间结果。
+
+### 为一次分析选择一个 Agent 传输 Profile
+
+Profile 按单次分析选择。它们只是同一 canonical Result 的 Integration 视图，不会
+选择、替换或协调多个 Agent：
+
+| Profile | 适用 Agent 能力 | 传输方式 |
+| --- | --- | --- |
+| `portable-json` | 任意 Agent | 列式 JSON |
+| `strict-json` | 必须使用 JSON 的 Agent | 列式 JSON |
+| `stateful-index` | 支持会话历史和批量工具 | Ledger id + 列式 JSON + 已读历史压缩 |
+| `frame` | 明确支持 TCF 的有状态 Agent | Ledger id + TCF 文本帧 |
+
+当所选 Agent 能在同一调查中调用 `expand-many` 时，使用 `stateful-index`。它需要一个
+私有 Ledger 目录：
+
+```bash
+tracecite search app.log "timeout" --snapshot \
+  --agent-profile stateful-index \
+  --ledger-dir /tmp/tracecite-ledger
+```
+
+`frame` 必须显式选择，也需要 `--ledger-dir`。不能解析 TCF 的 Host 必须选择
+`portable-json`；不会静默改写或丢弃证据。
+
 ### 第四步：展开关键证据
 
 从 `evidence[]` 取出 `source_path`、`start_line`、`end_line` 和 `sha256`：
@@ -152,6 +213,25 @@ tracecite expand SNAPSHOT_PATH START_LINE \
   --after 10 \
   --expected-sha256 SHA256
 ```
+
+紧凑响应中，共享路径和摘要位于 `data.evidence_source`，行范围仍从选中的
+`evidence[]` 条目读取；完整 Evidence URI 为
+`evidence_source.uri_base + row.ref`。
+
+需要多条证据时，可使用一次批量展开，统一报告各引用的覆盖与截断状态：
+
+```bash
+tracecite expand-many /tmp/tracecite-ledger RESULT_ID \
+  '#L120' '#L188-L190' \
+  --before 3 --after 3 \
+  --max-output-chars 6000 \
+  --agent-profile stateful-index
+```
+
+`expand-many` 会校验 Ledger 条目和每个快照摘要。重叠或相邻窗口只在 `contexts`
+返回一次，列式 Evidence 行把每个 ref 关联到 Context ID；Coverage 会明确报告请求、
+返回、合并、缺失、失败和截断的引用。Agent Host 只能把模型已经读取过的旧工具结果
+替换为 `result_id`，必须保留最新结果，并提供恢复工具。
 
 必须传 `--expected-sha256`。如果文件已变化，TraceCite 返回结构化错误，Agent 不应继续引用该证据。
 

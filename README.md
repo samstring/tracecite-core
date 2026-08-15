@@ -2,10 +2,10 @@
 
 **Extensible evidence runtime for AI debugging agents.**
 
-Give an agent large, changing logs without putting all of those logs into its
-context. TraceCite freezes inputs, returns bounded evidence pointers, verifies
-their provenance, and lets domain packages add investigation capabilities
-without modifying TraceCite itself.
+Give an agent a bounded, provenance-checked view of large, changing logs.
+TraceCite freezes inputs, returns evidence pointers, verifies their provenance,
+and lets domain packages add investigation capabilities without modifying
+TraceCite itself.
 
 ```text
 Raw data -> Core evidence -> Runtime tools -> Your Agent

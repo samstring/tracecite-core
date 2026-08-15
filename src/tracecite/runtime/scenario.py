@@ -14,7 +14,7 @@
   本模块只负责「把声明翻译成调用」，不复制任何过滤逻辑。
 - **agent-native**：不配置任何模型、不调用任何大模型 API。
   产出是结构化 JSON，由**正在调用它的 Agent**自己读、自己推理。
-- **省 token**：正文全量落盘到 ``.filtered/``，返回值里只有指针 + 统计 + 断言结论。
+- **有界响应**：正文全量落盘到 ``.filtered/``，返回值里只有指针 + 统计 + 断言结论。
 
 示例::
 
@@ -962,7 +962,7 @@ def _result_payload(
             f"未命中占比极高（{ratio:.1%}）：若为单事件/窄 pattern 过滤属正常，"
             "ratio 参考意义有限；若为宽行为过滤，词表可能与该日志埋点体系不匹配"
         )
-    # 折叠质量告警：模板碎片化时折叠视图既不能省 token 也不能看分布
+    # 折叠质量告警：模板碎片化时折叠视图既不能提供有效摘要也不能看分布
     tstats = result.template_stats or {}
     tpl_count = int(tstats.get("templates") or 0)
     fold_ratio = float(tstats.get("fold_ratio") or 0)
