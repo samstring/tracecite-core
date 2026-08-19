@@ -63,6 +63,14 @@ from .knowledge import (
     KnowledgeVerification,
     VALIDITY_STATES,
 )
+from .output_layout import (
+    DEFAULT_OUTPUT_ROOT,
+    OutputLayout,
+    USER_OUTPUT_CONFIG_PATH,
+    deep_merge,
+    load_output_config,
+    write_output_config,
+)
 
 __all__ = [
     "AgentResult",
@@ -101,6 +109,12 @@ __all__ = [
     "KnowledgeValidity",
     "KnowledgeVerification",
     "VALIDITY_STATES",
+    "DEFAULT_OUTPUT_ROOT",
+    "OutputLayout",
+    "USER_OUTPUT_CONFIG_PATH",
+    "deep_merge",
+    "load_output_config",
+    "write_output_config",
     "probe",
     "sample",
     "peek",

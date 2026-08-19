@@ -29,6 +29,7 @@ SKIP_DIRECTORIES = frozenset(
     {
         ".git",
         ".venv",
+        ".venv-inspect",
         ".tox",
         ".mypy_cache",
         ".pytest_cache",
