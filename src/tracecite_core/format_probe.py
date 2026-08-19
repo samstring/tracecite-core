@@ -159,10 +159,36 @@ def _try_parse(raw: str, formats: List[str]) -> bool:
     return False
 
 
+def _record_coverage(lines: List[str], pattern: "re.Pattern[str]") -> float:
+    """按"记录段"计算覆盖率，避免多行日志的 body 续行稀释行覆盖率。
+
+    一条记录 = 1 个 start 行 + 0..N 个 body 行。只要每条记录都有 start 行，
+    即使 body 占多数，记录级覆盖率仍接近 1.0。
+    """
+    segments = 0
+    with_start = 0
+    has_open_segment = False
+    for line in lines:
+        if pattern.match(line):
+            segments += 1
+            with_start += 1
+            has_open_segment = True
+        elif not has_open_segment:
+            # 文件开头的 body 行（前面没有 start）算一个无 start 的段。
+            segments += 1
+            has_open_segment = True
+        # 其余 body 行并入当前段，不新开段。
+    return with_start / segments if segments else 0.0
+
+
 def _score_candidate(
     lines: List[str], cand: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """对单个形态候选评分：覆盖率 x 位置权重 x 可解析验证。"""
+    """对单个形态候选评分：覆盖率 x 位置权重 x 可解析验证。
+
+    ``coverage`` 是记录级覆盖率（多行日志 body 续行不稀释）；行级覆盖率保留为
+    ``line_coverage`` 供诊断。置信度基于记录级覆盖率计算。
+    """
     pattern = re.compile(cand["re"])
     matched = 0
     parsed = 0
@@ -177,7 +203,8 @@ def _score_candidate(
             if len(samples) < 3:
                 samples.append(line[:200])
     total = len(lines)
-    coverage = matched / total if total else 0.0
+    coverage = _record_coverage(lines, pattern)
+    line_coverage = matched / total if total else 0.0
     parse_validity = parsed / matched if matched else 0.0
     weight = _POSITION_WEIGHT.get(cand["name"], 1.0)
     return {
@@ -186,6 +213,7 @@ def _score_candidate(
         "formats": list(cand["formats"]),
         "matched": matched,
         "coverage": round(coverage, 3),
+        "line_coverage": round(line_coverage, 3),
         "parse_validity": round(parse_validity, 3),
         "confidence": round(coverage * weight * parse_validity, 3),
         "samples": samples,
