@@ -218,6 +218,9 @@ def _segmenter_and_name(
     kind = str(segmenter or "auto").strip().lower()
     if kind == "auto":
         kind = detect_segmenter_kind(source)
+        if isinstance(kind, dict):
+            # auto 对陌生日志推断出的声明式配置：dict 喂构造器，name 用稳定标识。
+            return build_segmenter(kind), "format:inferred"
     return build_segmenter(kind), kind
 
 

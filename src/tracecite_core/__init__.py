@@ -125,6 +125,7 @@ from .sample import (
     sample,
     sample_file,
 )
+from .format_probe import probe_format_config, probe_format_report
 
 __all__ = [
     "Record", "estimate_tokens",
@@ -153,4 +154,5 @@ __all__ = [
     "SampleError", "SampleSummary", "sample", "sample_file", "peek",
     "DEFAULT_SAMPLE_CHARS", "DEFAULT_SAMPLE_COUNT", "MAX_SAMPLE_CHARS",
     "MAX_SAMPLE_COUNT", "MAX_SAMPLE_RECORDS", "SAMPLE_STRATEGIES",
+    "probe_format_config", "probe_format_report",
 ]

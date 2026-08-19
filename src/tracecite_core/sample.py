@@ -91,6 +91,8 @@ def _segmenter_and_name(
     kind = str(segmenter or "auto").strip().lower()
     if kind == "auto":
         kind = detect_segmenter_kind(source)
+        if isinstance(kind, dict):
+            return build_segmenter(kind), "format:inferred"
     return build_segmenter(kind), kind
 
 

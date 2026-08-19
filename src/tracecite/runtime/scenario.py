@@ -519,6 +519,9 @@ def resolve_segmenter(
     if kind in ("", "auto"):
         kind = detect_segmenter_kind(sample)
         options = {k: v for k, v in options.items() if k in ("mode", "window")}
+        if isinstance(kind, dict):
+            # auto 推断出的声明式配置：dict 自带完整定义，mode/window 不适用。
+            return build_segmenter(dict(kind)), "format:inferred"
 
     try:
         return build_segmenter(kind, **options), kind

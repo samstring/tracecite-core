@@ -26,7 +26,16 @@ from tracecite.runtime.investigation_compare import (
     timeline_investigation,
 )
 from tracecite.runtime.schema import AgentResult
-from tracecite.runtime.tools import expand, probe, run, sample, search, survey, verify
+from tracecite.runtime.tools import (
+    expand,
+    probe,
+    probe_format,
+    run,
+    sample,
+    search,
+    survey,
+    verify,
+)
 
 from .agent_profile import get_agent_profile, profile_names, render_frame
 from .agent_projection import (
@@ -269,6 +278,28 @@ def build_parser(*, prog: str = "tracecite") -> argparse.ArgumentParser:
     )
     _add_investigation_link_args(survey_parser)
     _add_cache_arg(survey_parser)
+
+    probe_format_parser = sub.add_parser(
+        "probe-format",
+        help="probe an unfamiliar log and propose a regex FormatSegmenter config",
+    )
+    probe_format_parser.add_argument(
+        "input", metavar="INPUT", help="source file to probe"
+    )
+    probe_format_parser.add_argument(
+        "--sample-lines",
+        type=int,
+        default=1000,
+        help="max non-empty lines to sample (default: 1000)",
+    )
+    probe_format_parser.add_argument(
+        "--min-coverage",
+        type=float,
+        default=None,
+        help="minimum fraction of sampled lines a candidate must cover",
+    )
+    _add_investigation_link_args(probe_format_parser)
+    _add_cache_arg(probe_format_parser)
 
     sample_parser = sub.add_parser(
         "sample",
@@ -905,6 +936,14 @@ def _invoke(args: argparse.Namespace) -> Mapping[str, Any]:
             until=args.until,
             max_templates=args.max_templates,
             samples_per_template=args.samples_per_template,
+            cache=args.cache,
+            **_link_kwargs(args),
+        )
+    if args.command == "probe-format":
+        return probe_format(
+            Path(args.input),
+            sample_lines=args.sample_lines,
+            min_coverage=args.min_coverage,
             cache=args.cache,
             **_link_kwargs(args),
         )

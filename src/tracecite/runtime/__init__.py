@@ -72,7 +72,17 @@ from .scenario import (
     resolve_pattern_details,
     validate_scenario_spec,
 )
-from .tools import expand, peek, probe, run, sample, search, survey, verify
+from .tools import (
+    expand,
+    peek,
+    probe,
+    probe_format,
+    run,
+    sample,
+    search,
+    survey,
+    verify,
+)
 
 __all__ = [
     "AssertionContext",
@@ -136,6 +146,7 @@ __all__ = [
     "explain_scenario",
     "evaluate_behavior_scenario",
     "probe",
+    "probe_format",
     "sample",
     "peek",
     "search",

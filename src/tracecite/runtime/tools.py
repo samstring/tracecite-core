@@ -14,6 +14,7 @@ from tracecite_core.segmenter import build_segmenter, detect_segmenter_kind
 from tracecite_core.source import SourceError, resolve_paths
 from tracecite_core.sample import SampleError, sample_file
 from tracecite_core.survey import SurveyError, survey_file
+from tracecite_core.format_probe import probe_format_report
 from tracecite_core.text_filter import FilterError, filter_text, text_time_range
 
 from .investigation import (
@@ -78,6 +79,19 @@ def _budget_error(operation: str, exc: BudgetExhausted) -> Dict[str, Any]:
     data["stop_reason"] = {"kind": "budget_exhausted", "detail": str(exc)}
     payload["data"] = data
     return payload
+
+
+def _segmenter_key(kind: Any) -> str:
+    """Normalise a segmenter kind (name or inferred dict) into a stable string.
+
+    ``detect_segmenter_kind`` may return a FormatSegmenter definition dict for
+    unknown formats; cache keys and joins need a canonical string form.
+    """
+    if isinstance(kind, dict):
+        return "format:" + json.dumps(
+            kind, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+    return str(kind or "")
 
 
 def _prepare_linked(
@@ -324,7 +338,9 @@ def probe(
             {"path": str(path.resolve()), "sha256": _sha256(path)} for path in files
         ]
         segmenter_identity = "|".join(
-            detect_segmenter_kind(path) if segmenter == "auto" else segmenter
+            _segmenter_key(detect_segmenter_kind(path))
+            if segmenter == "auto"
+            else _segmenter_key(segmenter)
             for path in files
         )
         _lookup_linked_cache(
@@ -518,7 +534,7 @@ def search(
             ),
             cache_parameters=parameters,
             cache_sources=source_refs,
-            cache_segmenter=kind,
+            cache_segmenter=_segmenter_key(kind),
             cache_snapshot=snapshot,
         )
         if prepared.get("cached") is not None:
@@ -647,7 +663,7 @@ def search(
             cache_store=prepared.get("cache_store"),
             cache_key=prepared.get("cache_key"),
             cache_sources=source_refs,
-            cache_segmenter=kind,
+            cache_segmenter=_segmenter_key(kind),
             cache_snapshot=snapshot,
         )
     except (OSError, ValueError, FilterError, RunIntegrityError) as exc:
@@ -866,6 +882,83 @@ def survey(
             test_id=test_id,
             parameters=parameters,
             reservation=prepared.get("reservation"),
+        )
+
+
+def probe_format(
+    input_path: Union[str, Path],
+    *,
+    sample_lines: int = 1000,
+    min_coverage: Optional[float] = None,
+    investigation_path: Optional[Union[str, Path]] = None,
+    hypothesis_id: Optional[str] = None,
+    test_id: Optional[str] = None,
+    cache: bool = True,
+) -> Dict[str, Any]:
+    """Probe an unfamiliar log and propose a regex FormatSegmenter config.
+
+    Samples a bounded prefix, scores candidate timestamp shapes (line-start,
+    bracketed, midline), and returns a structured clue pack: the config dict
+    (high confidence only), confidence/coverage, candidate list, level hints,
+    issues, and the actions an agent may take next. This is descriptive only
+    (``outcome=not_assessed``): it never diagnoses a root cause. The caller may
+    accept the ``config`` directly as a ``segmenter`` value, or pick another
+    candidate / increase the sample on medium confidence.
+    """
+    parameters = {
+        "input": str(input_path),
+        "sample_lines": sample_lines,
+        "min_coverage": min_coverage,
+    }
+    try:
+        report = probe_format_report(
+            input_path, sample_lines=sample_lines, min_coverage=min_coverage
+        )
+        prepared = _prepare_linked(
+            "probe_format",
+            investigation_path,
+            budget_request={"executions": 1},
+            cache_enabled=cache,
+            cache_safe=True,
+            cache_parameters=parameters,
+            defer_cache=True,
+        )
+        if prepared.get("budget_error") is not None:
+            return prepared["budget_error"]
+        result = AgentResult(
+            operation="probe_format",
+            status="ok" if report.get("detected") else "no_match",
+            outcome="not_assessed",
+            data=report,
+            coverage={
+                "sampled_lines": len(report.get("samples") or []),
+                "coverage": report.get("coverage"),
+                "confidence": report.get("confidence"),
+                "json_like_fraction": report.get("json_like_fraction"),
+            },
+        ).to_dict()
+        cache_meta = prepared.get("cache_meta")
+        if cache_meta is not None:
+            result = _mark_cache(
+                result, {**dict(cache_meta), "operation": "probe_format"}
+            )
+        return _record_result(
+            result,
+            operation="probe_format",
+            investigation_path=investigation_path,
+            hypothesis_id=hypothesis_id,
+            test_id=test_id,
+            parameters=parameters,
+            reservation=prepared.get("reservation"),
+        )
+    except (OSError, ValueError) as exc:
+        return _record_result(
+            _error("probe_format", exc),
+            operation="probe_format",
+            investigation_path=investigation_path,
+            hypothesis_id=hypothesis_id,
+            test_id=test_id,
+            parameters=parameters,
         )
 
 

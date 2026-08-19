@@ -462,15 +462,36 @@ def _detect_core_segmenter(path: Path, *, sample_lines: int = 200) -> str:
     return "rawtext"
 
 
-def detect_segmenter_kind(path: Path, *, sample_lines: int = 200) -> str:
-    """通过公开 detector 链嗅探格式，最后回落 core 默认实现。"""
+def detect_segmenter_kind(
+    path: Path, *, sample_lines: int = 200
+) -> Union[str, Dict[str, Any]]:
+    """通过公开 detector 链嗅探格式，最后回落 core 默认实现。
+
+    返回 ``str``（内置/插件格式名）或 ``FormatSegmenter`` 定义 dict
+    （L1 线索探测器高置信时对陌生日志自动推断出的声明式配置，
+    可直接喂 build_segmenter）。
+    """
     for _name, (_priority, detector) in sorted(
         _DETECTORS.items(), key=lambda item: item[1][0], reverse=True
     ):
         detected = detector(Path(path), sample_lines=sample_lines)
-        if detected:
+        if detected and str(detected) != "rawtext":
+            # 明确的格式识别（插件名 / jsonline 等）：立即返回。
+            # "rawtext" 是兜底信号（上层 detector 可能用它表示"只认得它是文本"），
+            # 不中断探测链，继续尝试 L1 线索探测——若推断出时间戳格式更优。
             return str(detected)
-    return _detect_core_segmenter(Path(path), sample_lines=sample_lines)
+    core = _detect_core_segmenter(Path(path), sample_lines=sample_lines)
+    if core != "rawtext":
+        # 内置链明确识别（jsonline 等）：优先，不触发探测。
+        return core
+    # 内置链只能兜底 rawtext → L1 线索探测器高置信分支。
+    # 惰性导入：format_probe 是本模块新增的探测能力，避免模块加载循环。
+    from .format_probe import probe_format_config
+
+    inferred = probe_format_config(Path(path), sample_lines=sample_lines)
+    if inferred:
+        return inferred
+    return "rawtext"
 
 
 def build_segmenter(kind: Any = "rawtext", **options: Any) -> Segmenter:
