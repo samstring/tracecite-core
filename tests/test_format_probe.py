@@ -18,32 +18,32 @@ def _write(tmp_path: Path, name: str, lines: list[str]) -> Path:
 
 
 @pytest.mark.parametrize(
-    "name,lines,expected_position",
+    "name,lines,expected_fmt",
     [
         ("iso_space", [
             "2024-01-02 03:04:05 INFO ok",
             "2024-01-02 03:04:06 WARN retry",
             "2024-01-02 03:04:07 ERROR boom",
-        ], "iso_space"),
+        ], "%Y-%m-%d %H:%M:%S"),
         ("iso_tz", [
             "2024-01-02T03:04:05.123Z started",
             "2024-01-02T03:04:06.000Z done",
             "2024-01-02T03:04:07.500Z failed",
-        ], "iso_tz"),
+        ], "%Y-%m-%dT%H:%M:%S"),
         ("compact_date", [
             "081109 203615 148 INFO dfs.DataNode: x",
             "081109 203807 222 INFO dfs.FSNamesystem: y",
             "081110 000037 35 WARN dfs.DataNode: z",
-        ], "compact_date"),
+        ], "%y%m%d %H%M%S"),
     ],
 )
-def test_probe_detects_line_start(tmp_path, name, lines, expected_position):
+def test_probe_detects_line_start(tmp_path, name, lines, expected_fmt):
     path = _write(tmp_path, f"{name}.log", lines)
     report = probe_format_report(path)
     assert report["detected"] is True
-    assert report["position"] == expected_position
     assert report["confidence"] >= 0.9
     assert report["config"] is not None
+    assert any(expected_fmt in f for f in report["structure"]["formats"])
     # Config must drive survey without a hand-written rule.
     summary = survey_file(path, segmenter=build_segmenter(report["config"]), snapshot=False)
     assert summary.timestamped_records == summary.scan_records
@@ -57,8 +57,8 @@ def test_probe_detects_apache_bracketed(tmp_path):
     ])
     report = probe_format_report(path)
     assert report["detected"] is True
-    assert report["position"] == "bracketed_mid"
     assert report["confidence"] >= 0.9
+    assert "%d/%b/%Y:%H:%M:%S" in " ".join(report["structure"]["formats"])
     seg = build_segmenter(report["config"])
     records = list(seg.segment_file(path))
     assert len(records) == 3
@@ -76,7 +76,8 @@ def test_probe_midline_medium_confidence(tmp_path):
         "node-2 2026-08-19 10:11:14.567 ERROR boom",
     ])
     report = probe_format_report(path)
-    assert report["position"] == "midline"
+    # 行中时间戳：位置权重 0.8 -> 中置信，无 auto config，agent 决策。
+    assert report["detected"] is False
     assert report["confidence"] < 0.9
     assert report["config"] is None
     assert "pick_candidate" in report["actions"]
@@ -258,8 +259,8 @@ def test_probe_detects_bracketed_line_start(tmp_path):
     ])
     report = probe_format_report(path)
     assert report["detected"] is True
-    assert report["position"] == "bracketed"
     assert report["confidence"] >= 0.9
+    assert any("%Y-%m-%d %H:%M:%S" in f for f in report["structure"]["formats"])
     seg = build_segmenter(report["config"])
     records = list(seg.segment_file(path))
     assert len(records) == 3
@@ -275,9 +276,9 @@ def test_probe_time_only_reaches_high_confidence(tmp_path):
         "03:04:07.789 ERROR c",
     ])
     report = probe_format_report(path)
-    assert report["position"] == "time_only"
     assert report["confidence"] >= 0.9
     assert report["detected"] is True
+    assert any("%H:%M:%S" in f for f in report["structure"]["formats"])
 
 
 def test_auto_survey_jsonline_with_z(tmp_path):
@@ -291,3 +292,45 @@ def test_auto_survey_jsonline_with_z(tmp_path):
     assert detect_segmenter_kind(path) == "jsonline"
     summary = survey_file(path, snapshot=False)
     assert summary.timestamped_records == summary.scan_records
+
+
+# ---------------------------------------------------------------------------
+# 通用结构归纳(无候选枚举):LogHub 真实格式
+# ---------------------------------------------------------------------------
+
+LOGHUB = "/tmp/loghub_samples"
+
+
+def _loghub(name: str) -> Path:
+    p = Path(LOGHUB) / f"{name}_2k.log"
+    assert p.is_file(), f"LogHub 样本缺失: {p}"
+    return p
+
+
+@pytest.mark.parametrize(
+    "name,fmt",
+    [
+        ("Hadoop", "%Y-%m-%d %H:%M:%S"),
+        ("Zookeeper", "%Y-%m-%d %H:%M:%S"),
+        ("Android", "%m-%d %H:%M:%S"),
+        ("Spark", "%y/%m/%d %H:%M:%S"),
+        ("HealthApp", "%Y%m%d-%H:%M:%S"),
+        ("Windows", "%Y-%m-%d %H:%M:%S"),
+        ("Linux", "%b %d %H:%M:%S"),
+        ("Mac", "%b %d %H:%M:%S"),
+        ("OpenSSH", "%b %d %H:%M:%S"),
+        ("HDFS", "%y%m%d %H%M%S"),
+    ],
+)
+def test_probe_loghub_structural_inference(tmp_path, name, fmt):
+    # 通用结构归纳:不枚举候选,从行结构推断 strptime 格式。
+    path = _loghub(name)
+    report = probe_format_report(path)
+    assert report["detected"] is True, f"{name}: {report['issues']}"
+    assert report["confidence"] >= 0.9, f"{name}: conf={report['confidence']}"
+    fmts = " ".join(report["structure"]["formats"])
+    assert fmt in fmts, f"{name}: 缺 {fmt}，got {fmts}"
+    # config 必须可被 survey 消费
+    seg = build_segmenter(report["config"])
+    summary = survey_file(path, snapshot=False)
+    assert summary.timestamped_records > 0
