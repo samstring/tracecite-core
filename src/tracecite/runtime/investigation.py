@@ -74,7 +74,7 @@ MAX_CACHE_ARTIFACTS = 100
 MAX_CACHE_ENTRY_BYTES = 512 * 1024
 MAX_CACHE_STORE_BYTES = 4 * 1024 * 1024
 CACHE_SCHEMA_VERSION = 1
-CACHE_TOOL_VERSION = "tracecite-cache-v1"
+CACHE_TOOL_VERSION = "tracecite-cache-v2"
 SAFE_CACHE_OPERATIONS = frozenset({"probe", "search"})
 
 # These limits apply only to the state document.  Artifacts and tool results

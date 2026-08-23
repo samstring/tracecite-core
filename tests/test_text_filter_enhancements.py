@@ -467,3 +467,11 @@ def test_filter_output_truncates_long_lines_but_records_stay_full(tmp_path):
     assert giant in records
     assert result.lines_truncated == 1
     assert result.max_line_chars == 512
+    header = body.split("# ---\n", 1)[0]
+    assert "# lines_truncated: 1" in header
+    assert "# max_line_chars: 512" in header
+    assert result.history_path is not None
+    history = result.history_path.read_text(encoding="utf-8").splitlines()
+    entry = json.loads(history[-1])
+    assert entry["lines_truncated"] == 1
+    assert entry["max_line_chars"] == 512

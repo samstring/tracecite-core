@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from tracecite import RESULT_SCHEMA_VERSION
+from tracecite.runtime import tools
 from tracecite.runtime.schema import AgentResult, ScenarioDocument
 from tracecite.runtime.tools import expand, probe, run, search, verify
 
@@ -142,12 +144,39 @@ def test_search_bounds_inline_evidence_but_preserves_full_artifact(tmp_path: Pat
     source = tmp_path / "many.log"
     source.write_text("".join(f"target {index}\n" for index in range(105)), encoding="utf-8")
 
-    result = search(source, "target", output_path=tmp_path / "evidence.log")
+    result = search(
+        source,
+        "target",
+        output_path=tmp_path / "evidence.log",
+        max_evidence=1_000,
+    )
 
     assert result["coverage"]["match_records"] == 105
     assert result["coverage"]["evidence_returned"] == 100
     assert result["coverage"]["evidence_truncated"] is True
     assert len(result["evidence"]) == 100
+
+
+def test_expand_hashes_and_reads_through_one_stable_descriptor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "source.log"
+    source.write_text("old\n", encoding="utf-8")
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    original_sha256 = tools._sha256
+
+    def mutate_after_separate_hash(path: Path) -> str:
+        digest = original_sha256(path)
+        source.write_text("new\n", encoding="utf-8")
+        return digest
+
+    monkeypatch.setattr(tools, "_sha256", mutate_after_separate_hash)
+
+    result = expand(source, 1, expected_sha256=expected, before=0, after=0)
+
+    assert result["status"] == "ok"
+    assert result["data"]["text"] == "1: old\n"
+    assert result["evidence"][0]["sha256"] == expected
 
 
 def test_expand_rejects_out_of_range_citation(tmp_path: Path) -> None:

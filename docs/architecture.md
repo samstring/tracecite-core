@@ -310,6 +310,7 @@ A concept that only one domain can interpret remains in that extension. Only cro
 | Investigation-level BudgetPolicy and deterministic cache | Implemented for linked tools with reservation/finalization and conservative probe/search cache |
 | Structured Hypothesis/Test/execution relations | Implemented with ID and cross-link validation |
 | Generic `sample/peek` | Implemented: bounded snapshot-first head/tail and deterministic uniform sampling |
+| User-supplied regex resource gate | Implemented across filtering, segmentation, preprocessing, and assertions with structural bounds and rejection of known catastrophic-backtracking shapes |
 | Preset component provenance and per-hit `matched_by` | Implemented: bounded OR components, deterministic hit IDs, and run/manifest metadata |
 | Investigation-to-Candidate integration | Implemented as an explicit, idempotent bridge with pointer-only state links |
 | Advisory Investigation completeness summary | Implemented v1 as a bounded read-only view |

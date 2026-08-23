@@ -373,6 +373,7 @@ Knowledge 至少描述：适用条件、不适用条件、可验证陈述、支�
 | 调查级 BudgetPolicy 与确定性缓存 | 已实现：关联工具预留/结算预算，probe/search 使用保守缓存 |
 | Hypothesis/Test 与工具调用的结构化关联 | 已实现，校验 ID 与交叉引用 |
 | 通用 `sample/peek` | 已实现：默认 snapshot 的有界 head-tail 与确定性 uniform 抽样 |
+| 用户正则资源门禁 | 已实现：覆盖过滤、分段、预处理和断言；限制结构规模并拒绝已知灾难性回溯形态 |
 | Preset 组件级 provenance 与逐命中 `matched_by` | 已实现：有界 OR 组件、确定性命中 ID 以及运行/Manifest 元数据 |
 | 调查到 Knowledge Candidate 的统一连接 | 已实现显式、幂等的桥接，调查状态只保存指针元数据 |
 | Investigation 完整性建议摘要 | 已实现 v1，为有界只读视图 |

@@ -298,12 +298,14 @@ def test_auto_survey_jsonline_with_z(tmp_path):
 # 通用结构归纳(无候选枚举):LogHub 真实格式
 # ---------------------------------------------------------------------------
 
-LOGHUB = "/tmp/loghub_samples"
+LOGHUB = Path(__file__).parent / "fixtures" / "loghub"
 
 
 def _loghub(name: str) -> Path:
-    p = Path(LOGHUB) / f"{name}_2k.log"
-    assert p.is_file(), f"LogHub 样本缺失: {p}"
+    # Small, copyright-free structural fixtures keep the default test suite
+    # self-contained. Full LogHub corpora belong in a separate opt-in benchmark.
+    p = LOGHUB / f"{name}.log"
+    assert p.is_file(), f"结构样本缺失: {p}"
     return p
 
 

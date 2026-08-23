@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from tracecite_core.events import AnalysisEvent, parse_event_datetime
+from tracecite_core.matcher import _compile_safe_regex
 
 
 class AssertionSpecError(RuntimeError):
@@ -99,7 +100,7 @@ class AssertionPackage:
 def pattern_hits(text: str, pattern: str, *, ignore_case: bool) -> int:
     flags = re.IGNORECASE if ignore_case else 0
     try:
-        return len(re.findall(pattern, text, flags))
+        return len(_compile_safe_regex(pattern, flags).findall(text))
     except re.error:
         return text.lower().count(pattern.lower()) if ignore_case else text.count(pattern)
 
@@ -126,7 +127,7 @@ def _value_matches(value: Any, expected: Any, *, ignore_case: bool) -> bool:
     wanted = str(expected)
     flags = re.IGNORECASE if ignore_case else 0
     try:
-        return re.search(wanted, actual, flags) is not None
+        return _compile_safe_regex(wanted, flags).search(actual) is not None
     except re.error:
         return actual.lower() == wanted.lower() if ignore_case else actual == wanted
 

@@ -7,10 +7,11 @@
 
 from __future__ import annotations
 
-import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
+
+from .matcher import _compile_safe_regex
 
 
 class PreprocessError(RuntimeError):
@@ -99,7 +100,7 @@ def _action_grep(input_path: Path, output_path: Path, params: Dict[str, Any]):
     invert = bool(params.get("invert", False))
     if not pattern:
         raise PreprocessError("grep action 需要 pattern")
-    pat = re.compile(pattern)
+    pat = _compile_safe_regex(pattern)
     encoding = str(params.get("encoding", "utf-8"))
     with input_path.open(
         "r", encoding=encoding, errors="replace"

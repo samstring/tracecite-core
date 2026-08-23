@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
+import os
 import re
 import uuid
 from datetime import datetime
@@ -36,6 +39,63 @@ def _sha256(path: Path) -> str:
     if not item.sha256:
         raise RunIntegrityError(f"无法计算证据摘要: {path}")
     return item.sha256
+
+
+def _read_hashed_context(
+    path: Path,
+    *,
+    context_start: int,
+    context_end: int,
+) -> tuple[str, List[str], int]:
+    """Hash and read context through one stable file descriptor.
+
+    A separate ``stat/hash/open`` sequence lets a mutable path change after it
+    passes integrity verification but before its text is read. Keeping one
+    descriptor and rejecting metadata changes makes the returned text and
+    digest describe the same observed file contents.
+    """
+
+    def fingerprint(stat: os.stat_result) -> tuple[int, int, int, int, int]:
+        return (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
+
+    rows: List[str] = []
+    last_seen = 0
+    digest = hashlib.sha256()
+    with path.open("rb") as binary:
+        opened = os.fstat(binary.fileno())
+        for block in iter(lambda: binary.read(1024 * 1024), b""):
+            digest.update(block)
+        binary.seek(0)
+        text_handle = io.TextIOWrapper(
+            binary,
+            encoding="utf-8",
+            errors="replace",
+            newline=None,
+        )
+        try:
+            for number, line in enumerate(text_handle, start=1):
+                last_seen = number
+                if number < context_start:
+                    continue
+                if number > context_end:
+                    break
+                rows.append(f"{number}: {line}")
+            read_complete = os.fstat(binary.fileno())
+            current_path = path.stat()
+        finally:
+            # Keep ownership of the descriptor with the outer context manager.
+            text_handle.detach()
+    if fingerprint(opened) != fingerprint(read_complete) or fingerprint(
+        opened
+    ) != fingerprint(current_path):
+        raise RunIntegrityError(f"证据文件在展开期间发生变化: {path}")
+    return digest.hexdigest(), rows, last_seen
 
 
 def _evidence_uri(sha256: str, start_line: Optional[int], end_line: Optional[int]) -> str:
@@ -494,7 +554,11 @@ def search(
         "max_evidence": max_evidence,
         "max_line_chars": max_line_chars,
     }
-    evidence_limit = MAX_RESULT_EVIDENCE if max_evidence is None else max(1, int(max_evidence))
+    evidence_limit = (
+        MAX_RESULT_EVIDENCE
+        if max_evidence is None
+        else min(MAX_RESULT_EVIDENCE, max(1, int(max_evidence)))
+    )
     try:
         source = Path(input_path).expanduser().resolve()
         cache_safe = bool(snapshot and output_path is None)
@@ -650,6 +714,13 @@ def search(
             },
         ).to_dict()
         cache_meta = prepared.get("cache_meta")
+        cache_source_changed = bool(cache_safe and digest != source_sha256)
+        if cache_source_changed:
+            cache_meta = {
+                "status": "bypass",
+                "reason": "source_changed_during_snapshot",
+                "operation": "search",
+            }
         if cache_meta is not None:
             result = _mark_cache(result, {**dict(cache_meta), "operation": "search"})
         return _record_result(
@@ -660,8 +731,8 @@ def search(
             test_id=test_id,
             parameters=parameters,
             reservation=prepared.get("reservation"),
-            cache_store=prepared.get("cache_store"),
-            cache_key=prepared.get("cache_key"),
+            cache_store=None if cache_source_changed else prepared.get("cache_store"),
+            cache_key=None if cache_source_changed else prepared.get("cache_key"),
             cache_sources=source_refs,
             cache_segmenter=_segmenter_key(kind),
             cache_snapshot=snapshot,
@@ -1186,24 +1257,18 @@ def expand(
             raise ValueError("行号范围无效")
         if max_chars <= 0:
             raise ValueError("max_chars 必须大于 0")
-        digest = _sha256(path)
+        selected_end = end_line or start_line
+        context_start = max(1, start_line - max(0, before))
+        context_end = selected_end + max(0, after)
+        digest, rows, last_seen = _read_hashed_context(
+            path,
+            context_start=context_start,
+            context_end=context_end,
+        )
         if expected_sha256 and digest != expected_sha256:
             raise RunIntegrityError(
                 f"证据文件摘要不匹配: {digest} != {expected_sha256}"
             )
-        selected_end = end_line or start_line
-        context_start = max(1, start_line - max(0, before))
-        context_end = selected_end + max(0, after)
-        rows: List[str] = []
-        last_seen = 0
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            for number, line in enumerate(handle, start=1):
-                last_seen = number
-                if number < context_start:
-                    continue
-                if number > context_end:
-                    break
-                rows.append(f"{number}: {line}")
         if last_seen < selected_end:
             raise ValueError(
                 f"引用行超出证据文件范围: {selected_end} > {last_seen}"

@@ -615,7 +615,14 @@ def _first_matching(lines: List[str], pattern: "re.Pattern[str]", n: int) -> Lis
 def _try_parse(raw: str, formats: List[str]) -> bool:
     for fmt in formats:
         try:
-            datetime.strptime(raw.strip(), fmt)
+            # Python 3.15 will no longer accept an ambiguous day/month format
+            # without a year.  The probe only validates shape, so make the
+            # historical 1900 default explicit without treating it as source
+            # data or silently changing which dates the segmenter accepts.
+            if not any(token in fmt for token in ("%Y", "%y", "%G")):
+                datetime.strptime(f"{raw.strip()};1900", f"{fmt};%Y")
+            else:
+                datetime.strptime(raw.strip(), fmt)
             return True
         except ValueError:
             continue

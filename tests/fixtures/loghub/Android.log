@@ -1,0 +1,4 @@
+03-17 16:13:38.811  1702  2395 I ActivityManager: start activity
+03-17 16:13:39.012  1702  2395 W ActivityManager: slow launch
+03-17 16:13:40.113  1702  2395 E ActivityManager: launch failed
+03-17 16:13:41.214  1702  2395 I ActivityManager: process stopped

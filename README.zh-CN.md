@@ -26,6 +26,9 @@ tracecite verify .tracecite/runs/<run-id>/manifest.json
 tracecite run scenario.json
 ```
 
+运行环境为 Python 3.10 及以上版本，支持 Linux 和 macOS。当前暂不支持 Windows，
+因为 TraceCite 的原子状态锁依赖 POSIX `flock`。除 Python 标准库外无运行时依赖。
+
 所有命令返回确定性的 JSON。`status` 表示执行是否成功，`outcome` 单独表示证据支持什么。零命中是合法结果，不等于“问题没有发生”。
 
 准备让 Codex、Claude 或其他自研 Agent 直接测试时，请先阅读[外部 Agent 接入指南](docs/agent-integration.zh-CN.md)。其中包含调用顺序、Result JSON、退出码、安全规则和可复制的测试 Prompt。

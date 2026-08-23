@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tracecite_core.source import ArchiveSource, SourceError
+from tracecite_core.source import ArchiveSource, SourceError, resolve_paths
 
 
 def test_archive_rejects_member_count_over_budget(tmp_path: Path) -> None:
@@ -77,3 +77,43 @@ def test_archive_rejects_path_traversal_instead_of_silently_dropping_it(
         ArchiveSource(archive, extract_dir=tmp_path / "out").extract()
 
     assert not (tmp_path / "outside.log").exists()
+
+
+def test_archive_never_overwrites_existing_member_and_cleans_new_members(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "collision.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("new.log", "new")
+        handle.writestr("existing.log", "archive value")
+    output = tmp_path / "out"
+    output.mkdir()
+    existing = output / "existing.log"
+    existing.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(SourceError, match="解压目标已存在"):
+        ArchiveSource(archive, extract_dir=output).extract()
+
+    assert existing.read_text(encoding="utf-8") == "keep"
+    assert not (output / "new.log").exists()
+
+
+def test_resolve_paths_separates_same_stem_archives_under_extract_root(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first" / "logs.zip"
+    second = tmp_path / "second" / "logs.zip"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    with zipfile.ZipFile(first, "w") as handle:
+        handle.writestr("first.log", "first")
+    with zipfile.ZipFile(second, "w") as handle:
+        handle.writestr("second.log", "second")
+    extract_root = tmp_path / "extract"
+
+    first_members = resolve_paths(str(first), extract_dir=extract_root)
+    second_members = resolve_paths(str(second), extract_dir=extract_root)
+
+    assert first_members[0].parent != second_members[0].parent
+    assert first_members[0].read_text(encoding="utf-8") == "first"
+    assert second_members[0].read_text(encoding="utf-8") == "second"

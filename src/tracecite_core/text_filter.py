@@ -26,7 +26,7 @@ from typing import (
 
 from .matcher import Matcher, PatternComponent, coerce_pattern_components
 from .state_file import state_lock
-from .segmenter import RawTextSegmenter, Segmenter
+from .segmenter import RawTextSegmenter, Segmenter, _normalize_timestamp
 
 _LAST_DURATION_RE = re.compile(
     r"^(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>s|sec|secs|m|min|mins|h|hr|hrs|hour|hours)?$",
@@ -581,7 +581,7 @@ def reference_datetime(
     for record in selected.segment_file(path, encoding=encoding):
         ts = selected.record_timestamp(record, reference=mtime)
         if ts is not None:
-            return ts
+            return _normalize_timestamp(ts)
     return mtime
 
 
@@ -598,22 +598,38 @@ def parse_time_arg(
     text = (raw or "").strip()
     if not text:
         raise FilterError("时间参数不能为空")
+    ref = _normalize_timestamp(ref)
+
+    # ``datetime.fromisoformat`` accepts RFC3339 offsets on supported Python
+    # versions, but Python 3.9 does not accept the standard trailing ``Z``.
+    # Convert every offset-bearing result to Core's UTC-naive comparison form;
+    # offset-less inputs remain naive wall-clock values for compatibility.
+    iso_text = text[:-1] + "+00:00" if text[-1:].upper() == "Z" else text
+    if re.match(r"^\d{4}-\d{2}-\d{2}[T ]", iso_text):
+        try:
+            return _normalize_timestamp(datetime.fromisoformat(iso_text))
+        except ValueError:
+            pass
 
     for fmt in (
         "%Y-%m-%dT%H:%M:%S",
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%dT%H:%M",
         "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d %H:%M:%S.%f%z",
+        "%Y-%m-%d %H:%M:%S%z",
     ):
         try:
-            return datetime.strptime(text, fmt)
+            return _normalize_timestamp(datetime.strptime(text, fmt))
         except ValueError:
             pass
 
     if segmenter is not None:
         parsed = segmenter.parse_time_argument(text, reference=ref)
         if parsed is not None:
-            return parsed
+            return _normalize_timestamp(parsed)
 
     for fmt in ("%H:%M:%S", "%H:%M"):
         try:
@@ -641,7 +657,8 @@ def record_timestamp(
 ) -> Optional[datetime]:
     """Resolve a timestamp through the selected format strategy."""
     selected = segmenter or RawTextSegmenter()
-    return selected.record_timestamp(record, reference=ref)
+    parsed = selected.record_timestamp(record, reference=_normalize_timestamp(ref))
+    return _normalize_timestamp(parsed) if parsed is not None else None
 
 
 def _find_last_timestamp(
@@ -865,6 +882,8 @@ def _write_filter_history(
         "pattern_components": result.pattern_components,
         "matched_by_counts": result.matched_by_counts,
         "matched_by_fallback": result.matched_by_fallback,
+        "lines_truncated": result.lines_truncated,
+        "max_line_chars": result.max_line_chars,
     }
     with state_lock(history_path):
         with history_path.open("a", encoding="utf-8") as handle:
@@ -1097,6 +1116,14 @@ def filter_text(
                 token_counter[tok] += 1
             continue
         text = record.text if record.text.endswith("\n") else record.text + "\n"
+        if max_line_chars is not None:
+            _, truncated = _truncate_output_line(
+                text,
+                max_line_chars=max_line_chars,
+                start_line=record.start_line,
+            )
+            if truncated:
+                lines_truncated += 1
         ts = record_timestamp(record, ref=ref, segmenter=segmenter)
         metadata = {
             "start_line": record.start_line,
@@ -1172,6 +1199,8 @@ def filter_text(
         total_lines=scoped_physical_lines,
         match_lines=match_lines,
         match_records=match_records,
+        lines_truncated=lines_truncated,
+        max_line_chars=max_line_chars,
         snapshot_path=snapshot_path,
         snapshot_lines=snapshot_lines,
         scope=scope,
@@ -1218,17 +1247,13 @@ def filter_text(
                 metadata = row.get("metadata") or {}
                 start_line = int(metadata.get("start_line") or 0)
                 if max_line_chars is not None:
-                    text, truncated = _truncate_output_line(
+                    text, _ = _truncate_output_line(
                         text,
                         max_line_chars=max_line_chars,
                         start_line=start_line,
                     )
-                    if truncated:
-                        lines_truncated += 1
                 output_handle.write(text)
 
-    result.lines_truncated = lines_truncated
-    result.max_line_chars = max_line_chars
     return result
 
 

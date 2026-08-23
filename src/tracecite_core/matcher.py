@@ -25,6 +25,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
+try:  # CPython's parser is stdlib-only and avoids importing deprecated sre_parse.
+    from re import _constants as _RE_CONSTANTS  # type: ignore[attr-defined]
+    from re import _parser as _RE_PARSER  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - compatibility with older Python implementations
+    import sre_parse as _RE_PARSER  # type: ignore[no-redef]
+
+    _RE_CONSTANTS = _RE_PARSER  # type: ignore[assignment]
+
 # 正则结构元字符：出现（且未转义）即判定为「非纯字面量」
 _STRUCT_META = frozenset("()[]{}*+?^$")
 # 未转义的 . 是通配符，同样拒绝
@@ -36,6 +44,279 @@ _MAX_COMPONENT_METADATA_ITEMS = 32
 _MAX_COMPONENT_METADATA_STRING_CHARS = 1024
 _MAX_PATTERN_COMPONENTS = 64
 _COMPONENT_RESERVED_KEYS = frozenset({"id", "pattern", "effective", "kind"})
+
+# Regexes can be supplied by an Agent or a Scenario resolver.  ``re`` has no
+# timeout API, so reject a small, explicit class of structures which are known
+# to trigger super-linear backtracking.  This is a conservative guardrail,
+# not a proof that every accepted expression is linear-time.
+_MAX_PATTERN_CHARS = 4096
+_MAX_REGEX_NODES = 4096
+_MAX_REGEX_GROUPS = 128
+_MAX_REGEX_REPEATS = 128
+_MAX_REGEX_BRANCHES = 128
+_MAX_REGEX_DEPTH = 64
+_MAX_REGEX_REPEAT_COUNT = 100_000
+_RE_MAXREPEAT = getattr(_RE_CONSTANTS, "MAXREPEAT", 2**32)
+
+_REPEAT_OP_NAMES = frozenset({"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"})
+_VARIABLE_REPEAT_OP_NAMES = frozenset({"MAX_REPEAT", "MIN_REPEAT"})
+_GROUP_WRAPPER_OP_NAMES = frozenset({"SUBPATTERN", "ATOMIC_GROUP"})
+_ASSERT_OP_NAMES = frozenset({"ASSERT", "ASSERT_NOT"})
+_GROUPREF_OP_NAMES = frozenset(
+    {
+        "GROUPREF",
+        "GROUPREF_IGNORE",
+        "GROUPREF_UNI_IGNORE",
+        "GROUPREF_LOC_IGNORE",
+        "GROUPREF_EXISTS",
+    }
+)
+
+
+def _regex_op_name(op: Any) -> str:
+    """Return a parser opcode name across supported Python versions."""
+    return str(op)
+
+
+def _regex_sequence_data(sequence: Any) -> Any:
+    """Get the token list from ``re._parser.SubPattern`` or a plain list."""
+    return getattr(sequence, "data", sequence)
+
+
+def _atom_overlap(left: Tuple[Any, ...], right: Tuple[Any, ...]) -> bool:
+    """Conservatively compare two possible first-character summaries."""
+    left_kind, left_value = left[0], left[1] if len(left) > 1 else None
+    right_kind, right_value = right[0], right[1] if len(right) > 1 else None
+    if left_kind == "any" or right_kind == "any":
+        return True
+    if left_kind == "literal" and right_kind == "literal":
+        return left_value == right_value
+    if left_kind == "literal" and right_kind == "range":
+        return right_value[0] <= left_value <= right_value[1]
+    if left_kind == "range" and right_kind == "literal":
+        return left_value[0] <= right_value <= left_value[1]
+    if left_kind == "range" and right_kind == "range":
+        return max(left_value[0], right_value[0]) <= min(left_value[1], right_value[1])
+    # Unicode categories and parser extensions are deliberately treated as
+    # potentially overlapping; this is a rejection-only safety heuristic.
+    return left_kind == "category" or right_kind == "category"
+
+
+def _regex_shape(
+    sequence: Any, *, depth: int = 0, limit: int = 64
+) -> Tuple[bool, List[Tuple[Any, ...]], bool]:
+    """Return ``(nullable, deterministic_prefix, prefix_is_complete)``."""
+    if depth > _MAX_REGEX_DEPTH:
+        raise re.error(f"regex pattern nesting exceeds {_MAX_REGEX_DEPTH} levels")
+    nullable = True
+    prefix: List[Tuple[Any, ...]] = []
+    complete = True
+    for op, arg in _regex_sequence_data(sequence):
+        token_nullable, token_prefix, token_complete = _regex_token_shape(
+            op, arg, depth=depth + 1, limit=limit
+        )
+        prefix.extend(token_prefix)
+        if len(prefix) >= limit:
+            return nullable, prefix[:limit], False
+        if not token_complete:
+            return nullable, prefix, False
+        if not token_nullable:
+            return False, prefix, complete
+    return nullable, prefix, complete
+
+
+def _regex_token_shape(
+    op: Any, arg: Any, *, depth: int, limit: int
+) -> Tuple[bool, List[Tuple[Any, ...]], bool]:
+    name = _regex_op_name(op)
+    if name == "LITERAL":
+        return False, [("literal", int(arg))], True
+    if name in {"NOT_LITERAL", "ANY", "ANY_ALL"}:
+        return False, [("any",)], True
+    if name == "IN":
+        atoms: List[Tuple[Any, ...]] = []
+        for item_op, item_arg in _regex_sequence_data(arg):
+            item_name = _regex_op_name(item_op)
+            if item_name == "LITERAL":
+                atoms.append(("literal", int(item_arg)))
+            elif item_name == "RANGE":
+                start, end = item_arg
+                atoms.append(("range", (int(start), int(end))))
+            elif item_name == "CATEGORY":
+                atoms.append(("category", str(item_arg)))
+            else:
+                atoms.append(("any",))
+        return False, [atoms[0] if len(atoms) == 1 else ("any",)], True
+    if name in _GROUP_WRAPPER_OP_NAMES:
+        child = arg[-1] if name == "SUBPATTERN" else arg
+        return _regex_shape(child, depth=depth, limit=limit)
+    if name in _ASSERT_OP_NAMES or name in {"AT", "SUCCESS", "FAILURE"}:
+        return True, [], True
+    if name == "BRANCH":
+        shapes = [_regex_shape(branch, depth=depth, limit=limit) for branch in arg[1]]
+        return any(item[0] for item in shapes), [], False
+    if name in _REPEAT_OP_NAMES:
+        min_count, max_count, child = arg
+        child_nullable, child_prefix, child_complete = _regex_shape(
+            child, depth=depth, limit=limit
+        )
+        nullable = min_count == 0 or child_nullable
+        if min_count == max_count and child_complete and min_count <= limit:
+            return nullable, child_prefix * min_count, True
+        return nullable, child_prefix[:limit], False
+    if name == "GROUPREF_EXISTS":
+        yes = _regex_shape(arg[1], depth=depth, limit=limit)
+        no = _regex_shape(arg[2], depth=depth, limit=limit) if arg[2] is not None else (True, [], True)
+        return yes[0] or no[0], [], False
+    return False, [("any",)], False
+
+
+def _alternatives_overlap(branches: Any) -> bool:
+    """Detect empty or prefix-ambiguous alternatives in a repeated branch."""
+    shapes = [_regex_shape(branch) for branch in branches]
+    for index, (nullable, left_prefix, left_complete) in enumerate(shapes):
+        if nullable:
+            return True
+        for right_nullable, right_prefix, right_complete in shapes[index + 1 :]:
+            if right_nullable:
+                return True
+            overlap = all(
+                _atom_overlap(left, right)
+                for left, right in zip(left_prefix, right_prefix)
+            )
+            if not overlap:
+                continue
+            if len(left_prefix) == len(right_prefix) and left_complete and right_complete:
+                return True
+            if len(left_prefix) < len(right_prefix) and left_complete:
+                return True
+            if len(right_prefix) < len(left_prefix) and right_complete:
+                return True
+    return False
+
+
+def _validate_regex_safety(pattern: str) -> None:
+    """Reject known high-risk shapes before compiling a user regex.
+
+    ``re`` deliberately has no execution timeout.  This gate therefore blocks
+    nested variable repetitions, backreferences inside a variable repetition,
+    and prefix-ambiguous alternatives in repeated regions.  It also bounds
+    parser structure.  Accepted patterns are not claimed to be provably
+    linear-time.
+    """
+    try:
+        parsed = _RE_PARSER.parse(pattern, 0)
+    except re.error:
+        raise
+    except RecursionError as exc:
+        raise re.error(f"regex pattern nesting exceeds {_MAX_REGEX_DEPTH} levels") from exc
+
+    node_count = 0
+    groups = 0
+    repeats = 0
+    branches = 0
+
+    def walk(sequence: Any, *, variable_repeat_depth: int, depth: int) -> None:
+        nonlocal node_count, groups, repeats, branches
+        if depth > _MAX_REGEX_DEPTH:
+            raise re.error(f"regex pattern nesting exceeds {_MAX_REGEX_DEPTH} levels")
+        for op, arg in _regex_sequence_data(sequence):
+            node_count += 1
+            if node_count > _MAX_REGEX_NODES:
+                raise re.error(f"regex pattern structure exceeds {_MAX_REGEX_NODES} nodes")
+            name = _regex_op_name(op)
+            if name in _GROUP_WRAPPER_OP_NAMES:
+                if name == "SUBPATTERN" and arg[0]:
+                    groups += 1
+                    if groups > _MAX_REGEX_GROUPS:
+                        raise re.error(f"regex pattern contains more than {_MAX_REGEX_GROUPS} groups")
+                child = arg[-1] if name == "SUBPATTERN" else arg
+                walk(child, variable_repeat_depth=variable_repeat_depth, depth=depth + 1)
+                continue
+            if name in _REPEAT_OP_NAMES:
+                repeats += 1
+                if repeats > _MAX_REGEX_REPEATS:
+                    raise re.error(f"regex pattern contains more than {_MAX_REGEX_REPEATS} repeats")
+                min_count, max_count, child = arg
+                if max_count != _RE_MAXREPEAT and max_count > _MAX_REGEX_REPEAT_COUNT:
+                    raise re.error(
+                        f"regex repeat upper bound exceeds {_MAX_REGEX_REPEAT_COUNT}"
+                    )
+                variable = name in _VARIABLE_REPEAT_OP_NAMES and max_count != min_count
+                if variable and variable_repeat_depth:
+                    raise re.error("regex pattern contains nested variable repetitions")
+                if variable and _sequence_has_overlapping_branch(child):
+                    raise re.error(
+                        "regex pattern contains overlapping alternation inside repetition"
+                    )
+                walk(
+                    child,
+                    # A single optional group cannot repeatedly repartition
+                    # its child's input.  Only a repeat that may execute more
+                    # than once creates the dangerous enclosing context.
+                    variable_repeat_depth=variable_repeat_depth
+                    + int(variable and max_count != 1),
+                    depth=depth + 1,
+                )
+                continue
+            if name == "BRANCH":
+                branches += max(0, len(arg[1]) - 1)
+                if branches > _MAX_REGEX_BRANCHES:
+                    raise re.error(
+                        f"regex pattern contains more than {_MAX_REGEX_BRANCHES} alternations"
+                    )
+                for branch in arg[1]:
+                    walk(branch, variable_repeat_depth=variable_repeat_depth, depth=depth + 1)
+                continue
+            if name in _GROUPREF_OP_NAMES and variable_repeat_depth:
+                raise re.error("regex pattern contains a backreference inside repetition")
+            if name in _ASSERT_OP_NAMES:
+                walk(arg[1], variable_repeat_depth=variable_repeat_depth, depth=depth + 1)
+                continue
+            if name == "GROUPREF_EXISTS":
+                walk(arg[1], variable_repeat_depth=variable_repeat_depth, depth=depth + 1)
+                if arg[2] is not None:
+                    walk(arg[2], variable_repeat_depth=variable_repeat_depth, depth=depth + 1)
+                continue
+            if name == "IN":
+                walk(arg, variable_repeat_depth=variable_repeat_depth, depth=depth + 1)
+
+    def _sequence_has_overlapping_branch(sequence: Any) -> bool:
+        # Defined as a nested helper so branch analysis uses the same parser
+        # representation while keeping all safety policy in this function.
+        for op, arg in _regex_sequence_data(sequence):
+            name = _regex_op_name(op)
+            if name == "BRANCH" and _alternatives_overlap(arg[1]):
+                return True
+            if name in _GROUP_WRAPPER_OP_NAMES:
+                child = arg[-1] if name == "SUBPATTERN" else arg
+                if _sequence_has_overlapping_branch(child):
+                    return True
+            elif name in _REPEAT_OP_NAMES:
+                if _sequence_has_overlapping_branch(arg[2]):
+                    return True
+            elif name in _ASSERT_OP_NAMES:
+                if _sequence_has_overlapping_branch(arg[1]):
+                    return True
+            elif name == "GROUPREF_EXISTS":
+                if _sequence_has_overlapping_branch(arg[1]):
+                    return True
+                if arg[2] is not None and _sequence_has_overlapping_branch(arg[2]):
+                    return True
+        return False
+
+    try:
+        walk(parsed, variable_repeat_depth=0, depth=0)
+    except RecursionError as exc:
+        raise re.error(f"regex pattern nesting exceeds {_MAX_REGEX_DEPTH} levels") from exc
+
+
+def _compile_safe_regex(pattern: str, flags: int = 0) -> re.Pattern[str]:
+    """Compile a user-supplied regex after applying Core's resource gate."""
+    if len(pattern) > _MAX_PATTERN_CHARS:
+        raise re.error(f"regex pattern exceeds {_MAX_PATTERN_CHARS} characters")
+    _validate_regex_safety(pattern)
+    return re.compile(pattern, flags)
 
 
 @dataclass(frozen=True)
@@ -371,6 +652,8 @@ class Matcher:
     """
 
     def __init__(self, pattern: str):
+        if len(pattern) > _MAX_PATTERN_CHARS:
+            raise re.error(f"regex pattern exceeds {_MAX_PATTERN_CHARS} characters")
         self.pattern = pattern
         self.terms = is_pure_literal_or(pattern)
         self.engine = "regex"
@@ -389,7 +672,7 @@ class Matcher:
                 except Exception:  # noqa: BLE001 - 自动机构建失败不是致命错误
                     self.engine = "literal"
         else:
-            self.regex = re.compile(pattern)
+            self.regex = _compile_safe_regex(pattern)
 
     def match_with_components(
         self,

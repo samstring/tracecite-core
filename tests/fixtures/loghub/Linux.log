@@ -1,0 +1,4 @@
+Jun 14 15:16:01 host daemon[10]: service started
+Jun 14 15:16:02 host daemon[10]: service delayed
+Jun 14 15:16:03 host daemon[10]: service failed
+Jun 14 15:16:04 host daemon[10]: service stopped

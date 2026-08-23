@@ -164,6 +164,50 @@ class TestMatcherRegexFallback:
         with pytest.raises(re.error):
             Matcher("(unclosed")
 
+    @pytest.mark.parametrize(
+        "pattern",
+        [
+            r"(a+)+$",
+            r"(?:a*)+",
+            r"(a{1,3})+",
+        ],
+    )
+    def test_rejects_nested_variable_repetition(self, pattern):
+        # Construction must fail before an unsafe expression can reach
+        # ``search``; this keeps the regression test independent of a timeout.
+        with pytest.raises(re.error, match="nested variable repetitions"):
+            Matcher(pattern)
+
+    @pytest.mark.parametrize("pattern", [r"(a|aa)+", r"(?:a|ab)+"])
+    def test_rejects_overlapping_alternation_inside_repetition(self, pattern):
+        with pytest.raises(re.error, match="overlapping alternation"):
+            Matcher(pattern)
+
+    def test_rejects_backreference_inside_repetition(self):
+        with pytest.raises(re.error, match="backreference inside repetition"):
+            Matcher(r"(a)(?:\1)+")
+
+    def test_rejects_oversized_pattern(self):
+        with pytest.raises(re.error, match="4096 characters"):
+            Matcher("x" * 4097)
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [
+            r"(?:foo|bar)+",
+            r"(?:ab|ac)+",
+            r"(?:\s+(?:INFO|WARN))?",
+            r"(?:\.\d+)?",
+            r"\d{4}-\d{2}-\d{2}",
+            r"(?:ab){2,4}",
+            r"(?:ERROR|WARN): \d{2}",
+        ],
+    )
+    def test_allows_common_bounded_regex_shapes(self, pattern):
+        matcher = Matcher(pattern)
+        assert matcher.engine == "regex"
+        assert matcher.regex is not None
+
 
 class TestPureAhoCorasick:
     """纯 Python AC 兜底档：与 C 版/字面量路径语义一致。"""

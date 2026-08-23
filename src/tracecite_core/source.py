@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -123,6 +124,21 @@ def _timestamp_suffix() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
+def _archive_extract_dir(archive: Path, root: Optional[Path]) -> Optional[Path]:
+    """Return a deterministic, per-archive extraction directory.
+
+    ``extract_dir`` is a workspace root for path resolution, rather than the
+    directory for one particular archive.  Including a digest of the resolved
+    archive path keeps two archives with the same stem from sharing files while
+    preserving a readable stem in the resulting layout.
+    """
+    if root is None:
+        return None
+    archive = Path(archive).expanduser().resolve()
+    digest = hashlib.sha256(os.fsencode(str(archive))).hexdigest()[:16]
+    return Path(root) / f"{archive.stem}_{digest}"
+
+
 @dataclass
 class StaticFileSource:
     """静态文件：内容不再变化，快照即自身。"""
@@ -205,6 +221,15 @@ class ArchiveSource:
         extracted_members = 0
         extracted_size = 0
         extracted_paths: List[Path] = []
+        created_paths: List[Path] = []
+        seen_destinations: set[str] = set()
+
+        def check_destination(dest: Path, member_name: str) -> None:
+            """Reject existing or duplicate destinations before writing."""
+            destination_key = os.path.normcase(os.fspath(dest))
+            if os.path.lexists(dest) or destination_key in seen_destinations:
+                raise SourceError(f"解压目标已存在: {member_name}")
+            seen_destinations.add(destination_key)
 
         def check_limits(name: str, size: int, compressed_size: Optional[int] = None) -> None:
             nonlocal extracted_members, extracted_size
@@ -243,10 +268,12 @@ class ArchiveSource:
                                 f"压缩包含不安全成员: {member.filename}"
                             )
                         check_limits(member.filename, member.file_size, member.compress_size)
+                        check_destination(dest, member.filename)
                         safe_members.append((member, dest))
                     for member, dest in safe_members:
                         dest.parent.mkdir(parents=True, exist_ok=True)
-                        with zf.open(member) as source, dest.open("wb") as output:
+                        with zf.open(member) as source, dest.open("xb") as output:
+                            created_paths.append(dest)
                             shutil.copyfileobj(source, output)
                         extracted_paths.append(dest)
             elif tarfile.is_tarfile(self.path):
@@ -266,6 +293,7 @@ class ArchiveSource:
                                 f"压缩包含不安全成员: {member.name}"
                             )
                         check_limits(member.name, member.size)
+                        check_destination(dest, member.name)
                         safe_members.append((member, dest))
                     archive_size = max(1, self.path.stat().st_size)
                     archive_ratio = extracted_size / archive_size
@@ -279,13 +307,14 @@ class ArchiveSource:
                         if source is None:
                             continue
                         dest.parent.mkdir(parents=True, exist_ok=True)
-                        with source, dest.open("wb") as output:
+                        with source, dest.open("xb") as output:
+                            created_paths.append(dest)
                             shutil.copyfileobj(source, output)
                         extracted_paths.append(dest)
             else:
                 raise SourceError(f"不是可识别的压缩包: {self.path}")
         except Exception:
-            for path in reversed(extracted_paths):
+            for path in reversed(created_paths):
                 path.unlink(missing_ok=True)
             if self.extract_dir is None:
                 shutil.rmtree(target, ignore_errors=True)
@@ -421,7 +450,7 @@ def resolve_paths(
 
     if candidate.is_file():
         if ArchiveSource.is_archive(candidate):
-            archive_dir = Path(extract_dir) / candidate.stem if extract_dir else None
+            archive_dir = _archive_extract_dir(candidate, extract_dir)
             members = ArchiveSource(candidate, extract_dir=archive_dir).extract()
             return sorted(p for p in members if p.is_file())
         return [candidate]
@@ -433,7 +462,7 @@ def resolve_paths(
             if not item.is_file():
                 continue
             if ArchiveSource.is_archive(item):
-                archive_dir = Path(extract_dir) / item.stem if extract_dir else None
+                archive_dir = _archive_extract_dir(item, extract_dir)
                 files.extend(ArchiveSource(item, extract_dir=archive_dir).extract())
             else:
                 files.append(item)
@@ -454,7 +483,7 @@ def _file_source_provider(
     if not candidate.is_absolute() and base_dir is not None:
         candidate = (Path(base_dir) / candidate).resolve()
     if candidate.is_file() and ArchiveSource.is_archive(candidate):
-        archive_dir = extract_dir / candidate.stem if extract_dir else None
+        archive_dir = _archive_extract_dir(candidate, extract_dir)
         source = ArchiveSource(candidate, extract_dir=archive_dir)
         members = source.extract()
         pattern = str(spec.get("glob", "*"))

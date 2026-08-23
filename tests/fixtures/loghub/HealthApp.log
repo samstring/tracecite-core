@@ -1,0 +1,4 @@
+20171223-22:15:29:606 INFO sensor sample accepted
+20171223-22:15:30:707 WARN sensor sample delayed
+20171223-22:15:31:808 ERROR sensor sample rejected
+20171223-22:15:32:909 INFO sensor session closed

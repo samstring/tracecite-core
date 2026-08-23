@@ -29,6 +29,8 @@ pip install tracecite
 ```
 
 The package has no runtime dependencies outside the Python standard library.
+Python 3.10 or newer on Linux and macOS is supported. Windows is not currently
+supported because TraceCite's atomic state locking relies on POSIX `flock`.
 
 ## Agent-facing tools
 

@@ -116,6 +116,39 @@ def test_search_cache_stale_source_is_a_miss_and_recomputes(tmp_path: Path) -> N
     assert len(store.load().executions) == 2
 
 
+def test_search_does_not_cache_a_snapshot_from_a_different_source_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.log"
+    source.write_text("old only\n", encoding="utf-8")
+    state_path, _store = _state(
+        tmp_path,
+        BudgetPolicy(max_executions=3, max_searches=3, max_queries=3),
+    )
+    original_filter = tools.filter_text
+    changed = False
+
+    def mutate_before_snapshot(input_path, *args, **kwargs):
+        nonlocal changed
+        if not changed:
+            Path(input_path).write_text("new TARGET\n", encoding="utf-8")
+            changed = True
+        return original_filter(input_path, *args, **kwargs)
+
+    monkeypatch.setattr(tools, "filter_text", mutate_before_snapshot)
+    first = search(source, "TARGET", investigation_path=state_path)
+    assert first["status"] == "ok"
+    assert first["data"]["cache"]["status"] == "bypass"
+    assert first["data"]["cache"]["reason"] == "source_changed_during_snapshot"
+
+    monkeypatch.setattr(tools, "filter_text", original_filter)
+    source.write_text("old only\n", encoding="utf-8")
+    second = search(source, "TARGET", investigation_path=state_path)
+
+    assert second["status"] == "no_match"
+    assert second["data"]["cache"]["status"] == "miss"
+
+
 def test_search_pointer_budget_refuses_before_scan_when_cap_is_below_result_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
