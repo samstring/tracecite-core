@@ -12,6 +12,7 @@ from .runtime import (
     BudgetReservation,
     EvidencePointer,
     FINDING_OUTCOMES,
+    FindingValidationResult,
     HYPOTHESIS_STATUSES,
     INVESTIGATION_SCHEMA_VERSION,
     INVESTIGATION_STATUSES,
@@ -52,6 +53,7 @@ from .runtime import (
     compare_investigations,
     investigation_timeline,
     timeline_investigation,
+    validate_finding,
     verify,
 )
 from .knowledge import (
@@ -83,6 +85,7 @@ __all__ = [
     "InvestigationCompareLimits",
     "EvidencePointer",
     "FINDING_OUTCOMES",
+    "FindingValidationResult",
     "HYPOTHESIS_STATUSES",
     "INVESTIGATION_SCHEMA_VERSION",
     "INVESTIGATION_STATUSES",
@@ -132,6 +135,7 @@ __all__ = [
     "compare_investigations",
     "investigation_timeline",
     "timeline_investigation",
+    "validate_finding",
     "verify",
     "run",
 ]
