@@ -169,7 +169,8 @@ def correlate(
 
     Exact entity groups are connected as a star instead of a clique. This
     preserves reachability while avoiding O(n^2) relation growth for common
-    identifiers such as a long-lived session.
+    identifiers such as a long-lived session. Temporal correlation is always a
+    heuristic edge and therefore never receives confidence 1.0.
     """
 
     ordered_nodes = tuple(nodes)
@@ -230,7 +231,7 @@ def correlate(
         for (left_time, left_id), (right_time, right_id) in zip(timed, timed[1:]):
             delta = (right_time - left_time).total_seconds()
             if delta <= temporal_window_seconds:
-                confidence = max(0.25, 1.0 - (delta / temporal_window_seconds) * 0.5)
+                confidence = max(0.25, 0.95 - (delta / temporal_window_seconds) * 0.5)
                 add(
                     EvidenceRelation(
                         source_id=left_id,
