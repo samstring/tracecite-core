@@ -12,6 +12,8 @@ Compare the same Agent, question, and source data under three tool modes:
 
 The primary metric is **total investigation context cost**, not the size of one command response. Correctness and recoverable Evidence are gates: a cheaper run that reaches the wrong conclusion does not win.
 
+The model-level isolation/tool rules are normative for this benchmark; see [HOST_PROTOCOL.md](HOST_PROTOCOL.md).
+
 ## Anti-leak layout
 
 Each case separates Agent-visible input from evaluation-only gold data:
@@ -43,6 +45,19 @@ The public benchmark workflow has successfully downloaded and processed the orig
 
 This is deliberately labelled a **transport smoke result**, not an Agent benchmark result. The query was fixed rather than model-selected, the second query was intentionally repeated, and no model reasoning tokens were measured. It demonstrates that persistent Seen Evidence / Context Delta works on a real 14.5 MB public log; it does **not** establish that TraceCite beats `shell + rg` on total investigation cost.
 
+### `flutter-179398`
+
+Based on closed Flutter issue #179398 and the complete iOS crash report published by the reporter. Maintainer comments identify it as the same Impeller RoundSuperellipse arbitrary-memory-corruption bug fixed by commit `e09862d`, which landed after Flutter 3.38.
+
+The public input-integrity job successfully downloads the original crash report from the reporter's Gist:
+
+- source size: **84,429 bytes**;
+- source SHA-256: `30648164fcb18db2e2dbcce133be619e9bd8de8f3453860825b16d2bd8ff9f9d`;
+- Agent-visible `question.md` does not reveal RoundSuperellipse, DrawCircularArc, the related issue, or the fix commit;
+- evaluator-only gold checks the rendering subsystem, memory-corruption failure class, decisive stack frames, and the distinction between the crashing libdispatch thread and the earlier corrupting code.
+
+This case gives the benchmark a Mobile/iOS crash workload rather than tuning only for Kubernetes logs.
+
 ## Commands
 
 The benchmark helper is intentionally standard-library-only and experimental; it is not part of TraceCite's stable public API.
@@ -61,6 +76,10 @@ python -m tracecite.benchmarking prepare \
 python -m tracecite.benchmarking score \
   benchmarks/agent-investigation/cases/kubernetes-140848 \
   /tmp/run.jsonl
+
+# Aggregate multiple already-scored runs (for example 3 modes x several seeds)
+python benchmarks/agent-investigation/aggregate_scores.py \
+  /tmp/scores/*.json --output /tmp/aggregate.json
 ```
 
 ## Transcript schema
