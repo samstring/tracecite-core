@@ -17,16 +17,16 @@ raw source
   -> Agent
 ```
 
-Compared with `grep | head`, TraceCite adds reproducible EvidencePointers, Coverage, explicit `unknown`, integrity checks, and cross-tool InvestigationState. Canonical JSON is not guaranteed to be cheaper than skilled grep; context efficiency comes from Agent profiles, compact projection, the Evidence Ledger, batch expansion, and later Runtime Context Engine work.
+Compared with `grep | head`, TraceCite adds reproducible EvidencePointers, Coverage, explicit `unknown`, integrity checks, and cross-tool InvestigationState. Canonical JSON is not guaranteed to be cheaper than skilled grep; context efficiency comes from Agent profiles, compact projection, the Evidence Ledger, batch expansion, and the Context Engine.
 
-Recommended current transport:
+The conservative CLI default remains bounded columnar Agent JSON:
 
 ```bash
 tracecite search app.log "pattern" --no-snapshot \
   --agent-profile agent --ledger-dir /tmp/ledger --lightweight
 ```
 
-Agent profiles bound evidence count, line length, and output size without changing the canonical Result.
+Agent profiles bound evidence count, line length, and output size without changing the canonical Result. Hosts that explicitly support stateful history, batch expansion, or TCF should negotiate the smallest compatible transport as described below.
 
 ## 1. Prerequisites
 
@@ -129,10 +129,42 @@ Ledger entries are content-addressed and revalidated before expansion.
 
 | Profile | Host | Transport |
 |---|---|---|
+| `agent` | default CLI / ordinary Host | bounded columnar JSON |
 | `portable-json` | any Host | columnar JSON |
 | `strict-json` | JSON-only Host | columnar JSON |
 | `stateful-index` | session history + batch tools | Ledger id + columnar JSON + read-history optimization |
 | `frame` | explicit TCF support | Ledger id + TCF frame |
+
+The CLI does not guess Host capabilities, so `--agent-profile` remains an explicit choice among those profiles. `auto` is Host/Python capability negotiation, not a capability-free CLI switch.
+
+Hosts can use the public Integration API:
+
+```python
+from tracecite.integrations import AgentCapabilities, select_agent_profile
+
+profile = select_agent_profile(
+    "auto",
+    AgentCapabilities(
+        stateful_history=True,
+        batch_expand=True,
+        text_frame=True,
+    ),
+)
+assert profile.name == "frame"
+```
+
+The safe `auto` order is:
+
+```text
+Host explicitly supports text_frame
+        -> frame
+else supports stateful_history + batch_expand
+        -> stateful-index
+otherwise
+        -> agent JSON
+```
+
+A Host that does not declare `text_frame` therefore never receives TCF unexpectedly. Public real-log transport smoke shows that frame can materially reduce structural overhead while retaining Coverage/recovery semantics, but this is not a claim that every query is cheaper than `rg`; see `benchmarks/agent-investigation/README.md` for the measured cases.
 
 Profiles are Integration/Host concerns, not domain-extension concerns.
 
@@ -152,7 +184,7 @@ tracecite expand-many /tmp/tracecite-ledger RESULT_ID \
   --agent-profile stateful-index
 ```
 
-`expand-many` verifies Ledger and snapshot digests and merges overlapping/adjacent windows within one call. Later Context Engine work extends seen-evidence and cross-turn window deduplication; those features remain Runtime concerns.
+`expand-many` verifies Ledger and snapshot digests and merges overlapping/adjacent windows within one call. The Context Engine handles cross-turn Seen Evidence; those features remain Runtime/Integration concerns rather than Domain Extension concerns.
 
 ### Step 5: record the investigation and prepare reproducibility
 
@@ -203,7 +235,7 @@ Exit codes never replace `status`, `outcome`, and Coverage interpretation.
 
 ## 7. Python API
 
-Python Hosts should depend on public `tracecite`, `tracecite.runtime`, and `tracecite.extension` symbols rather than domain-private modules or Runtime registries.
+Python Hosts should depend on public `tracecite`, `tracecite.runtime`, `tracecite.extension`, and `tracecite.integrations` symbols rather than domain-private modules or Runtime registries.
 
 Extension v2 discovery:
 
@@ -213,6 +245,8 @@ from tracecite.extension import load_extensions, list_extensions
 load_extensions(strict=True)
 print(list_extensions())
 ```
+
+Transport negotiation uses `tracecite.integrations.AgentCapabilities` and `select_agent_profile`; do not hard-code a profile from a model name.
 
 Current host helpers may resolve installed scenario adapters for Scenario execution; that bridge is not a new domain dependency direction.
 
@@ -262,5 +296,6 @@ Use TraceCite to investigate the specified input. TraceCite is an Evidence tool,
 - [ ] Evidence digest/Manifest verification works.
 - [ ] InvestigationState records Hypothesis/Test/Finding/stop reason.
 - [ ] Extension Protocol v2 extensions can be explicitly loaded and domain capability invoked through the generic surface.
+- [ ] Host selects transport from declared capabilities and never receives frame without TCF support.
 - [ ] Host does not depend directly on domain-private Runtime/registry code.
 - [ ] Agent context/token strategy is not written into the domain contract.
