@@ -17,6 +17,7 @@ from tracecite.benchmarking import validate_case
 
 MODES = (
     "shell_rg",
+    "free_shell",
     "tracecite",
     "tracecite_context",
     "tracecite_intelligence",
