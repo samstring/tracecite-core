@@ -38,6 +38,16 @@ from .investigation import (
     propose_candidate,
     propose_knowledge_candidate,
 )
+from .source_session import (
+    SOURCE_SESSION_STATUSES,
+    get_source_session,
+    inspect_source_session,
+    invalidate_source_session,
+    list_source_sessions,
+    refresh_source_session,
+    register_source_session,
+    update_source_session_coverage,
+)
 from .finding_validation import FindingValidationResult, validate_finding
 from .investigation_summary import (
     SUMMARY_SCHEMA_VERSION,
@@ -105,6 +115,14 @@ __all__ = [
     "FINDING_OUTCOMES",
     "FindingValidationResult",
     "validate_finding",
+    "SOURCE_SESSION_STATUSES",
+    "register_source_session",
+    "get_source_session",
+    "list_source_sessions",
+    "inspect_source_session",
+    "update_source_session_coverage",
+    "invalidate_source_session",
+    "refresh_source_session",
     "BUDGET_POLICY_SCHEMA_VERSION",
     "BudgetExhausted",
     "BudgetPolicy",
