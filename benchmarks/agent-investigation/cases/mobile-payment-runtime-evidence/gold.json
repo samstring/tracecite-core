@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "required_concepts": [
+    {
+      "id": "pay-action",
+      "patterns": ["tapped Pay", "tap[_ -]?pay", "event:tap-pay"]
+    },
+    {
+      "id": "background-transition",
+      "patterns": ["entered background", "did_enter_background", "event:background"]
+    },
+    {
+      "id": "checkout-timeout",
+      "patterns": ["checkout.*tim(ed|e) out", "network:R19", "deadline[_ -]?exceeded"]
+    },
+    {
+      "id": "late-callback",
+      "patterns": ["callback.*after.*timeout", "late callback", "span:callback"]
+    },
+    {
+      "id": "released-target",
+      "patterns": ["released target", "no longer active", "client:callback"]
+    },
+    {
+      "id": "immediate-crash-mechanism",
+      "patterns": ["EXC_BAD_ACCESS", "dereferenced a released target", "use[- ]after[- ]free", "dangling"]
+    }
+  ],
+  "evidence_markers": [
+    "crash:C123",
+    "event:tap-pay",
+    "event:background",
+    "network:R19",
+    "span:T22",
+    "span:callback",
+    "client:callback"
+  ],
+  "thresholds": {
+    "concept_recall": 0.8333,
+    "evidence_marker_recall": 0.7142
+  },
+  "leak_terms": [
+    "released target",
+    "span:T22",
+    "network:R19",
+    "event:tap-pay"
+  ]
+}
