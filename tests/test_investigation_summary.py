@@ -14,6 +14,9 @@ from tracecite import summarize_investigation as public_summarize_investigation
 from tracecite.integrations import cli
 
 
+VALID_REF = "evidence://sha256/" + ("a" * 64) + "#L1"
+
+
 def _store(tmp_path: Path) -> InvestigationStore:
     store = InvestigationStore(tmp_path / "investigation.json")
     store.create("why did the request fail?", investigation_id="INV-1")
@@ -53,7 +56,9 @@ def test_active_state_with_no_substantive_gaps_can_suggest_stop_or_reopen(
         {
             "status": "ok",
             "outcome": "supported",
-            "evidence": [{"uri": "evidence://sha256/abc#L1"}],
+            "evidence": [{"uri": VALID_REF}],
+            "coverage": {"complete": True},
+            "verification": {"integrity_checked": True},
         },
         hypothesis_id="H1",
         test_id="T1",
@@ -62,8 +67,8 @@ def test_active_state_with_no_substantive_gaps_can_suggest_stop_or_reopen(
         "H1",
         "supported",
         "recorded",
-        supporting_evidence=["evidence://sha256/abc#L1"],
-        coverage={"scope": "small"},
+        supporting_evidence=[VALID_REF],
+        coverage={"scope": "small", "complete": True},
     )
     summary = summarize_investigation(store)
     assert summary["state_status"] == "active"
@@ -169,8 +174,6 @@ def test_completed_state_reports_stop_reason_and_is_not_a_funnel(tmp_path: Path)
         "reason": "finished because the requested scope ended",
         "present": True,
     }
-    # An unknown Finding is visible as a gap, but the summary does not turn it
-    # into a domain diagnosis or require a particular next operation.
     assert summary["finding_gaps"][0]["outcome"] == "unknown"
     assert summary["advisory_completeness"]["advisory_only"] is True
     assert summary["suggested_actions"][-1]["category"] == "stop/reopen"
@@ -228,7 +231,6 @@ def test_error_unknown_missing_omission_and_truncation_are_distinct(tmp_path: Pa
     summary = summarize_investigation(store)
     counts = summary["progress"]["executions"]
     assert counts["error"] == 1
-    # Error status and unknown epistemic outcome are independent axes.
     assert counts["unknown"] == 2
     assert counts["missing_evidence"] == 1
     assert counts["omission"] == 1
@@ -263,7 +265,7 @@ def test_corrupt_and_oversized_sources_return_safe_error_or_strict_failure(
         summarize_investigation(corrupt, strict=True)
     except InvestigationSummaryError as exc:
         assert str(exc) == "source_invalid"
-    else:  # pragma: no cover - assertion form keeps the expected error clear
+    else:
         raise AssertionError("strict summary loading must raise")
 
 
