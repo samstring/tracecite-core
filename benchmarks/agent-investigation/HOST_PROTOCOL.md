@@ -63,12 +63,27 @@ The host writes JSONL in chronological order. Record exactly what the model coul
 
 ```json
 {"type":"session","run_id":"...","case_id":"kubernetes-140848","mode":"tracecite_context","model":"provider/model","seed":1}
-{"type":"model","input_tokens":1200,"output_tokens":80,"content":"...optional visible assistant content..."}
-{"type":"tool","tool":"search","input":{"query":"panic"},"output":"...exact model-visible tool result...","input_tokens":null,"output_tokens":null}
+{"type":"model","content":"...visible assistant content...","usage":{"input_tokens":1200,"output_tokens":80,"reasoning_tokens":20,"cached_input_tokens":400}}
+{"type":"tool","tool":"search","input":{"query":"panic"},"output":"...exact model-visible tool result..."}
 {"type":"final","answer":"...","evidence":["evidence://sha256/...#L10-L12"]}
 ```
 
-Provider-reported usage is authoritative when available. Preserve cached-input/reasoning-token fields in a `usage` object if the provider exposes them; do not fold them into invented totals. Character-based token estimates are fallback diagnostics only.
+### Provider usage normalization
+
+Provider-reported usage is authoritative when available. Each completed model call SHOULD record a `model` event with a canonical `usage` object. Normalize only fields the provider actually reports:
+
+- `input_tokens`;
+- `output_tokens`;
+- `reasoning_tokens`;
+- `cached_input_tokens`;
+- `cache_read_input_tokens`;
+- `cache_creation_input_tokens`.
+
+If a provider uses different names, the host adapter maps them to these fields and may retain the unmodified provider payload separately for audit. Do not infer missing fields and do not manufacture a combined `total_tokens`: reasoning and cache accounting differs across providers and may overlap with input/output accounting.
+
+The scorer treats `model` usage as authoritative and does **not** add legacy token fields attached to tool events when model usage exists. Tool-level `input_tokens` / `output_tokens` remain supported only for old benchmark transcripts.
+
+Character-based token estimates are fallback diagnostics only and must never replace available provider usage.
 
 ## Required run matrix
 
@@ -85,7 +100,7 @@ Do not rerun only losing modes until they pass.
 
 1. Score root-cause concepts and required Evidence markers against evaluator-only `gold.json`.
 2. A run that misses the correctness threshold is a failed investigation regardless of token cost.
-3. Among correct runs compare total model input/output usage, model-visible tool output, tool calls, repeated output, `expand` calls, wall time, and raw bytes scanned.
+3. Among correct runs compare provider-reported model input/output usage, separately reported reasoning/cache usage, model-visible tool output, tool calls, repeated output, `expand` calls, wall time, and raw bytes scanned.
 4. Report distributions/medians and individual failures; do not publish only the best run.
 
 ## Evidence quality
