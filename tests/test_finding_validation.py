@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tracecite.runtime.finding_validation import validate_finding
-from tracecite.runtime.investigation import InvestigationStore
+from tracecite.runtime.investigation import InvestigationError, InvestigationStore
 
 
 DIGEST = "a" * 64
@@ -22,6 +24,21 @@ def _store(tmp_path: Path) -> InvestigationStore:
         test_id="T1",
     )
     return store
+
+
+def _record_valid_execution(store: InvestigationStore) -> None:
+    store.record_execution(
+        "search",
+        {
+            "status": "ok",
+            "outcome": "not_assessed",
+            "evidence": [{"uri": EVIDENCE}],
+            "coverage": {"complete": True},
+            "verification": {"integrity_checked": True},
+        },
+        hypothesis_id="H1",
+        test_id="T1",
+    )
 
 
 def test_supported_finding_requires_an_executed_test(tmp_path: Path) -> None:
@@ -67,17 +84,7 @@ def test_decisive_finding_rejects_non_citable_evidence(tmp_path: Path) -> None:
 
 def test_finding_evidence_must_come_from_linked_test_execution(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.record_execution(
-        "search",
-        {
-            "status": "ok",
-            "outcome": "not_assessed",
-            "evidence": [{"uri": EVIDENCE}],
-            "coverage": {"complete": True},
-        },
-        hypothesis_id="H1",
-        test_id="T1",
-    )
+    _record_valid_execution(store)
     other = f"evidence://sha256/{'b' * 64}#L1"
 
     result = validate_finding(
@@ -119,18 +126,7 @@ def test_explicit_coverage_gap_downgrades_decisive_finding(tmp_path: Path) -> No
 
 def test_valid_supported_finding_passes_mechanical_validation(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.record_execution(
-        "search",
-        {
-            "status": "ok",
-            "outcome": "not_assessed",
-            "evidence": [{"uri": EVIDENCE}],
-            "coverage": {"complete": True},
-            "verification": {"integrity_checked": True},
-        },
-        hypothesis_id="H1",
-        test_id="T1",
-    )
+    _record_valid_execution(store)
 
     result = validate_finding(
         store,
@@ -157,6 +153,50 @@ def test_unknown_is_safe_without_evidence_or_execution(tmp_path: Path) -> None:
     assert result.reasons == ()
 
 
+def test_add_finding_rejects_unvalidated_decisive_outcome_without_mutation(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+
+    with pytest.raises(InvestigationError, match="Finding Validation") as exc_info:
+        store.add_finding(
+            "H1",
+            "supported",
+            "timeout caused the failure",
+            supporting_evidence=[EVIDENCE],
+        )
+
+    assert "test_not_executed" in str(exc_info.value)
+    state = store.load()
+    assert state.findings == []
+    assert state.hypotheses[0]["status"] == "open"
+
+
+def test_add_finding_accepts_validated_decisive_outcome(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _record_valid_execution(store)
+
+    finding = store.add_finding(
+        "H1",
+        "supported",
+        "timeout evidence was found",
+        supporting_evidence=[EVIDENCE],
+        coverage={"complete": True},
+    )
+
+    assert finding["outcome"] == "supported"
+    state = store.load()
+    assert state.findings[0]["id"] == finding["id"]
+    assert state.hypotheses[0]["status"] == "supported"
+
+
+def test_add_finding_keeps_unknown_as_explicit_safe_stop(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+
+    finding = store.add_finding("H1", "unknown", "evidence remains insufficient")
+
+    assert finding["outcome"] == "unknown"
+    assert store.load().hypotheses[0]["status"] == "unknown"
+
+
 def test_adversarial_no_match_cannot_be_used_as_decisive_proof(tmp_path: Path) -> None:
     """A hostile host must not turn a successful zero-match search into proof."""
 
@@ -166,8 +206,6 @@ def test_adversarial_no_match_cannot_be_used_as_decisive_proof(tmp_path: Path) -
         {
             "status": "no_match",
             "outcome": "unknown",
-            # Deliberately attach a syntactically valid pointer to simulate a
-            # hostile/malformed host result trying to make no_match look citable.
             "evidence": [{"uri": EVIDENCE}],
             "coverage": {"complete": True},
             "verification": {"integrity_checked": True},
@@ -186,6 +224,15 @@ def test_adversarial_no_match_cannot_be_used_as_decisive_proof(tmp_path: Path) -
     assert result.valid is False
     assert result.validated_outcome == "unknown"
     assert "linked_execution_no_match" in result.reasons
+
+    with pytest.raises(InvestigationError, match="linked_execution_no_match"):
+        store.add_finding(
+            "H1",
+            "supported",
+            "zero matches prove absence",
+            supporting_evidence=[EVIDENCE],
+        )
+    assert store.load().hypotheses[0]["status"] == "open"
 
 
 def test_adversarial_unverified_evidence_cannot_be_certified(tmp_path: Path) -> None:
