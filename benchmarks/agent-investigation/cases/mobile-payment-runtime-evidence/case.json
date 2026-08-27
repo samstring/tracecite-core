@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "mobile-payment-runtime-evidence",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "crash",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/85b390448868bdeaba8e451f94343fcb7f4f2d81/benchmarks/evidence-intelligence/cases/mobile-payment-crash/crash.json",
+      "filename": "crash.json",
+      "sha256": "a804a3a2782d20922e6c92a241b06c0c7b32a3525228a65643945554bf8c2458"
+    },
+    {
+      "id": "analytics",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/85b390448868bdeaba8e451f94343fcb7f4f2d81/benchmarks/evidence-intelligence/cases/mobile-payment-crash/analytics.json",
+      "filename": "analytics.json",
+      "sha256": "b0ab2ece33a18d8c7283cc9ebdae3ed9cddeff1259220b52ef2f0e5eae66b8ee"
+    },
+    {
+      "id": "network",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/85b390448868bdeaba8e451f94343fcb7f4f2d81/benchmarks/evidence-intelligence/cases/mobile-payment-crash/network.json",
+      "filename": "network.json",
+      "sha256": "7a3446d5f211b4560a7347530ca6e1d025abb54d22088404d8c34fdc1cc9168b"
+    },
+    {
+      "id": "client",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/85b390448868bdeaba8e451f94343fcb7f4f2d81/benchmarks/evidence-intelligence/cases/mobile-payment-crash/client.json",
+      "filename": "client.json",
+      "sha256": "e9088979c372acce16608db5260878c1aca3820d5ab6babe1c0f704d6896e705"
+    },
+    {
+      "id": "trace",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/85b390448868bdeaba8e451f94343fcb7f4f2d81/benchmarks/evidence-intelligence/cases/mobile-payment-crash/trace.json",
+      "filename": "trace.json",
+      "sha256": "ac1e75ac03705c338c86e94eb471f55599b2aea29a6512e2e004ca76374240f6"
+    }
+  ]
+}
