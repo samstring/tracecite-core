@@ -1,5 +1,15 @@
 """Generic investigation runtime and Agent-facing tool contracts."""
 
+from .capabilities import (
+    CAPABILITY_KINDS,
+    CAPABILITY_SAFETY_LEVELS,
+    CapabilityError,
+    CapabilitySpec,
+    execute_capability,
+    get_capability,
+    list_capabilities,
+    register_capability,
+)
 from .assertions import (
     AssertionContext,
     AssertionOutcome,
@@ -96,6 +106,14 @@ from .tools import (
 )
 
 __all__ = [
+    "CAPABILITY_KINDS",
+    "CAPABILITY_SAFETY_LEVELS",
+    "CapabilityError",
+    "CapabilitySpec",
+    "execute_capability",
+    "get_capability",
+    "list_capabilities",
+    "register_capability",
     "AssertionContext",
     "AssertionOutcome",
     "AssertionPackage",
