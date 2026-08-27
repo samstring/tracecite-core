@@ -39,6 +39,23 @@ def test_free_shell_rejects_paths_outside_workspace() -> None:
         module._validate_arg("--ignore-file=/etc/passwd")
 
 
+def test_free_shell_rejects_non_string_tool_arguments(tmp_path: Path) -> None:
+    module = _load_free_shell()
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    (inputs / "crash.json").write_text("{}\n", encoding="utf-8")
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    runtime = module.Runtime(
+        mode="free_shell",
+        input_root=inputs,
+        scratch=scratch,
+        context_id="",
+    )
+    with pytest.raises(ValueError, match="must be a string"):
+        runtime._shell_exec({"program": "rg", "args": ["crash", ["crash.json"]]})
+
+
 @pytest.mark.parametrize(
     ("program", "argv"),
     [
