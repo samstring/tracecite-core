@@ -28,7 +28,7 @@ dependencies = []
 dev = ["build>=1", "pytest>=7"]
 
 [project.scripts]
-tracecite = "tracecite.integrations.cli:main"
+tracecite = "tracecite.integrations.stateful_cli:main"
 tracecite-core = "tracecite_core.cli:main"
 
 [tool.setuptools]
