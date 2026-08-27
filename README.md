@@ -29,14 +29,14 @@ TraceCite requires Python 3.10+ and supports Linux and macOS. Windows is not cur
 
 Core commands return deterministic JSON. `status` reports execution state while `outcome` reports epistemic state supported by Evidence; zero matches do not prove that a problem did not happen.
 
-See the [Agent integration guide](docs/agent-integration.md) and the [normative architecture](docs/architecture.md).
+See the [Agent integration guide](docs/agent-integration.md), [Context Engine](docs/context-engine.md), and the [normative architecture](docs/architecture.md).
 
 ## Layers
 
 - `tracecite_core`: Source, Segmenter, Sample, Survey, Filter, Snapshot, Evidence, Manifest, Verify, and low-level Plugin SDK.
 - `tracecite.runtime`: Investigation, Scenario, Assertion, Reporting, budgets, cache, safety gates, and Agent Capabilities.
 - `tracecite.extension`: declarative Extension Protocol v2 and stable domain contracts.
-- `tracecite.integrations`: CLI plus Agent-facing transport/projection; MCP evolves as a separate adapter project.
+- `tracecite.integrations`: CLI, Agent transport/projection, Evidence Ledger, and Context Engine; MCP evolves as a separate adapter project.
 - `tracecite.knowledge`: Knowledge Candidate, independent validation, review, versioning, and expiry.
 
 Domain semantics do not enter Core or Runtime. `tracecite-mobile` is a separate official domain extension and a real validation consumer of the public contracts.
@@ -72,9 +72,7 @@ EXTENSION = TraceCiteExtension(
     ),
 )
 
-
-def extension() -> TraceCiteExtension:
-    return EXTENSION
+extension = EXTENSION
 ```
 
 The top-level protocol stays small while capabilities are independently versioned. Current public contribution types include Core plugin bundles, Agent Capability, Assertion, Report, and Scenario Capability. See [Extension Contract v2](docs/extension-contract.md) and the [v1 to v2 migration](docs/migrations/extension-protocol-v2.md).
@@ -89,11 +87,28 @@ v2 provides generic values that do not depend on a specific Agent or transport:
 - `SourceDescriptor` / `SourceCursor` / `SourceChunk`: incremental sources including files, live streams, and remote APIs.
 - `CapabilityResult[T]`: a uniform execution envelope; execution `status` remains separate from Finding `outcome`.
 
-## Agent context principle
+## Agent context and token transport
 
-Canonical Results and full Evidence remain recoverable; Agent-facing views may be compressed. Agent profiles, compact projection, Evidence Ledger, and `expand-many` already exist.
+Canonical Results and immutable Evidence remain recoverable. Token reduction is implemented only as an Agent transport layer and never rewrites domain facts or canonical evidence.
 
-Seen Evidence, cross-turn deduplication, Context Delta, representative Evidence grouping, and token/context budgets belong to Runtime/Integration and **do not enter the Domain Extension API**. That boundary allows Context Engine, MCP, or model-platform changes without forcing Mobile/CI rewrites.
+The existing compact projection and Evidence Ledger are now joined by a bounded persistent Context Engine. A stateful host can give one investigation/conversation a stable context ID:
+
+```bash
+tracecite search app.log "timeout" --snapshot \
+  --agent-profile stateful-index \
+  --ledger-dir /tmp/tracecite-ledger \
+  --context-id incident-42
+```
+
+On the first turn the Agent receives the bounded Evidence view normally. On later overlapping searches with the same context ID, Evidence URIs already seen by that context are omitted and explicit `data.context` metadata reports new/repeated counts. The complete canonical search Result is stored first in the content-addressed Ledger, so transport deduplication never destroys recoverability.
+
+Recover several immutable refs with:
+
+```bash
+tracecite expand-many /tmp/tracecite-ledger RESULT_ID '#L120' '#L188-L190'
+```
+
+Context state is bounded transport memory, not trusted Evidence or InvestigationState. Unknown/unaddressable evidence is never silently deduplicated, and different context IDs do not share seen-state. Representative Evidence grouping remains a later optimization; it is not part of Extension Protocol v2.
 
 ## Safety and trust
 
@@ -103,10 +118,11 @@ Seen Evidence, cross-turn deduplication, Context Delta, representative Evidence 
 - Domain Extensions cannot bypass Runtime budget, live-source/live-action, or authorization gates.
 - Core does not import Runtime or domains; Runtime does not import Mobile/CI.
 - `import tracecite` does not execute third-party Extensions; discovery is explicit.
+- Context delta changes transport only; canonical Result/Evidence remain recoverable.
 
 ## Current status
 
-Core Extension Protocol v2 contracts, declarative loading, capability-version checks, and adaptation to current Runtime registries are implemented and pass the Core matrix. Mobile v2 migration, the stronger Context Engine, and MCP v2 integration continue in that order; incomplete phases are not presented as implemented.
+Extension Protocol v2, declarative capability loading, stable domain contracts, Evidence Ledger, bounded cross-turn Context Delta, and the stateful CLI path are implemented and pass the Core Python 3.10–3.14 Linux/macOS matrix. The matching Mobile v2 branch and MCP v2/context integration are also validated on their own matrices; real-host and token-savings benchmarks remain separate acceptance work.
 
 ## License
 
