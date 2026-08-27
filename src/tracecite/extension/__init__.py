@@ -14,6 +14,11 @@ from typing import Any, Dict, List, Optional
 from tracecite_core.plugin_sdk import PluginAPI, load_entrypoint_plugins, loaded_plugins
 
 from tracecite.runtime.assertions import register_assertion_type
+from tracecite.runtime.capabilities import (
+    CapabilityExecutor,
+    CapabilitySpec,
+    register_capability,
+)
 from tracecite.runtime.reporting import register_report_outputter
 from tracecite.runtime.runtime import DEFAULT_RUNTIME, ScenarioRuntime
 
@@ -77,6 +82,16 @@ class ExtensionAPI(PluginAPI):
         self, name: str, runtime: ScenarioRuntime, *, replace: bool = False
     ) -> None:
         register_runtime(name, runtime, replace=replace)
+
+    def register_capability(
+        self,
+        spec: CapabilitySpec,
+        executor: CapabilityExecutor,
+        *,
+        replace: bool = False,
+    ) -> None:
+        """Expose a domain capability through the Runtime-owned registry."""
+        register_capability(spec, executor, replace=replace)
 
 
 def load_extensions(*, strict: bool = True) -> List[Dict[str, Optional[str]]]:
