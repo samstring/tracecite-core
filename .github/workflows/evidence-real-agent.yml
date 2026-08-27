@@ -50,12 +50,30 @@ jobs:
 
           base = os.environ["OPENAI_BASE_URL"].rstrip("/")
           key = os.environ["OPENAI_API_KEY"]
-          req = urllib.request.Request(
-              f"{base}/models",
-              headers={"Authorization": f"Bearer {key}"},
+          auth = {"Authorization": f"Bearer {key}"}
+
+          verify_req = urllib.request.Request(
+              "https://console.gmicloud.ai/api/v1/me/api-keys/current",
+              headers=auth,
           )
-          with urllib.request.urlopen(req, timeout=60) as response:
+          with urllib.request.urlopen(verify_req, timeout=60) as response:
+              verified = json.loads(response.read().decode("utf-8"))
+
+          key_info = verified.get("key", {}) if isinstance(verified, dict) else {}
+          organization = verified.get("organization", {}) if isinstance(verified, dict) else {}
+          scope = str(key_info.get("scope") or key_info.get("type") or "")
+          org_id = str(organization.get("id") or "")
+          if scope and scope != "ie_model":
+              raise RuntimeError(f"GMI API key scope is {scope!r}; expected 'ie_model'")
+          if not org_id:
+              raise RuntimeError("GMI API key verification did not return an organization id")
+
+          headers = dict(auth)
+          headers["X-Organization-ID"] = org_id
+          models_req = urllib.request.Request(f"{base}/models", headers=headers)
+          with urllib.request.urlopen(models_req, timeout=60) as response:
               payload = json.loads(response.read().decode("utf-8"))
+
           data = payload.get("data", []) if isinstance(payload, dict) else []
           ids = sorted(
               str(item.get("id"))
@@ -63,7 +81,7 @@ jobs:
               if isinstance(item, dict) and item.get("id")
           )
           Path("/tmp/tracecite-provider-models.txt").write_text("\n".join(ids) + "\n", encoding="utf-8")
-          print(f"Available models: {len(ids)}")
+          print(f"GMI key verified with inference scope. Available models: {len(ids)}")
           for model_id in ids:
               print(model_id)
           PY
