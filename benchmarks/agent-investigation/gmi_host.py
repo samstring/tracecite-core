@@ -13,6 +13,14 @@ import openai_host as common
 
 
 DEFAULT_BASE_URL = "https://api.gmi-serving.com/v1"
+SYSTEM_PROMPT = """You are debugging a production incident from runtime evidence only.
+Use only the benchmark tools provided to you. Do not use web search or outside knowledge.
+Reconstruct the relevant sequence before giving a causal conclusion. Distinguish direct
+observations from inference. If evidence is insufficient, say unknown/partial rather than
+inventing a cause. Your final answer must cite concrete evidence IDs or precise source
+locations that support the conclusion. Keep investigating until the evidence is sufficient
+to give a supported final answer.
+"""
 
 
 def _chat_tools(tools: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -147,6 +155,11 @@ def run() -> int:
     if not model:
         raise RuntimeError("TRACECITE_BENCH_MODEL is required")
 
+    # The benchmark must not bias a tool by clipping its output. Product-level
+    # EvidencePackage reduction remains part of TraceCite itself; only the host's
+    # global character truncation is disabled here.
+    common._truncate = lambda value, limit=None: value  # type: ignore[assignment]
+
     if mode == "free_shell":
         runtime = free_shell.Runtime(mode=mode, input_root=input_root, scratch=scratch, context_id=context_id)
         raw_tools = free_shell.tools(runtime.files)
@@ -158,18 +171,17 @@ def run() -> int:
     file_names = ", ".join(path.name for path in runtime.files)
     prompt = f"{question}\n\nAvailable evidence files: {file_names}."
     conversation: list[dict[str, Any]] = [
-        {"role": "system", "content": common.SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
     ]
-    max_turns = int(os.environ.get("TRACECITE_BENCH_MAX_TURNS", "10"))
-    if max_turns < 1 or max_turns > 30:
-        raise ValueError("TRACECITE_BENCH_MAX_TURNS must be 1-30")
     max_output_tokens = int(os.environ.get("TRACECITE_BENCH_MAX_OUTPUT_TOKENS", "1800"))
     if max_output_tokens < 128 or max_output_tokens > 8192:
         raise ValueError("TRACECITE_BENCH_MAX_OUTPUT_TOKENS must be 128-8192")
 
     final_text = ""
-    for round_index in range(1, max_turns + 1):
+    round_index = 0
+    while True:
+        round_index += 1
         response = _post_chat(
             {
                 "model": model,
@@ -177,6 +189,7 @@ def run() -> int:
                 "tools": tools,
                 "tool_choice": "auto",
                 "stream": False,
+                "temperature": 0,
                 "max_tokens": max_output_tokens,
             }
         )
@@ -220,7 +233,6 @@ def run() -> int:
             except Exception as exc:
                 output = json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False)
                 duration_ms = 0.0
-            output = common._truncate(output)
             common._append_event(
                 transcript,
                 {
@@ -233,8 +245,6 @@ def run() -> int:
                 },
             )
             conversation.append({"role": "tool", "tool_call_id": call_id, "content": output})
-    else:
-        final_text = "Investigation stopped because the model-turn budget was exhausted."
 
     evidence = sorted(set(common._EVIDENCE_ID_RE.findall(final_text)))
     common._append_event(transcript, {"type": "final", "answer": final_text, "evidence": evidence})
