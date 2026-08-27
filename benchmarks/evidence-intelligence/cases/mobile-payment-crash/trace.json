@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "provider": "trace",
+  "source": "otel-export",
+  "evidence": [
+    {
+      "id": "span:T22",
+      "kind": "span",
+      "timestamp": "2026-08-27T10:03:11.350Z",
+      "severity": "error",
+      "label": "checkout service exceeded client deadline",
+      "entities": [
+        {"namespace": "edge", "kind": "request", "value": "R19"},
+        {"namespace": "otel", "kind": "trace", "value": "T22"}
+      ],
+      "attributes": {"service": "checkout", "duration_ms": 1450, "status": "deadline_exceeded"}
+    },
+    {
+      "id": "span:callback",
+      "kind": "span",
+      "timestamp": "2026-08-27T10:03:13.000Z",
+      "severity": "warning",
+      "label": "payment callback completed after client timeout",
+      "entities": [
+        {"namespace": "otel", "kind": "trace", "value": "T22"}
+      ],
+      "attributes": {"service": "payment-callback", "status": "late_success"}
+    }
+  ],
+  "relations": [
+    {
+      "source_id": "span:T22",
+      "target_id": "span:callback",
+      "kind": "trace_parent",
+      "basis": "declared_parent",
+      "confidence": 1.0
+    }
+  ]
+}
