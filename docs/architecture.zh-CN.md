@@ -239,7 +239,9 @@ Scenario 是可重复测试配方，不是领域 Runtime。Extension 可通过 `
 元数据 -> 有界抽样/概览 -> EvidencePointer -> 按需 expand -> 完整 Artifact
 ```
 
-Canonical Evidence 和 Result 保持完整可恢复；Agent-facing 投影可以压缩，但必须保留必要 Coverage、截断信号和恢复路径。Runtime 已具备预算、Agent profile、compact projection、Evidence Ledger 与 `expand-many`。Seen Evidence、跨轮 Context Delta、代表性 Evidence Group 和进一步的 Context Engine 属于 Runtime/Integration 演进，不进入 Extension Protocol。
+Canonical Evidence 和 Result 保持完整可恢复；Agent-facing 投影可以压缩，但必须保留必要 Coverage、截断信号和恢复路径。Runtime/Integration 已具备预算、Agent profile、compact projection、Evidence Ledger、`expand-many`、有界 Seen Evidence 与可持久化跨轮 Context Delta。Context Engine 的传输状态与 InvestigationState 分离，并且只有在 canonical Result 可恢复之后才应用 delta。参见 [Context Engine](context-engine.zh-CN.md)。
+
+代表性 Evidence Group 和语义压缩仍属于后续 Runtime/Integration 优化，不进入 Extension Protocol v2。
 
 不能为了省 Token 隐藏缺失 Evidence、近似、解析失败或 Coverage 缺口。
 
@@ -282,12 +284,13 @@ Agent 不能自行晋升 Knowledge。正式治理规则见[知识治理](knowled
 | Agent profile、compact projection、Evidence Ledger、`expand-many` | 已实现 |
 | Agent Capability Registry 与 live safety gate | 已实现 |
 | Extension Protocol v2 声明式 Contract 与内部 Scenario 适配 | 已实现 |
-| Mobile Extension Protocol v2 迁移 | 待实现 |
-| Context Engine：Seen Evidence、跨轮去重、Context Delta、代表样本 | 待实现 |
-| MCP 基于 v2 Runtime/Context API 的适配 | 待实现 |
-| Mobile 真机与 CI 跨领域验收 | 部分实现：Mobile 离线 fixture 已有；设备与完整 CI 验收尚未完成 |
+| Mobile Extension Protocol v2 迁移 | 已实现 |
+| Context Engine：Seen Evidence、跨轮去重、Context Delta | 已实现 |
+| 代表性 Evidence grouping / 语义压缩 | 计划 |
+| MCP 基于 v2 Runtime/Context API 的适配 | 已实现 |
+| Mobile 真机与 CI 跨领域验收 | 部分实现：已有 Mobile 自动化真实日志/全矩阵验证；真机和独立 CI 领域扩展验证仍未完成 |
 
-演进顺序：先稳定公共 Contract 并完成文档/测试，再实现 Context Engine，再迁移 Mobile，最后让 MCP 只依赖公开 Runtime/Context API。
+Contract → Context Engine → Mobile → MCP 的迁移顺序已在重构分支完成。下一阶段优先做真实 Agent Host / Token benchmark、Mobile 真机验收，以及第二个独立领域（例如 CI）的验证；在此之前不继续把新的领域概念上提到主包。
 
 ## 12. 架构演进与维护
 
