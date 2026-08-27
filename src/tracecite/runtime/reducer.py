@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from tracecite.evidence import EntityRef
+from tracecite.extension.evidence import EntityRef
 
 from .correlation import CorrelationGraph, EvidenceNode
 from .grouping import GroupingResult
