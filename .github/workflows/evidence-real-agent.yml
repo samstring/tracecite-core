@@ -1,6 +1,12 @@
 name: Evidence Real Agent Pilot
 
 on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - "benchmarks/agent-investigation/openai_host.py"
+      - ".github/workflows/evidence-real-agent.yml"
   workflow_dispatch:
 
 permissions:
