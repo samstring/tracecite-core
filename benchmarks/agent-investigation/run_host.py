@@ -134,8 +134,6 @@ def run_host(
     if timeout_seconds < 1:
         raise ValueError("timeout_seconds must be at least 1")
     command = list(host_command)
-    if command and command[0] == "--":
-        command = command[1:]
     if not command:
         raise ValueError("host command is required after --")
 
@@ -284,13 +282,27 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=int, default=900)
     parser.add_argument("--pass-env", action="append", default=[])
     parser.add_argument("--run-id")
-    parser.add_argument("host_command", nargs=argparse.REMAINDER)
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+def _split_argv(argv: Sequence[str]) -> tuple[list[str], list[str]]:
+    values = list(argv)
     try:
+        separator = values.index("--")
+    except ValueError as exc:
+        raise ValueError("host command must follow a -- separator") from exc
+    runner_argv = values[:separator]
+    host_argv = values[separator + 1 :]
+    if not host_argv:
+        raise ValueError("host command is required after --")
+    return runner_argv, host_argv
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        runner_argv, host_argv = _split_argv(raw_argv)
+        args = _build_parser().parse_args(runner_argv)
         result = run_host(
             args.case_dir,
             args.prepared_manifest,
@@ -298,7 +310,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             model=args.model,
             seed=args.seed,
             output=args.output,
-            host_command=args.host_command,
+            host_command=host_argv,
             timeout_seconds=args.timeout_seconds,
             pass_env=args.pass_env,
             run_id=args.run_id,
