@@ -104,8 +104,10 @@ def validate_finding(
 
     Decisive Findings must be grounded in at least one executed Test, cite only
     immutable line-addressable Evidence produced by those executions, and have
-    no explicit execution/coverage gaps.  ``unknown`` remains valid with less
-    evidence because uncertainty is the safe fallback.
+    no explicit execution/coverage gaps. ``no_match`` is never accepted as
+    decisive proof by itself, and an execution that explicitly reports failed
+    integrity verification cannot certify a Finding. ``unknown`` remains valid
+    with less evidence because uncertainty is the safe fallback.
     """
 
     state = store_or_state.load() if isinstance(store_or_state, InvestigationStore) else store_or_state
@@ -165,14 +167,22 @@ def validate_finding(
 
         for execution in linked_executions:
             status = str(execution.get("status") or "").strip().lower()
-            if status in _BLOCKING_STATUSES:
+            if status == "no_match":
+                reasons.append("linked_execution_no_match")
+            elif status in _BLOCKING_STATUSES:
                 reasons.append("linked_execution_incomplete")
+
             recording = execution.get("recording") or {}
             if isinstance(recording, Mapping) and any(
                 recording.get(key) is True
                 for key in ("evidence_truncated", "warnings_truncated", "error_truncated")
             ):
                 reasons.append("linked_execution_truncated")
+
+            verification = execution.get("verification") or {}
+            if isinstance(verification, Mapping) and verification.get("integrity_checked") is False:
+                reasons.append("linked_execution_unverified")
+
             if _coverage_has_blocking_gap(execution.get("coverage") or {}):
                 reasons.append("linked_execution_coverage_gap")
 
