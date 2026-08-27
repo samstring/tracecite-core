@@ -96,10 +96,18 @@ def select_agent_profile(
     name: str,
     capabilities: AgentCapabilities | None = None,
 ) -> AgentProfile:
-    """Resolve ``auto`` safely or validate an explicitly selected profile."""
+    """Resolve ``auto`` safely or validate an explicitly selected profile.
+
+    ``auto`` chooses the smallest lossless transport the host explicitly
+    declares it can consume: TCF frame first, then stateful columnar JSON,
+    then the portable Agent JSON projection. A host that does not declare
+    ``text_frame`` therefore never receives TCF unexpectedly.
+    """
 
     available = capabilities or AgentCapabilities()
     if name == "auto":
+        if _PROFILES["frame"].supports(available):
+            return _PROFILES["frame"]
         if _PROFILES["stateful-index"].supports(available):
             return _PROFILES["stateful-index"]
         return _PROFILES["agent"]

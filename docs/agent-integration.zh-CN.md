@@ -17,16 +17,16 @@ raw source
   -> Agent
 ```
 
-相对 `grep | head`，TraceCite 的优势是可复现 EvidencePointer、Coverage、`unknown` 语义、完整性校验和跨工具 InvestigationState。Canonical JSON 不保证比熟练 grep 更省 token；省上下文依赖 Agent profile、compact projection、Ledger、批量展开，以及后续 Runtime Context Engine。
+相对 `grep | head`，TraceCite 的优势是可复现 EvidencePointer、Coverage、`unknown` 语义、完整性校验和跨工具 InvestigationState。Canonical JSON 不保证比熟练 grep 更省 token；省上下文依赖 Agent profile、compact projection、Ledger、批量展开和 Context Engine。
 
-当前推荐：
+CLI 的保守默认仍是列式 Agent JSON：
 
 ```bash
 tracecite search app.log "pattern" --no-snapshot \
   --agent-profile agent --ledger-dir /tmp/ledger --lightweight
 ```
 
-Agent profile 默认限制 evidence 数、单行字符和输出字符。完整 canonical Result 不因投影而改变。
+Agent profile 默认限制 evidence 数、单行字符和输出字符。完整 canonical Result 不因投影而改变。若 Host 明确支持状态历史、批量展开或 TCF，应由 Host capability negotiation 选择更紧凑的 transport，见下文。
 
 ## 1. 接入前提
 
@@ -129,10 +129,42 @@ Ledger 内容寻址且展开前重新校验摘要。
 
 | Profile | 适用 Host | 传输 |
 |---|---|---|
+| `agent` | 默认 CLI / 普通 Host | 有界列式 JSON |
 | `portable-json` | 任意 Host | 列式 JSON |
 | `strict-json` | 强制 JSON Host | 列式 JSON |
 | `stateful-index` | 有会话历史与批量工具 | Ledger id + 列式 JSON + 已读历史优化 |
 | `frame` | 明确支持 TCF | Ledger id + TCF frame |
+
+CLI 不猜测 Host 能力，因此 `--agent-profile` 仍应显式选择上述 profile。`auto` 是 Host/Python 层的 capability negotiation，而不是一个没有能力输入的 CLI 开关。
+
+Host 可以使用公开 Integration API 做协商：
+
+```python
+from tracecite.integrations import AgentCapabilities, select_agent_profile
+
+profile = select_agent_profile(
+    "auto",
+    AgentCapabilities(
+        stateful_history=True,
+        batch_expand=True,
+        text_frame=True,
+    ),
+)
+assert profile.name == "frame"
+```
+
+`auto` 的安全顺序是：
+
+```text
+Host 明确支持 text_frame
+        -> frame
+否则支持 stateful_history + batch_expand
+        -> stateful-index
+否则
+        -> agent JSON
+```
+
+也就是说，不声明 `text_frame` 的 Host 永远不会意外收到 TCF。公开真实日志 transport smoke 显示 `frame` 在保留 Coverage / recovery 语义的同时可以显著减少结构开销，但这不是“所有查询都比 rg 更省”的承诺；完整数据见 `benchmarks/agent-investigation/README.md`。
 
 不要为了领域扩展改变 profile；profile 是 Integration/Host concern。
 
@@ -152,7 +184,7 @@ tracecite expand-many /tmp/tracecite-ledger RESULT_ID \
   --agent-profile stateful-index
 ```
 
-`expand-many` 会验证 Ledger 和 snapshot 摘要，并合并同次调用中重叠/相邻窗口。后续 Context Engine 会继续扩展跨轮 Seen Evidence 和窗口去重，但这些能力属于 Runtime，不属于 Domain Extension。
+`expand-many` 会验证 Ledger 和 snapshot 摘要，并合并同次调用中重叠/相邻窗口。Context Engine 会继续处理跨轮 Seen Evidence；这些能力属于 Runtime/Integration，不属于 Domain Extension。
 
 ### 第五步：记录调查并执行/复验 Scenario
 
@@ -203,7 +235,7 @@ Extension 内部可以使用稳定的 `EvidenceRef` 描述领域事实；Agent-f
 
 ## 7. Python API
 
-Python Host 应依赖 `tracecite` / `tracecite.runtime` / `tracecite.extension` 的公开符号，不导入领域包的内部模块或 Runtime registry。
+Python Host 应依赖 `tracecite` / `tracecite.runtime` / `tracecite.extension` / `tracecite.integrations` 的公开符号，不导入领域包的内部模块或 Runtime registry。
 
 领域扩展的 v2 入口：
 
@@ -213,6 +245,8 @@ from tracecite.extension import load_extensions, list_extensions
 load_extensions(strict=True)
 print(list_extensions())
 ```
+
+传输能力协商使用 `tracecite.integrations.AgentCapabilities` 和 `select_agent_profile`；不要根据模型名称硬编码 profile。
 
 如果 Host 需要 Scenario，当前可通过公开 host helper 解析已安装的 scenario adapter；这只是当前集成桥，不应成为新的领域依赖方向。
 
@@ -273,5 +307,6 @@ v1 扩展迁移见 [迁移说明](migrations/extension-protocol-v2.zh-CN.md)。
 - [ ] 能验证 Evidence digest/Manifest。
 - [ ] 能使用 InvestigationState 保存 Hypothesis/Test/Finding/stop reason。
 - [ ] 能显式加载 Extension Protocol v2 扩展，并通过通用 capability surface 调用领域能力。
+- [ ] Host 能按声明能力选择传输 profile，且不支持 TCF 时不会收到 frame。
 - [ ] 不直接依赖 Domain Extension 内部 Runtime/registry。
 - [ ] 不把 Agent context/token 策略写回领域 Contract。

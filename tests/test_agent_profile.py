@@ -4,13 +4,13 @@ import json
 
 import pytest
 
-from tracecite.integrations import cli
-from tracecite.integrations.agent_profile import (
+from tracecite.integrations import (
     AgentCapabilities,
     get_agent_profile,
-    render_frame,
     select_agent_profile,
 )
+from tracecite.integrations import cli
+from tracecite.integrations.agent_profile import render_frame
 
 
 def _canonical_search() -> dict[str, object]:
@@ -41,11 +41,19 @@ def _canonical_search() -> dict[str, object]:
     }
 
 
-def test_auto_profile_prefers_stateful_index_only_when_capable() -> None:
+def test_auto_profile_prefers_smallest_declared_stateful_transport() -> None:
     assert select_agent_profile("auto").name == "agent"
     assert select_agent_profile(
         "auto", AgentCapabilities(stateful_history=True, batch_expand=True)
     ).name == "stateful-index"
+    assert select_agent_profile(
+        "auto",
+        AgentCapabilities(
+            stateful_history=True,
+            batch_expand=True,
+            text_frame=True,
+        ),
+    ).name == "frame"
 
     with pytest.raises(ValueError, match="requires capabilities"):
         select_agent_profile("frame", AgentCapabilities(stateful_history=True))

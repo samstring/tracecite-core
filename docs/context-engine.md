@@ -46,9 +46,9 @@ Default bounds are 4096 Evidence identities and 512 Result IDs. When a bound is 
 
 Context state is atomically persisted. Context IDs are restricted to a safe identifier form and cannot perform path traversal.
 
-## 4. Delta semantics
+## 4. Delta and gain-aware transport semantics
 
-For each search Result the Agent-facing projection reports:
+For each search Result the delta projection records:
 
 - context schema/id/revision;
 - number of newly returned Evidence items;
@@ -58,7 +58,11 @@ For each search Result the Agent-facing projection reports:
 
 A repeated Result may therefore have `outcome=supported` with an empty Agent-facing Evidence delta. This does not mean the canonical Result contains no Evidence; it means the cited Evidence has already been delivered to this Agent context. The Ledger `result_id` remains the recovery path.
 
-## 5. CLI
+Seen-state always advances after a valid projection, but the delta is shown only when it is strictly smaller than the ordinary Agent view in the **final selected transport**. Columnar JSON is compared as compact JSON; TCF `frame` is compared after frame rendering. If delta metadata would cost more than the Evidence it removes, the Agent receives the ordinary view while the private seen-state still advances.
+
+This makes Context optimization monotonic with respect to model-visible transport size: enabling Context must not make a compatible turn larger merely to announce a tiny omission.
+
+## 5. CLI and transport selection
 
 The normal CLI path is unchanged when no context ID is supplied.
 
@@ -75,13 +79,24 @@ tracecite search app.log "timeout" --snapshot \
   --context-id incident-42
 ```
 
+A text-frame-capable host may use the more compact TCF transport:
+
+```bash
+tracecite search app.log "timeout" --snapshot \
+  --agent-profile frame \
+  --ledger-dir /tmp/tracecite-ledger \
+  --context-id incident-42
+```
+
+Capability-based `auto` selection prefers `frame` only when the host explicitly declares `stateful_history`, `batch_expand`, and `text_frame`; otherwise it falls back to `stateful-index` for capable stateful JSON hosts, then to the normal Agent JSON profile. A host that does not declare `text_frame` never receives TCF unexpectedly.
+
 Recover immutable evidence from a stored canonical Result:
 
 ```bash
 tracecite expand-many /tmp/tracecite-ledger RESULT_ID '#L120' '#L188-L190'
 ```
 
-`--context-id` without `--ledger-dir` fails with a machine-readable error. Context delta is applied before the existing compact transport projection so existing token budgets still apply to the smaller delta.
+`--context-id` without `--ledger-dir` fails with a machine-readable error. Existing Evidence/line/output budgets apply to both the ordinary and delta projections before the smaller final transport is selected.
 
 ## 6. MCP and other hosts
 
@@ -89,7 +104,15 @@ A stateful host may map its conversation, investigation, task, or another stable
 
 TraceCite MCP uses optional `context_id` on `tracecite_search`. It stores state below the server-owned `TRACECITE_MCP_STATE_DIR` and exposes `tracecite_expand_many` for recovery. Models cannot choose the server state root.
 
-## 7. What Context Engine does not do
+MCP or another structured host should not claim `text_frame` merely because frame is smaller. The host must explicitly support parsing/forwarding TCF. JSON remains the safe fallback.
+
+## 7. Public transport evidence
+
+The public benchmark under `benchmarks/agent-investigation/` currently exercises a 14.5 MB Kubernetes kubelet log and an 84 KB real Flutter/iOS crash report. Fixed-query smoke tests show that frame materially reduces TraceCite encoding overhead and that frame + Context preserves newly introduced Evidence while suppressing already-seen Evidence.
+
+Those tests measure transport characters, not complete Agent reasoning or provider token usage. They must not be presented as proof that TraceCite beats `rg` in total investigation tokens. The model-level benchmark scorer and host protocol exist for that separate claim.
+
+## 8. What Context Engine does not do
 
 The current implementation does not:
 
@@ -103,7 +126,7 @@ The current implementation does not:
 
 Representative grouping and richer context budgeting can be added later at the Runtime/Integration layer without changing Extension Protocol v2.
 
-## 8. Trust invariant
+## 9. Trust invariant
 
 > Saving tokens must never make missing, truncated, approximate, or unrecoverable evidence look complete.
 

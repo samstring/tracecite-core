@@ -4,15 +4,17 @@ This benchmark measures complete debugging investigations on public, real-world 
 
 ## Goal
 
-Compare the same Agent, question, and source data under three tool modes:
+Compare the same Agent, question, and source data under three model-level tool modes:
 
 1. `shell_rg` — shell + `rg`/line-context tools.
-2. `tracecite` — TraceCite compact/Ledger transport without cross-turn seen-state.
+2. `tracecite` — TraceCite bounded/Ledger transport without cross-turn seen-state.
 3. `tracecite_context` — TraceCite + Evidence Ledger + Context Engine (`context_id`), so previously seen Evidence is suppressed on later turns.
 
-The primary metric is **total investigation context cost**, not the size of one command response. Correctness and recoverable Evidence are gates: a cheaper run that reaches the wrong conclusion does not win.
+Within the TraceCite modes, the deterministic transport smoke also compares columnar JSON (`stateful-index`) with the text frame (`frame` / TCF) to separate evidence cost from encoding overhead.
 
-The model-level isolation/tool rules are normative for this benchmark; see [HOST_PROTOCOL.md](HOST_PROTOCOL.md).
+The primary model-level metric is **total investigation context cost**, not the size of one command response. Correctness and recoverable Evidence are gates: a cheaper run that reaches the wrong conclusion does not win.
+
+The model-level isolation/tool rules are normative; see [HOST_PROTOCOL.md](HOST_PROTOCOL.md).
 
 ## Anti-leak layout
 
@@ -29,18 +31,31 @@ The benchmark host MUST NOT expose `gold.json`, the original issue discussion, f
 
 ## Deterministic public transport smoke
 
-The public CI smoke is deliberately narrower than the full Agent benchmark. It uses fixed queries to compare model-visible transport for `rg`, plain TraceCite, and TraceCite + Context. It validates real source download, Evidence de-duplication, partial-overlap behavior, bounded state, and the rule that Context optimization must not produce a larger Agent view.
+The public CI smoke is deliberately narrower than the full Agent benchmark. It uses fixed queries and the same Evidence/line/output budgets to compare what the model would see through `rg`, TraceCite columnar JSON, and TCF frame transports, with and without Context State.
+
+It validates real source download, Evidence de-duplication, partial-overlap behavior, bounded state, transport-aware delta selection, and the invariant that Context optimization must not make the selected transport larger.
 
 It does **not** measure model reasoning, diagnosis accuracy, model-selected query quality, or total model tokens.
 
-| Case / experiment | shell `rg` visible chars | TraceCite visible chars | TraceCite + Context | Context saving vs TraceCite |
-| --- | ---: | ---: | ---: | ---: |
-| Kubernetes repeated query | 12,646 | 12,920 | 7,794 | **39.67%** |
-| Kubernetes changed/overlapping query | 418 | 2,785 | 2,598 | **6.71%** |
-| Flutter repeated query | 2,624 | 5,018 | 3,682 | **26.62%** |
-| Flutter partial-overlap query | 1,061 | 3,330 | 3,055 | **8.26%** |
+| Case / experiment | `rg` chars | JSON | JSON + Context | Frame | Frame + Context |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Kubernetes repeated query | 12,646 | 12,920 | 7,799 | 10,332 | **5,533** |
+| Kubernetes changed/overlapping query | **418** | 2,785 | 2,603 | 1,162 | 943 |
+| Flutter repeated query | 2,624 | 5,018 | 3,687 | 3,370 | **2,044** |
+| Flutter partial-overlap query | **1,061** | 3,330 | 3,060 | 1,781 | 1,299 |
 
-These numbers intentionally show both sides of the trade-off. For a narrow query with one or a few matching lines, raw `rg` output is much smaller than TraceCite because TraceCite also carries structured Coverage/recovery metadata. The current demonstrated Context benefit is primarily **cross-turn duplicate suppression**, not making every individual search cheaper than `rg`.
+Context savings within each TraceCite transport:
+
+| Case / experiment | JSON Context saving | Frame Context saving |
+| --- | ---: | ---: |
+| Kubernetes repeated query | 39.64% | **46.45%** |
+| Kubernetes changed/overlapping query | 6.54% | **18.85%** |
+| Flutter repeated query | 26.52% | **39.35%** |
+| Flutter partial-overlap query | 8.11% | **27.06%** |
+
+The result intentionally shows both sides of the trade-off. For a narrow query with one or a few matching lines, raw `rg` is still much smaller because it carries no Coverage, Ledger identity, or recovery metadata. TraceCite should therefore not claim that every individual search is cheaper than `rg`.
+
+The new finding is that a material part of TraceCite's small-query overhead was transport encoding rather than Evidence itself. On these public cases, TCF frame reduces plain TraceCite output relative to columnar JSON by roughly 20–58%, and frame + Context reduces the stateful output relative to JSON + Context by roughly 29–64%. Hosts that explicitly declare `text_frame` capability can therefore use `auto` to select `frame`; hosts that do not declare it continue to receive JSON.
 
 ### `kubernetes-140848`
 
@@ -53,18 +68,20 @@ Validated source:
 
 Repeated-query smoke:
 
-- plain TraceCite returned 30 Evidence rows on both turns;
-- TraceCite + Context returned 30 then 0 and reported all 30 as previously seen;
-- visible JSON fell from **12,920** to **7,794** characters (**39.6749%**).
+- canonical Agent view returns 30 Evidence rows on both turns;
+- Context returns 30 then 0 and records all 30 as previously seen;
+- JSON falls from **12,920** to **7,799** characters (**39.64%**);
+- frame falls from **10,332** to **5,533** characters (**46.45%**).
 
 Changed-query smoke:
 
 - turn 1 searches the exact kubelet merge/defaulting panic text;
 - turn 2 broadens the query to include `PodLevelResourcesFixDefaulting`;
-- both searches resolve to the same decisive Evidence line in this source, so Context suppresses the repeated line;
-- visible JSON falls from **2,785** to **2,598** characters (**6.7145%**).
+- both searches resolve to the same decisive Evidence line in this source, so the second turn suppresses one repeated Evidence;
+- JSON falls from **2,785** to **2,603** characters (**6.54%**);
+- frame falls from **1,162** to **943** characters (**18.85%**).
 
-The changed-query result is intentionally modest. When only one short Evidence item is repeated, Context metadata consumes much of the saving.
+This is intentionally a modest Context win: when only one short Evidence item repeats, state metadata consumes much of the saving. It also demonstrates the `rg` advantage for an already-known exact anchor: only **418** visible characters across two turns.
 
 ### `flutter-179398`
 
@@ -78,39 +95,37 @@ Validated source:
 
 Repeated-query smoke:
 
-- plain TraceCite returned 7 Evidence rows on both turns;
-- TraceCite + Context returned 7 then 0;
-- visible JSON fell from **5,018** to **3,682** characters (**26.6242%**).
+- canonical Agent view returns 7 Evidence rows on both turns;
+- Context returns 7 then 0;
+- JSON falls from **5,018** to **3,687** characters (**26.52%**);
+- frame falls from **3,370** to **2,044** characters (**39.35%**).
 
 Partial-overlap smoke:
 
 - turn 1 returns 2 Evidence rows for `DrawCircularArc|RoundSuperellipseGeometry`;
 - turn 2 broadens to also include `_dispatch_cache_cleanup`, returning 3 canonical Evidence rows;
-- Context returns exactly **1 new Evidence** and reports **2 repeated Evidence**;
-- visible JSON falls from **3,330** to **3,055** characters (**8.2583%**).
+- Context returns exactly **1 new Evidence** and suppresses **2 repeated Evidence**;
+- JSON falls from **3,330** to **3,060** characters (**8.11%**);
+- frame falls from **1,781** to **1,299** characters (**27.06%**).
 
-This case is important because it proves the stateful projection is not only an all-or-nothing repeated-query cache: it can remove already-seen Evidence while retaining newly introduced Evidence on a real Mobile/iOS crash report.
+This case proves the stateful projection is not an all-or-nothing repeated-query cache: it removes already-seen Evidence while retaining newly introduced Evidence on a real Mobile/iOS crash report.
 
 ## Commands
 
 The benchmark helper is intentionally standard-library-only and experimental; it is not part of TraceCite's stable public API.
 
 ```bash
-# Validate case separation/schema
 python -m tracecite.benchmarking validate \
   benchmarks/agent-investigation/cases/kubernetes-140848
 
-# Download public source logs outside the repository and verify SHA-256
 python -m tracecite.benchmarking prepare \
   benchmarks/agent-investigation/cases/kubernetes-140848 \
   --work-dir /tmp/tracecite-bench
 
-# Score a JSONL Agent transcript
 python -m tracecite.benchmarking score \
   benchmarks/agent-investigation/cases/kubernetes-140848 \
   /tmp/run.jsonl
 
-# Aggregate multiple already-scored runs (for example 3 modes x several seeds)
 python benchmarks/agent-investigation/aggregate_scores.py \
   /tmp/scores/*.json --output /tmp/aggregate.json
 ```
