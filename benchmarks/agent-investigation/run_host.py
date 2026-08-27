@@ -15,7 +15,16 @@ from typing import Any, Mapping, Sequence
 from tracecite.benchmarking import validate_case
 
 
-MODES = ("shell_rg", "tracecite", "tracecite_context")
+MODES = (
+    "shell_rg",
+    "tracecite",
+    "tracecite_context",
+    "tracecite_intelligence",
+    "tracecite_investigate",
+)
+STATEFUL_MODES = frozenset(
+    {"tracecite_context", "tracecite_intelligence", "tracecite_investigate"}
+)
 _BASE_ENV = (
     "PATH",
     "HOME",
@@ -147,7 +156,7 @@ def run_host(
     question_name = str(case.get("question_file", "question.md"))
     question = case_dir / question_name
     selected_run_id = run_id or uuid.uuid4().hex
-    context_id = uuid.uuid4().hex if mode == "tracecite_context" else None
+    context_id = uuid.uuid4().hex if mode in STATEFUL_MODES else None
     output.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix=f"tracecite-bench-{case_id}-{mode}-") as temporary:
