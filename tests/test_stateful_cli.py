@@ -131,7 +131,11 @@ def test_frame_context_chooses_delta_by_frame_size(
     second_rendered = capsys.readouterr().out
     assert second_rendered.startswith("@TCF 1 search")
     assert len(second_rendered) < len(first_rendered)
-    assert "context_evidence_repeated=30" in second_rendered
+    # The transport contract is semantic, not tied to one internal Coverage
+    # key spelling. The selected delta has no Evidence rows and explicitly
+    # tells the Agent the citable Evidence was already seen.
+    assert "target event" not in second_rendered
+    assert "already seen in the selected Agent context" in second_rendered
 
     state = json.loads(
         (tmp_path / "_contexts" / "frame-case.json").read_text(encoding="utf-8")
