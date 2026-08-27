@@ -372,7 +372,7 @@ class ToolRuntime:
         reduction = reduce_evidence(
             graph,
             grouping,
-            policy=ReductionPolicy(seed_ids=tuple(self.seed_ids), max_evidence=24),
+            policy=ReductionPolicy(seed_ids=tuple(self.seed_ids), max_items=24),
         )
         package = build_evidence_package(graph, grouping, reduction, max_tokens=2400, recovery_limit=24)
         return _truncate(json.dumps(package.to_dict(), ensure_ascii=False, sort_keys=True))
@@ -430,7 +430,7 @@ class ToolRuntime:
             self.providers,
             seed_evidence_ids=(seed,),
             exploration_policy=ExplorationPolicy(max_depth=3, max_retrievals=20, max_no_growth_rounds=4),
-            reduction_policy=ReductionPolicy(seed_ids=(seed,), max_evidence=24),
+            reduction_policy=ReductionPolicy(seed_ids=(seed,), max_items=24),
             max_tokens=2400,
             recovery_limit=24,
         )
@@ -510,10 +510,12 @@ def run() -> int:
             name = str(call.get("name") or "")
             call_id = str(call.get("call_id") or "")
             raw_arguments = call.get("arguments")
+            args: dict[str, Any] = {}
             try:
-                args = json.loads(raw_arguments) if isinstance(raw_arguments, str) else {}
-                if not isinstance(args, dict):
+                decoded = json.loads(raw_arguments) if isinstance(raw_arguments, str) else {}
+                if not isinstance(decoded, dict):
                     raise ValueError("tool arguments must decode to an object")
+                args = decoded
                 started = time.monotonic()
                 output = runtime.call(name, args)
                 duration_ms = round((time.monotonic() - started) * 1000, 3)
@@ -527,7 +529,7 @@ def run() -> int:
                     "type": "tool",
                     "round": round_index,
                     "tool": name,
-                    "input": args if "args" in locals() else {},
+                    "input": args,
                     "output": output,
                     "duration_ms": duration_ms,
                 },
