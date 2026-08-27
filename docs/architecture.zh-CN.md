@@ -285,7 +285,7 @@ Agent 不能自行晋升 Knowledge。正式治理规则见[知识治理](knowled
 | Mobile Extension Protocol v2 迁移 | 待实现 |
 | Context Engine：Seen Evidence、跨轮去重、Context Delta、代表样本 | 待实现 |
 | MCP 基于 v2 Runtime/Context API 的适配 | 待实现 |
-| Mobile 真机与 CI 跨领域验收 | 部分实现：Mobile 离线 fixture 已有，真机与 CI 完整验收待执行 |
+| Mobile 真机与 CI 跨领域验收 | 部分实现：Mobile 离线 fixture 已有；设备与完整 CI 验收尚未完成 |
 
 演进顺序：先稳定公共 Contract 并完成文档/测试，再实现 Context Engine，再迁移 Mobile，最后让 MCP 只依赖公开 Runtime/Context API。
 
