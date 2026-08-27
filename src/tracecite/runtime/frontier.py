@@ -87,17 +87,17 @@ class ExpansionFrontier:
         self.dropped_limit = 0
 
     def add(self, entity: EntityRef, *, depth: int, discovered_from: str = "") -> bool:
-        if depth > self.policy.max_depth:
-            self.dropped_depth += 1
-            return False
-        if not self.policy.allows(entity):
-            self.dropped_kind += 1
-            return False
         key = entity.key
         if key in self._expanded:
             return False
         current = self._best_depth.get(key)
         if current is not None and current <= depth:
+            return False
+        if depth > self.policy.max_depth:
+            self.dropped_depth += 1
+            return False
+        if not self.policy.allows(entity):
+            self.dropped_kind += 1
             return False
         if current is None and len(self._best_depth) >= self.policy.max_frontier:
             self.dropped_limit += 1
