@@ -55,7 +55,7 @@ Context savings within each TraceCite transport:
 
 The result intentionally shows both sides of the trade-off. For a narrow query with one or a few matching lines, raw `rg` is still much smaller because it carries no Coverage, Ledger identity, or recovery metadata. TraceCite should therefore not claim that every individual search is cheaper than `rg`.
 
-The new finding is that a material part of TraceCite's small-query overhead was transport encoding rather than Evidence itself. On these public cases, TCF frame reduces plain TraceCite output relative to columnar JSON by roughly 20–58%, and frame + Context reduces the stateful output relative to JSON + Context by roughly 29–64%. Hosts that explicitly declare `text_frame` capability can therefore use `auto` to select `frame`; hosts that do not declare it continue to receive JSON.
+The new finding is that a material part of TraceCite's small-query overhead was transport encoding rather than Evidence itself. On these public cases, TCF frame reduces plain TraceCite output relative to columnar JSON by roughly 20–58%, and frame + Context reduces the stateful output relative to JSON + Context by roughly 29–64%. Hosts that explicitly declare `text_frame` capability can therefore use Host/Python `auto` negotiation to select `frame`; hosts that do not declare it continue to receive JSON.
 
 ### `kubernetes-140848`
 
@@ -112,23 +112,45 @@ This case proves the stateful projection is not an all-or-nothing repeated-query
 
 ## Commands
 
-The benchmark helper is intentionally standard-library-only and experimental; it is not part of TraceCite's stable public API.
+The benchmark helpers are intentionally experimental. Core does not depend on a provider SDK; a provider/Codex/Claude/custom Host is supplied as an external command.
 
 ```bash
+# 1. Validate evaluator/Agent separation and case schema.
 python -m tracecite.benchmarking validate \
   benchmarks/agent-investigation/cases/kubernetes-140848
 
+# 2. Download and SHA-256 verify the public source outside the repository.
 python -m tracecite.benchmarking prepare \
   benchmarks/agent-investigation/cases/kubernetes-140848 \
   --work-dir /tmp/tracecite-bench
 
+# 3. Run one isolated external Agent Host attempt.
+#    Provider credentials are NOT inherited unless explicitly named.
+python benchmarks/agent-investigation/run_host.py \
+  benchmarks/agent-investigation/cases/kubernetes-140848 \
+  /tmp/tracecite-bench/kubernetes-140848/prepared.json \
+  --mode tracecite_context \
+  --model provider/model \
+  --seed 1 \
+  --output /tmp/runs/kube-context-1.jsonl \
+  --pass-env PROVIDER_API_KEY \
+  -- python /path/to/agent_host_adapter.py
+
+# 4. Score that transcript against evaluator-only gold data.
 python -m tracecite.benchmarking score \
   benchmarks/agent-investigation/cases/kubernetes-140848 \
-  /tmp/run.jsonl
+  /tmp/runs/kube-context-1.jsonl
 
+# 5. Aggregate multiple already-scored runs.
 python benchmarks/agent-investigation/aggregate_scores.py \
   /tmp/scores/*.json --output /tmp/aggregate.json
 ```
+
+The external Host reads `TRACECITE_BENCH_*` environment variables and appends `model`, `tool`, and `final` events to `TRACECITE_BENCH_TRANSCRIPT`. The runner creates the only `session` event, copies only `QUESTION.md` + verified inputs into the temporary workspace, and generates a fresh `context_id` for `tracecite_context`.
+
+`run_host.py` reduces accidental environment leakage and validates/copies the workspace, but it is not an OS/container sandbox. The selected Host/container must enforce filesystem isolation and the rule that model-provider connectivity does not turn into browser/search/general network access. See [HOST_PROTOCOL.md](HOST_PROTOCOL.md).
+
+A publishable model-level comparison requires the same model/configuration across all three modes and at least three attempts per mode; retain failed, `unknown`, and incorrect runs rather than rerunning only the losing mode.
 
 ## Transcript schema
 
