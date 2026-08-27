@@ -90,19 +90,15 @@ def test_extension_loading_is_explicit_versioned_and_idempotent(monkeypatch) -> 
     )
     entry = _FakeEntryPoint(extension)
 
-    def extension_entry_points(**kwargs):
+    # tracecite.extension and tracecite_core.plugin_sdk both import the same
+    # importlib.metadata module object, so patch entry_points only once and
+    # route by group.
+    def fake_entry_points(**kwargs):
         if kwargs.get("group") == "tracecite.extensions":
             return [entry]
         return []
 
-    def core_entry_points(**kwargs):
-        return []
-
-    monkeypatch.setattr("tracecite.extension.metadata.entry_points", extension_entry_points)
-    monkeypatch.setattr(
-        "tracecite_core.plugin_sdk.metadata.entry_points",
-        core_entry_points,
-    )
+    monkeypatch.setattr("tracecite.extension.metadata.entry_points", fake_entry_points)
 
     assert "synthetic-domain-v2" not in available_runtimes()
     first = load_extensions()
