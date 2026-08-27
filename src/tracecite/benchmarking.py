@@ -13,6 +13,15 @@ from typing import Any, Iterable, Mapping
 
 SCHEMA_VERSION = 1
 USER_AGENT = "TraceCite-Agent-Investigation-Benchmark/1"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "cached_input_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -55,6 +64,11 @@ def validate_case(case_dir: Path) -> dict[str, Any]:
             for key in ("id", "url", "filename"):
                 if not isinstance(item.get(key), str) or not str(item[key]).strip():
                     errors.append(f"inputs[{index}].{key} must be a non-empty string")
+            expected_sha256 = item.get("sha256")
+            if not isinstance(expected_sha256, str) or _SHA256_RE.fullmatch(expected_sha256) is None:
+                errors.append(
+                    f"inputs[{index}].sha256 must be a 64-character lowercase SHA-256 digest"
+                )
 
     gold: dict[str, Any] = {}
     if gold_path.is_file():
@@ -107,8 +121,8 @@ def prepare_case(case_dir: Path, work_dir: Path) -> dict[str, Any]:
     for source in case["inputs"]:
         target = input_root / str(source["filename"])
         size, sha256 = _download(str(source["url"]), target)
-        expected = source.get("sha256")
-        if expected and expected != sha256:
+        expected = str(source["sha256"])
+        if expected != sha256:
             target.unlink(missing_ok=True)
             raise ValueError(
                 f"sha256 mismatch for {source['id']}: expected {expected}, got {sha256}"
@@ -161,6 +175,64 @@ def _marker_hit(text: str, marker: str) -> bool:
     return marker.casefold() in text.casefold()
 
 
+def _usage_mapping(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    usage = event.get("usage")
+    if isinstance(usage, Mapping):
+        return usage
+    if any(isinstance(event.get(field), int) for field in _USAGE_FIELDS):
+        return event
+    return None
+
+
+def _sum_usage(events: Iterable[Mapping[str, Any]]) -> tuple[dict[str, int | None], int]:
+    totals = {field: 0 for field in _USAGE_FIELDS}
+    observed = {field: 0 for field in _USAGE_FIELDS}
+    usage_events = 0
+    for event in events:
+        usage = _usage_mapping(event)
+        if usage is None:
+            continue
+        event_has_usage = False
+        for field in _USAGE_FIELDS:
+            value = usage.get(field)
+            if isinstance(value, int) and value >= 0:
+                totals[field] += value
+                observed[field] += 1
+                event_has_usage = True
+        if event_has_usage:
+            usage_events += 1
+    return (
+        {
+            field: totals[field] if observed[field] else None
+            for field in _USAGE_FIELDS
+        },
+        usage_events,
+    )
+
+
+def _reported_usage(
+    events: list[dict[str, Any]], tool_events: list[dict[str, Any]]
+) -> tuple[dict[str, int | None], str | None, int]:
+    """Return provider/model usage without double-counting legacy tool fields.
+
+    Modern benchmark hosts record provider-reported usage on ``model`` events.
+    When at least one model event carries canonical usage, those events are the
+    authoritative source. Older transcripts that only attached input/output
+    counts to tool events remain readable through a clearly labelled fallback.
+    """
+
+    model_events = [event for event in events if event.get("type") == "model"]
+    model_usage, model_usage_events = _sum_usage(model_events)
+    if model_usage_events:
+        return model_usage, "model_events", model_usage_events
+
+    legacy_usage, legacy_usage_events = _sum_usage(tool_events)
+    if legacy_usage_events:
+        return legacy_usage, "legacy_tool_fields", legacy_usage_events
+
+    return {field: None for field in _USAGE_FIELDS}, None, 0
+
+
 def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
     validate_case(case_dir)
     _, _, gold_path = _case_paths(case_dir)
@@ -176,19 +248,11 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
         evidence = []
 
     visible_outputs: list[str] = []
-    reported_input_tokens = 0
-    reported_output_tokens = 0
-    token_events = 0
     for event in tool_events:
         output = event.get("output", "")
         if not isinstance(output, str):
             output = json.dumps(output, ensure_ascii=False, sort_keys=True)
         visible_outputs.append(output)
-        if isinstance(event.get("input_tokens"), int):
-            reported_input_tokens += int(event["input_tokens"])
-            token_events += 1
-        if isinstance(event.get("output_tokens"), int):
-            reported_output_tokens += int(event["output_tokens"])
 
     output_chars = sum(len(item) for item in visible_outputs)
     unique_hashes: set[str] = set()
@@ -232,6 +296,7 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
     min_evidence = float(thresholds.get("evidence_marker_recall", 0.0))
     passed = bool(answer.strip()) and concept_recall >= min_concepts and evidence_recall >= min_evidence
 
+    reported_usage, usage_source, usage_events = _reported_usage(events, tool_events)
     session = next((event for event in events if event.get("type") == "session"), {})
     result = {
         "schema_version": SCHEMA_VERSION,
@@ -247,12 +312,19 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
         },
         "context_cost": {
             "tool_calls": len(tool_events),
+            "model_calls": len([event for event in events if event.get("type") == "model"]),
             "tool_output_chars": output_chars,
             "unique_tool_output_chars": unique_chars,
             "exact_duplicate_tool_output_chars": duplicate_chars,
             "estimated_tool_output_tokens_chars_div_4": math.ceil(output_chars / 4),
-            "reported_input_tokens": reported_input_tokens if token_events else None,
-            "reported_output_tokens": reported_output_tokens if token_events else None,
+            "usage_source": usage_source,
+            "usage_events": usage_events,
+            "reported_input_tokens": reported_usage["input_tokens"],
+            "reported_output_tokens": reported_usage["output_tokens"],
+            "reported_reasoning_tokens": reported_usage["reasoning_tokens"],
+            "reported_cached_input_tokens": reported_usage["cached_input_tokens"],
+            "reported_cache_read_input_tokens": reported_usage["cache_read_input_tokens"],
+            "reported_cache_creation_input_tokens": reported_usage["cache_creation_input_tokens"],
         },
     }
     return result

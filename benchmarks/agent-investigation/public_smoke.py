@@ -12,8 +12,25 @@ from typing import Any
 MAX_VISIBLE_EVIDENCE = 30
 MAX_VISIBLE_LINE_CHARS = 1024
 
+CASE_PROFILES: dict[str, dict[str, Any]] = {
+    "kubernetes-140848": {
+        "repeated_query": "panic|PodLevelResources|KubeletConfiguration|configz",
+        "overlap_queries": [
+            "failed to merge global and in-flight KubeletConfiguration while setting defaults",
+            "failed to merge global and in-flight KubeletConfiguration while setting defaults|PodLevelResourcesFixDefaulting",
+        ],
+    },
+    "flutter-179398": {
+        "repeated_query": "EXC_BAD_ACCESS|DrawCircularArc|RoundSuperellipse|_dispatch_cache_cleanup",
+        "overlap_queries": [
+            "DrawCircularArc|RoundSuperellipseGeometry",
+            "DrawCircularArc|RoundSuperellipseGeometry|_dispatch_cache_cleanup",
+        ],
+    },
+}
 
-def _run(command: list[str]) -> tuple[dict[str, Any], str]:
+
+def _run_text(command: list[str]) -> str:
     completed = subprocess.run(
         command,
         check=False,
@@ -27,10 +44,15 @@ def _run(command: list[str]) -> tuple[dict[str, Any], str]:
             f"command failed ({completed.returncode}): {' '.join(command)}\n"
             f"stdout={completed.stdout[-2000:]}\nstderr={completed.stderr[-2000:]}"
         )
-    payload = json.loads(completed.stdout)
+    return completed.stdout
+
+
+def _run_json(command: list[str]) -> tuple[dict[str, Any], str]:
+    rendered = _run_text(command)
+    payload = json.loads(rendered)
     if not isinstance(payload, dict):
         raise RuntimeError("TraceCite command did not return a JSON object")
-    return payload, completed.stdout
+    return payload, rendered
 
 
 def _rg(source: Path, query: str) -> tuple[int, str]:
@@ -76,7 +98,21 @@ def _evidence_count(payload: dict[str, Any]) -> int:
     return 0
 
 
-def _search_command(source: Path, query: str) -> list[str]:
+def _frame_evidence_count(rendered: str) -> int:
+    in_evidence = False
+    count = 0
+    for line in rendered.splitlines():
+        if line.startswith("@E "):
+            in_evidence = True
+            continue
+        if in_evidence and line.startswith("@"):
+            break
+        if in_evidence and line:
+            count += 1
+    return count
+
+
+def _search_command(source: Path, query: str, *, profile: str) -> list[str]:
     return [
         "tracecite",
         "search",
@@ -87,7 +123,7 @@ def _search_command(source: Path, query: str) -> list[str]:
         "--segmenter",
         "rawtext",
         "--agent-profile",
-        "stateful-index",
+        profile,
         "--max-output-chars",
         "12000",
         "--max-evidence",
@@ -115,8 +151,19 @@ def _read_context_state(root: Path, context_id: str) -> dict[str, Any]:
     return payload
 
 
+def _saving(baseline_chars: int, context_chars: int) -> dict[str, Any]:
+    return {
+        "visible_chars_saved": baseline_chars - context_chars,
+        "fraction_saved": round(
+            (baseline_chars - context_chars) / baseline_chars if baseline_chars else 0.0,
+            6,
+        ),
+    }
+
+
 def _experiment(
     *,
+    case_id: str,
     source: Path,
     root: Path,
     name: str,
@@ -125,63 +172,101 @@ def _experiment(
     if len(queries) != 2:
         raise ValueError("public smoke experiments require exactly two turns")
 
-    baseline_ledger = root / f"{name}-baseline-ledger"
-    context_ledger = root / f"{name}-context-ledger"
-    context_id = f"kubernetes-140848-{name}"
+    json_baseline_ledger = root / f"{case_id}-{name}-json-baseline-ledger"
+    json_context_ledger = root / f"{case_id}-{name}-json-context-ledger"
+    frame_baseline_ledger = root / f"{case_id}-{name}-frame-baseline-ledger"
+    frame_context_ledger = root / f"{case_id}-{name}-frame-context-ledger"
+    json_context_id = f"{case_id}-{name}-json"
+    frame_context_id = f"{case_id}-{name}-frame"
 
     rg_counts: list[int] = []
     rg_outputs: list[str] = []
-    baseline_outputs: list[tuple[dict[str, Any], str]] = []
-    context_outputs: list[tuple[dict[str, Any], str]] = []
+    json_baseline: list[tuple[dict[str, Any], str]] = []
+    json_context: list[tuple[dict[str, Any], str]] = []
+    frame_baseline: list[str] = []
+    frame_context: list[str] = []
+
     for query in queries:
         rg_count, rg_output = _rg(source, query)
         rg_counts.append(rg_count)
         rg_outputs.append(rg_output)
-        baseline_outputs.append(
-            _run(_search_command(source, query) + ["--ledger-dir", str(baseline_ledger)])
+
+        json_baseline.append(
+            _run_json(
+                _search_command(source, query, profile="stateful-index")
+                + ["--ledger-dir", str(json_baseline_ledger)]
+            )
         )
-        context_outputs.append(
-            _run(
-                _search_command(source, query)
+        json_context.append(
+            _run_json(
+                _search_command(source, query, profile="stateful-index")
                 + [
                     "--ledger-dir",
-                    str(context_ledger),
+                    str(json_context_ledger),
                     "--context-id",
-                    context_id,
+                    json_context_id,
+                ]
+            )
+        )
+        frame_baseline.append(
+            _run_text(
+                _search_command(source, query, profile="frame")
+                + ["--ledger-dir", str(frame_baseline_ledger)]
+            )
+        )
+        frame_context.append(
+            _run_text(
+                _search_command(source, query, profile="frame")
+                + [
+                    "--ledger-dir",
+                    str(frame_context_ledger),
+                    "--context-id",
+                    frame_context_id,
                 ]
             )
         )
 
-    baseline_counts = [_evidence_count(item[0]) for item in baseline_outputs]
-    context_counts = [_evidence_count(item[0]) for item in context_outputs]
-    context_meta = dict((context_outputs[1][0].get("data") or {}).get("context") or {})
-    context_state = _read_context_state(context_ledger, context_id)
-    baseline_visible = [item[1] for item in baseline_outputs]
-    context_visible = [item[1] for item in context_outputs]
-    baseline_cost = _cost(baseline_visible)
-    context_cost = _cost(context_visible)
+    json_baseline_counts = [_evidence_count(item[0]) for item in json_baseline]
+    json_context_counts = [_evidence_count(item[0]) for item in json_context]
+    frame_baseline_counts = [_frame_evidence_count(item) for item in frame_baseline]
+    frame_context_counts = [_frame_evidence_count(item) for item in frame_context]
+
+    json_context_meta = dict((json_context[1][0].get("data") or {}).get("context") or {})
+    json_state = _read_context_state(json_context_ledger, json_context_id)
+    frame_state = _read_context_state(frame_context_ledger, frame_context_id)
+
+    json_baseline_cost = _cost([item[1] for item in json_baseline])
+    json_context_cost = _cost([item[1] for item in json_context])
+    frame_baseline_cost = _cost(frame_baseline)
+    frame_context_cost = _cost(frame_context)
     rg_cost = _cost(rg_outputs)
 
     if min(rg_counts) < 1:
-        raise AssertionError(f"{name}: rg returned no evidence: {rg_counts}")
-    if baseline_counts[0] < 1 or baseline_counts[1] < 1:
-        raise AssertionError(f"{name}: baseline search returned no evidence: {baseline_counts}")
-    if context_counts[0] < 1:
-        raise AssertionError(f"{name}: Context first turn returned no evidence")
-    if context_counts[1] > baseline_counts[1]:
-        raise AssertionError(f"{name}: Context cannot add Evidence beyond the ordinary Agent view")
-    if int(context_state.get("revision") or 0) != 2:
-        raise AssertionError(f"{name}: Context state did not advance across both turns")
-
-    baseline_chars = int(baseline_cost["visible_chars_two_turns"])
-    context_chars = int(context_cost["visible_chars_two_turns"])
-    if context_chars > baseline_chars:
+        raise AssertionError(f"{case_id}/{name}: rg returned no evidence: {rg_counts}")
+    if min(json_baseline_counts) < 1 or min(frame_baseline_counts) < 1:
         raise AssertionError(
-            f"{name}: gain-aware Context view became larger than ordinary TraceCite: "
-            f"{context_chars} > {baseline_chars}"
+            f"{case_id}/{name}: baseline search returned no evidence: "
+            f"json={json_baseline_counts} frame={frame_baseline_counts}"
         )
+    if json_context_counts[0] < 1 or frame_context_counts[0] < 1:
+        raise AssertionError(f"{case_id}/{name}: Context first turn returned no evidence")
+    if json_context_counts[1] > json_baseline_counts[1]:
+        raise AssertionError(f"{case_id}/{name}: JSON Context added Evidence")
+    if frame_context_counts[1] > frame_baseline_counts[1]:
+        raise AssertionError(f"{case_id}/{name}: frame Context added Evidence")
+    if int(json_state.get("revision") or 0) != 2 or int(frame_state.get("revision") or 0) != 2:
+        raise AssertionError(f"{case_id}/{name}: Context state did not advance across both turns")
 
-    projection = "delta" if context_meta else "canonical_fallback"
+    json_baseline_chars = int(json_baseline_cost["visible_chars_two_turns"])
+    json_context_chars = int(json_context_cost["visible_chars_two_turns"])
+    frame_baseline_chars = int(frame_baseline_cost["visible_chars_two_turns"])
+    frame_context_chars = int(frame_context_cost["visible_chars_two_turns"])
+    if json_context_chars > json_baseline_chars:
+        raise AssertionError(f"{case_id}/{name}: JSON Context view became larger")
+    if frame_context_chars > frame_baseline_chars:
+        raise AssertionError(f"{case_id}/{name}: frame Context view became larger")
+
+    json_projection = "delta" if json_context_meta else "canonical_fallback"
     return {
         "queries": queries,
         "shell_rg": {
@@ -189,25 +274,49 @@ def _experiment(
             "semantics": "rg -m 30; each model-visible line capped at 1024 characters; no Coverage or recovery metadata",
             **rg_cost,
         },
-        "tracecite": {
-            "evidence_per_turn": baseline_counts,
-            **baseline_cost,
+        "tracecite_json": {
+            "evidence_per_turn": json_baseline_counts,
+            **json_baseline_cost,
         },
-        "tracecite_context": {
-            "evidence_per_turn": context_counts,
-            **context_cost,
-            "second_turn_projection": projection,
-            "second_turn_context": context_meta,
+        "tracecite_json_context": {
+            "evidence_per_turn": json_context_counts,
+            **json_context_cost,
+            "second_turn_projection": json_projection,
+            "second_turn_context": json_context_meta,
             "state_after_two_turns": {
-                "revision": context_state.get("revision"),
-                "seen_evidence": len(context_state.get("seen_evidence") or []),
-                "seen_results": len(context_state.get("seen_results") or []),
+                "revision": json_state.get("revision"),
+                "seen_evidence": len(json_state.get("seen_evidence") or []),
+                "seen_results": len(json_state.get("seen_results") or []),
             },
         },
-        "context_vs_tracecite": {
-            "visible_chars_saved": baseline_chars - context_chars,
-            "fraction_saved": round(
-                (baseline_chars - context_chars) / baseline_chars if baseline_chars else 0.0,
+        "json_context_vs_json": _saving(json_baseline_chars, json_context_chars),
+        "tracecite_frame": {
+            "evidence_per_turn": frame_baseline_counts,
+            **frame_baseline_cost,
+        },
+        "tracecite_frame_context": {
+            "evidence_per_turn": frame_context_counts,
+            **frame_context_cost,
+            "state_after_two_turns": {
+                "revision": frame_state.get("revision"),
+                "seen_evidence": len(frame_state.get("seen_evidence") or []),
+                "seen_results": len(frame_state.get("seen_results") or []),
+            },
+        },
+        "frame_context_vs_frame": _saving(frame_baseline_chars, frame_context_chars),
+        "frame_vs_json": {
+            "plain_visible_chars_saved": json_baseline_chars - frame_baseline_chars,
+            "plain_fraction_saved": round(
+                (json_baseline_chars - frame_baseline_chars) / json_baseline_chars
+                if json_baseline_chars
+                else 0.0,
+                6,
+            ),
+            "context_visible_chars_saved": json_context_chars - frame_context_chars,
+            "context_fraction_saved": round(
+                (json_context_chars - frame_context_chars) / json_context_chars
+                if json_context_chars
+                else 0.0,
                 6,
             ),
         },
@@ -223,32 +332,37 @@ def run_smoke(prepared_manifest: Path, output: Path) -> dict[str, Any]:
     if not source.is_file():
         raise FileNotFoundError(source)
 
-    repeated_query = "panic|PodLevelResources|KubeletConfiguration|configz"
+    case_id = str(prepared.get("case_id") or "")
+    profile = CASE_PROFILES.get(case_id)
+    if profile is None:
+        raise ValueError(f"no public transport smoke profile for case: {case_id}")
+
+    repeated_query = str(profile["repeated_query"])
     repeated = _experiment(
+        case_id=case_id,
         source=source,
         root=output.parent,
         name="repeated",
         queries=[repeated_query, repeated_query],
     )
-    if repeated["tracecite_context"]["evidence_per_turn"][1] != 0:
-        raise AssertionError("repeated-query second turn should use the smaller all-seen delta")
-    if repeated["tracecite_context"]["second_turn_projection"] != "delta":
-        raise AssertionError("repeated-query experiment should select the smaller delta view")
+    if repeated["tracecite_json_context"]["evidence_per_turn"][1] != 0:
+        raise AssertionError("repeated-query JSON second turn should use the smaller all-seen delta")
+    if repeated["tracecite_json_context"]["second_turn_projection"] != "delta":
+        raise AssertionError("repeated-query JSON experiment should select the smaller delta view")
+    if repeated["tracecite_frame_context"]["evidence_per_turn"][1] != 0:
+        raise AssertionError("repeated-query frame second turn should use the smaller all-seen delta")
 
-    exact_panic = "failed to merge global and in-flight KubeletConfiguration while setting defaults"
     overlapping = _experiment(
+        case_id=case_id,
         source=source,
         root=output.parent,
         name="overlap",
-        queries=[
-            exact_panic,
-            f"{exact_panic}|PodLevelResourcesFixDefaulting",
-        ],
+        queries=[str(item) for item in profile["overlap_queries"]],
     )
 
     result = {
-        "schema_version": 1,
-        "case_id": prepared.get("case_id"),
+        "schema_version": 2,
+        "case_id": case_id,
         "source_bytes": inputs[0].get("bytes"),
         "source_sha256": inputs[0].get("sha256"),
         "warning": "Fixed-query transport comparison only. It does not measure model reasoning, diagnosis accuracy, or total Agent tokens.",

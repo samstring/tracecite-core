@@ -42,7 +42,7 @@ def _search_payload(count: int = 1, *, label_suffix: str = "") -> dict[str, obje
     }
 
 
-def _argv(tmp_path) -> list[str]:
+def _argv(tmp_path, *, profile: str = "stateful-index", context_id: str = "case-1") -> list[str]:
     return [
         "search",
         "events.log",
@@ -50,9 +50,9 @@ def _argv(tmp_path) -> list[str]:
         "--ledger-dir",
         str(tmp_path),
         "--agent-profile",
-        "stateful-index",
+        profile,
         "--context-id",
-        "case-1",
+        context_id,
     ]
 
 
@@ -113,6 +113,31 @@ def test_context_id_uses_delta_when_repeated_evidence_savings_are_real(
     stored = cli.EvidenceLedger(tmp_path).load(result_id)
     assert stored == canonical
     assert (tmp_path / "_contexts" / "case-1.json").is_file()
+
+
+def test_frame_context_chooses_delta_by_frame_size(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    canonical = _search_payload(30, label_suffix=" " + ("x" * 200))
+    monkeypatch.setattr(cli, "search", lambda *_args, **_kwargs: canonical)
+    argv = _argv(tmp_path, profile="frame", context_id="frame-case")
+
+    assert stateful_cli.main(argv) == 0
+    first_rendered = capsys.readouterr().out
+    assert first_rendered.startswith("@TCF 1 search")
+    assert "target event" in first_rendered
+
+    assert stateful_cli.main(argv) == 0
+    second_rendered = capsys.readouterr().out
+    assert second_rendered.startswith("@TCF 1 search")
+    assert len(second_rendered) < len(first_rendered)
+    assert "context_evidence_repeated=30" in second_rendered
+
+    state = json.loads(
+        (tmp_path / "_contexts" / "frame-case.json").read_text(encoding="utf-8")
+    )
+    assert state["revision"] == 2
+    assert len(state["seen_evidence"]) == 30
 
 
 def test_smaller_agent_view_never_selects_a_larger_delta() -> None:
