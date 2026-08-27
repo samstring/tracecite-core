@@ -1,75 +1,260 @@
-# TraceCite Extension Contract v1
+# TraceCite Extension Contract v2
 
-目标：第三方不修改、不 fork TraceCite，通过独立 Python 包提供自己的数据来源、解析、断言、报告和领域调查流程。
+目标：第三方不修改、不 fork TraceCite，通过稳定、声明式、可独立版本化的契约提供领域数据、语义与能力；Runtime 内部实现、Agent 上下文策略和宿主适配可以持续演进，而无需反复修改领域扩展。
 
-## 产品边界
+## 1. 产品边界
 
 ```text
-外部 Agent / CLI / MCP
-          |
-   TraceCite Runtime
-     /          \
-Core Evidence   Domain Extensions
-                Mobile / CI / Third-party
+Agent / CLI / MCP
+       |
+Integration / Agent Projection
+       |
+Investigation Runtime
+       |
+Evidence Core
+       ^
+       |
+Extension Protocol v2
+       |
+Mobile / CI / Backend / Third-party
 ```
-
-一个 `tracecite` 发行包包含 Core、Runtime、Extension API 与通用集成；Mobile、CI 和公司能力是独立扩展包。
 
 最重要的控制原则：
 
-> Extension 提供能力和语义；Runtime 控制执行、预算、证据引用、验证、安全门禁和停止条件。
+> Extension 提供领域事实和能力；Runtime 控制执行、预算、Evidence、验证、安全、停止和 Agent Context。
 
-## v1 公共扩展面
+Extension 不感知当前 LLM、Token 策略、ContextPack、Seen Evidence、Context Delta 或 MCP tool schema。
 
-Core `PluginAPI` 支持注册：
+## 2. 顶层协议
 
-- Source provider
-- Segmenter、声明式 format 与 detector
-- Preprocessor
-- Event transformer
+v2 不再把可变的 `ExtensionAPI.register_xxx()` 注册表面作为公共入口。扩展声明一个 `TraceCiteExtension`：
 
-Runtime `ExtensionAPI` 支持注册：
+```python
+from tracecite.extension import ExtensionManifest, TraceCiteExtension
 
-- Assertion type
-- Report outputter
-- 命名 `ScenarioRuntime`
+EXTENSION = TraceCiteExtension(
+    manifest=ExtensionManifest(
+        id="my-domain",
+        version="1.0.0",
+        domain="my-domain",
+    ),
+    capabilities=(...),
+)
 
-`ScenarioRuntime` 可注入 profile、preset/子场景解析、上下文文件、插件元数据和运行时版本。领域扩展自己保存 Marker、Pattern、Knowledge、Scenario、设备及产品适配。
 
-## 发现与加载
+def extension() -> TraceCiteExtension:
+    return EXTENSION
+```
 
-扩展通过 Python entry point 声明：
+推荐 entry point：
 
 ```toml
 [project.entry-points."tracecite.extensions"]
-my_domain = "my_tracecite.extension"
+my_domain = "my_tracecite.extension:extension"
 ```
 
-入口必须声明 `TRACECITE_EXTENSION_API = "1"`，并提供 `register(api)`。加载器校验 API 版本、记录 distribution 元数据、保证同一入口幂等；注册冲突默认失败，替换必须显式请求。
+加载仍然是显式动作；仅 `import tracecite` 不执行第三方代码。Host 通过 `load_extensions()` 或相应 CLI 动作加载已安装扩展。
 
-扩展加载不会发生在 `import tracecite` 时。调用方必须执行 `tracecite extension load`、为 `run` 传 `--load-extensions`，或显式调用 `load_extensions()`。
+## 3. ExtensionManifest
 
-## 安全与可信度不允许扩展改写
+`ExtensionManifest` 只描述稳定身份：
 
-- 默认 Runtime 禁止 live source 和 action。
-- Extension 不能更改 Evidence、Result、Manifest 和 Verify 的语义。
-- Evidence 必须可追溯；缺失证据必须允许结果为 `unknown`。
-- Extension 不能把 Agent 结论直接晋升为可信 Knowledge。
-- 插件加载失败应结构化报告；非 strict 模式下隔离单个失败。
-- 运行输出必须受证据条数、上下文大小、时间和展开预算约束。
+- `id`：全局扩展 ID。
+- `version`：扩展发行版本。
+- `domain`：领域标识。
+- `description`：可选说明。
+- `protocol_version`：顶层 Extension Protocol，当前为 `2`。
 
-## 兼容策略
+Manifest 不保存 Runtime 实现、Agent profile、Token 预算或领域数据。
 
-- `tracecite_core` 继续作为稳定 Core 公共 import。
-- Agent-facing Runtime 只通过 `tracecite` 与 `tracecite.runtime` 暴露，不存在独立 Agent 包。
-- 删除旧入口前，必须先发布迁移说明、设定版本窗口，并让 Mobile 与 CI 同时通过领域验收。
+## 4. Capability 模型
 
-## v1 尚未声称解决
+顶层协议保持极小；新增能力优先增加独立版本 Capability，而不是修改 `TraceCiteExtension`。
 
-- 通用 Marker / Pattern / Knowledge semantic registry。
-- Knowledge 自动成长或自动晋升。
-- 扩展沙箱或进程级隔离。
-- MCP、Codex Skill、Claude 等平台适配。
-- Mobile 和 CI 的真实跨领域通用性证明。
+当前 Capability Contract：
 
-这些能力必须在领域验收后按真实需求继续演进，避免先造一个过胖 Runtime。
+| kind | v | 用途 |
+|---|---:|---|
+| `core.plugins` | 1 | 打包低层 `PluginAPI` 注册：Source、Segmenter、Format、Detector、Preprocessor、Event Transformer |
+| `agent.capability` | 1 | 暴露有界 query/action，并复用 Runtime safety gate |
+| `runtime.assertion` | 1 | 领域 Assertion |
+| `runtime.report` | 1 | 领域 Reporter |
+| `runtime.scenario` | 1 | profile、preset/subscenario resolver、context files 等 Scenario 领域能力 |
+
+Capability 版本独立于 Extension Protocol。未来只升级某个 Capability 时，不要求其他能力同时升级。
+
+同一个扩展内 `(kind, name)` 不允许重复。注册冲突默认失败；v2 不提供隐式 replace 行为。
+
+## 5. Scenario 边界
+
+v1 允许扩展注册命名 `ScenarioRuntime`。v2 改为 `ScenarioCapability`：
+
+```text
+Domain Extension
+  -> ScenarioCapability
+  -> Generic Investigation Runtime
+```
+
+当前实现内部仍可把 `ScenarioCapability` 适配成 `ScenarioRuntime`，用于复用现有 Scenario 执行器；这是实现细节，不是新的公共依赖。领域扩展不得导入或持有 Runtime 内部 registry 来改变执行控制权。
+
+## 6. 稳定领域值对象
+
+### EvidenceRef
+
+领域侧对 Evidence 的稳定引用。它描述 source、范围、摘要和有限 metadata，但不绑定 Agent 看到的短 ID 或 URI 表示。
+
+```text
+Extension: EvidenceRef
+Core/Store: canonical pointer / digest
+Agent View: E17 等短引用
+```
+
+因此未来 Agent transport 改变不会要求领域扩展迁移。
+
+### Coverage
+
+所有有界、抽样、近似、截断或不完整能力都应显式返回 Coverage。通用字段包括：
+
+- `complete`
+- `scanned`
+- `returned`
+- `omitted`
+- `truncated`
+- `reasons`
+- `details`
+
+领域特有 Coverage 可以进入 `details`，但不能静默省略不完整性。
+
+### DomainEvent
+
+`DomainEvent` 描述结构化领域事实：
+
+```python
+DomainEvent(
+    type="mobile.network.request_failed",
+    timestamp="...",
+    severity="error",
+    attributes={"status": 504, "endpoint": "/home"},
+    evidence=(ref,),
+)
+```
+
+Event 可以包含 `type`、`timestamp`、`severity`、`attributes`、`evidence`。
+
+它**不能**把以下内容伪装成事实：
+
+- 当前问题的 relevance/rank。
+- token priority。
+- root cause。
+- `supported` / `contradicted` Finding。
+
+这些属于 Runtime/Agent 调查阶段。
+
+### SourceDescriptor / SourceCursor / SourceChunk
+
+通用 Source 不限定为本地文件：
+
+- `SourceDescriptor` 描述逻辑 source。
+- `SourceCursor` 是领域拥有的 opaque progress token。
+- `SourceChunk` 返回 records、`next_cursor` 与 Coverage。
+
+Cursor 可以映射为文件 byte/line offset、live segment、远程 continuation token、数据库 `(timestamp,id)` 等。Runtime 不解析 token 语义，只将其交还给对应 capability。
+
+### CapabilityResult[T]
+
+领域 capability 推荐使用统一执行 envelope：
+
+```python
+CapabilityResult(
+    status="ok",
+    value=...,
+    evidence=(...),
+    coverage=Coverage(...),
+    diagnostics=(...),
+)
+```
+
+`status` 只表示执行成功/失败。它不能替代 Investigation 的 epistemic `outcome`。
+
+## 7. 低层 Core PluginAPI
+
+`tracecite_core.PluginAPI` 仍是低层 Evidence Core 的公共插件协议，当前版本独立维护。Domain Extension 若需要打包 Source/Segmenter/Preprocessor/Event Transformer 注册，可通过 `CorePluginCapability` 提供 registrar，由主包在安装扩展时传入 `PluginAPI`。
+
+这样 Core Plugin 与 Domain Extension 顶层协议解耦：一个协议升级不强制另一个整体升级。
+
+## 8. Agent Capability 与安全
+
+`AgentCapability` 复用 `CapabilitySpec` 和 Runtime registry。领域只声明：
+
+- dotted name
+- `query` / `action`
+- description / input schema
+- `read` / `live_source` / `live_action`
+- 是否需要显式 authorization
+- deterministic executor
+
+Runtime 继续拥有 safety gate。Extension 不能绕过 live-source/live-action 授权。
+
+## 9. 发现、加载与失败隔离
+
+- `tracecite.extensions` entry point 返回 `TraceCiteExtension`，或返回/导出 `extension()` / `EXTENSION`。
+- loader 校验顶层协议和 Capability version。
+- 同一 entry point 默认幂等。
+- `strict=True` 时加载失败终止；非 strict 模式结构化记录单个失败。
+- Distribution 名称和版本属于加载 provenance，不写入领域事实。
+- 导入主包不会自动发现或执行扩展。
+
+## 10. 不允许扩展改写的语义
+
+Extension 不能：
+
+- 修改 Canonical Evidence、Result、Manifest、Verify 的语义。
+- 把 Agent 推理文本作为独立 Evidence。
+- 把 Agent Finding 自动晋升为 Knowledge。
+- 静默隐藏 Coverage 缺口。
+- 控制 Runtime 的 token/context 策略。
+- 为某个 Agent 平台生成专属结果并作为 canonical domain output。
+- 绕过预算、live safety 或 authorization gate。
+
+## 11. Context / Token 边界
+
+Context 优化属于 Runtime/Integration：
+
+```text
+Canonical Result / Evidence
+        |
+Runtime Context Engine
+  dedupe / seen / group / delta / budget
+        |
+Agent Projection
+        |
+Host
+```
+
+因此以下概念不会加入 Extension Protocol：
+
+- ContextPack / AgentView
+- Seen Evidence
+- Context Delta
+- token estimate / model tokenizer
+- Agent profile
+- MCP tool surface
+- stop hint based on context gain
+
+Domain Extension 只需提供足够结构化、可追溯的事实和 capability；Runtime 可以在不改变 Extension 的情况下迭代这些策略。
+
+## 12. 版本与兼容策略
+
+- Extension Protocol 当前为 `2`。
+- Capability 各自独立版本。
+- 不兼容的顶层协议变化必须新增 ADR、迁移说明、测试和领域验收。
+- 新能力优先作为新的可选 Capability；不要为了一个新功能增加新的顶层 `register_xxx`。
+- Persisted Investigation/Knowledge/Manifest schema 的版本与 Extension Protocol 相互独立。
+
+v1 `ExtensionAPI` / `TRACECITE_EXTENSION_API = "1"` / `register(api)` 属于已被 v2 替代的公共模型。迁移见 [Extension v1 -> v2](migrations/extension-protocol-v2.zh-CN.md)。
+
+## 13. 当前状态
+
+Core 已实现 v2 声明式 Contract、Capability version 校验、显式 loader，以及到现有 Scenario/Assertion/Reporter/Agent Capability registry 的内部适配。
+
+Mobile 迁移和新的 Context Engine 在后续阶段执行；在完成对应测试前不能把它们描述成已完成。MCP 最后只接 Runtime/Context 公共接口，不直接依赖 Extension 内部 registry。

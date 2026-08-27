@@ -1,40 +1,23 @@
 # TraceCite
 
-**Agent context gateway for AI debugging agents.**
+**An extensible Evidence Runtime for AI debugging agents.**
 
-TraceCite controls what log evidence enters the agent's context window.
-It freezes inputs, returns line-addressable evidence pointers, verifies their
-provenance, and keeps the full record on disk for on-demand expansion.
-Domain packages add collection and semantics without modifying the gateway kernel.
-
-TraceCite is **not a replacement for grep** and is **not a token optimizer**.
-Against skilled `grep | head` usage it is typically not cheaper in tokens — it
-is **bounded, auditable, and resistant to over-inference**.
+TraceCite handles large, changing data through bounded, verifiable, traceable Evidence. It is not an embedded autonomous LLM agent: external agents reason, while TraceCite owns deterministic data operations, investigation state, budgets, safety, Coverage, and evidence integrity.
 
 ```text
-Raw data -> Core evidence -> Runtime tools -> Your Agent
-                                  ^
-                                  |
-                       Domain extensions
-                  Mobile / CI / third-party
+raw data -> Evidence Core -> Investigation Runtime -> Agent / CLI / MCP
+                 ^                 ^
+                 |                 |
+            Core plugins    Extension Protocol v2
+                                 |
+                          Mobile / CI / third-party
 ```
 
-TraceCite is infrastructure **for** Codex, Claude, ChatGPT, or a custom agent.
-It does not embed another LLM agent.
-
-## Install
+## Install and use
 
 ```bash
 pip install tracecite
-```
 
-The package has no runtime dependencies outside the Python standard library.
-Python 3.10 or newer on Linux and macOS is supported. Windows is not currently
-supported because TraceCite's atomic state locking relies on POSIX `flock`.
-
-## Agent-facing tools
-
-```bash
 tracecite probe ./logs --glob "*.log" --recursive
 tracecite search app.log "timeout|OOM" --regex --snapshot
 tracecite expand .tracecite/snapshots/app.log 120 --before 5 --after 10
@@ -42,93 +25,88 @@ tracecite verify .tracecite/runs/<run-id>/manifest.json
 tracecite run scenario.json
 ```
 
-Every command returns deterministic JSON. `status` describes whether execution
-succeeded; `outcome` separately describes what the evidence supports. A valid
-zero-match search is not an execution error and does not prove absence.
+TraceCite requires Python 3.10+ and supports Linux and macOS. Windows is not currently supported because atomic state locking relies on POSIX `flock`. The main package has no runtime dependencies outside the Python standard library.
 
-Before connecting Codex, Claude, or another host, read the
-[external Agent integration guide](docs/agent-integration.md). It includes the
-tool loop, Result JSON contract, exit codes, safety rules, and a reusable test
-prompt.
+Core commands return deterministic JSON. `status` reports execution state while `outcome` reports epistemic state supported by Evidence; zero matches do not prove that a problem did not happen.
 
-The normative [architecture design](docs/architecture.md) defines the common
-investigation protocol, evidence and knowledge model, extension boundaries,
-implementation status, and the rules for future architectural evolution.
+See the [Agent integration guide](docs/agent-integration.md) and the [normative architecture](docs/architecture.md).
 
-The lower-level evidence CLI remains available as `tracecite-core`.
+## Layers
 
-## Stable kernel, public extension boundary
+- `tracecite_core`: Source, Segmenter, Sample, Survey, Filter, Snapshot, Evidence, Manifest, Verify, and low-level Plugin SDK.
+- `tracecite.runtime`: Investigation, Scenario, Assertion, Reporting, budgets, cache, safety gates, and Agent Capabilities.
+- `tracecite.extension`: declarative Extension Protocol v2 and stable domain contracts.
+- `tracecite.integrations`: CLI plus Agent-facing transport/projection; MCP evolves as a separate adapter project.
+- `tracecite.knowledge`: Knowledge Candidate, independent validation, review, versioning, and expiry.
 
-One main distribution contains four logical layers:
+Domain semantics do not enter Core or Runtime. `tracecite-mobile` is a separate official domain extension and a real validation consumer of the public contracts.
 
-- `tracecite_core`: evidence, source, segment, transform, snapshot, manifest,
-  verification, and the low-level plugin SDK.
-- `tracecite.runtime`: scenario, assertion, reporting, result schema, budgets,
-  stop/safety gates, and agent-facing tools.
-- `tracecite.extension`: the versioned third-party registration contract.
-- `tracecite.integrations`: CLI now; MCP and agent-platform adapters later.
+## Extension Protocol v2
 
-Domain semantics do not belong in the main package. The official
-`tracecite-mobile` project is an extension and a contract dogfood project.
-
-## Build an extension without forking TraceCite
+v2 no longer requires domain packages to receive an ever-growing `ExtensionAPI.register_xxx()` surface. An extension declares its identity and capabilities:
 
 ```toml
-[project]
-name = "my-company-tracecite"
-dependencies = ["tracecite>=0.1,<0.2"]
-
 [project.entry-points."tracecite.extensions"]
-my_domain = "my_tracecite.extension"
+my_domain = "my_tracecite.extension:extension"
 ```
 
 ```python
-from tracecite.extension import ExtensionAPI
-from tracecite.runtime import ScenarioRuntime
-
-TRACECITE_EXTENSION_API = "1"
-MY_RUNTIME = ScenarioRuntime(
-    load_profile=load_profile,
-    resolve_scenario_pattern=resolve_pattern,
+from tracecite.extension import (
+    ExtensionManifest,
+    ScenarioCapability,
+    TraceCiteExtension,
 )
 
-def register(api: ExtensionAPI) -> None:
-    api.register_runtime("my-domain", MY_RUNTIME)
+EXTENSION = TraceCiteExtension(
+    manifest=ExtensionManifest(
+        id="my-domain",
+        version="1.0.0",
+        domain="my-domain",
+    ),
+    capabilities=(
+        ScenarioCapability(
+            name="my-domain",
+            load_profile=load_profile,
+            resolve_scenario_pattern=resolve_pattern,
+        ),
+    ),
+)
+
+
+def extension() -> TraceCiteExtension:
+    return EXTENSION
 ```
 
-Loading third-party code is explicit:
+The top-level protocol stays small while capabilities are independently versioned. Current public contribution types include Core plugin bundles, Agent Capability, Assertion, Report, and Scenario Capability. See [Extension Contract v2](docs/extension-contract.md) and the [v1 to v2 migration](docs/migrations/extension-protocol-v2.md).
 
-```bash
-tracecite extension load
-tracecite run scenario.json --runtime my-domain --load-extensions
-```
+## Stable domain data contracts
 
-Importing `tracecite` alone never executes installed extension registration
-code. Registration conflicts fail by default, API versions are checked, and
-the default Runtime does not grant live-source or action capabilities.
+v2 provides generic values that do not depend on a specific Agent or transport:
 
-See [the extension contract](docs/extension-contract.md) and the
-[pending domain-validation checklist](docs/validation-checklist.md). Agent
-knowledge uses the separate
-[proposal, verification, and promotion lifecycle](docs/knowledge-governance.md).
+- `EvidenceRef`: a domain-side evidence reference independent from Agent URI/short-ID representation.
+- `Coverage`: coverage, omission, truncation, and approximation metadata.
+- `DomainEvent`: structured domain facts without relevance/root-cause/token-priority verdicts.
+- `SourceDescriptor` / `SourceCursor` / `SourceChunk`: incremental sources including files, live streams, and remote APIs.
+- `CapabilityResult[T]`: a uniform execution envelope; execution `status` remains separate from Finding `outcome`.
 
-## Design principles
+## Agent context principle
 
-- **Bounded output, not bounded cost** — search caps evidence count (agent default 30, configurable via `--max-evidence`); `--max-line-chars` and `--max-output-chars` cap agent-facing text; full artifacts remain on disk.
-- Evidence is traceable, not automatically complete or true.
-- `unknown` and `missing_evidence` are first-class results.
-- Agent conclusions never promote themselves into trusted knowledge.
-- Extensions add capabilities and semantics; Runtime retains execution,
-  evidence, verification, budget, and safety control.
-- Core never imports Runtime or domain packages; Runtime never imports domains.
+Canonical Results and full Evidence remain recoverable; Agent-facing views may be compressed. Agent profiles, compact projection, Evidence Ledger, and `expand-many` already exist.
 
-## Status
+Seen Evidence, cross-turn deduplication, Context Delta, representative Evidence grouping, and token/context budgets belong to Runtime/Integration and **do not enter the Domain Extension API**. That boundary allows Context Engine, MCP, or model-platform changes without forcing Mobile/CI rewrites.
 
-The internal Runtime consolidation and compatibility layer are implemented.
-Mobile's public-extension and PlatformBackend contracts pass offline iOS and
-Android fixtures; real-device acceptance and the CI domain pilot remain
-pending. MCP and other agent-platform adapters follow only after those
-contracts are validated.
+## Safety and trust
+
+- Evidence is traceable but does not automatically equal complete truth.
+- `unknown`, `missing_evidence`, and Coverage gaps are first-class states.
+- Agent conclusions cannot automatically promote themselves to trusted Knowledge.
+- Domain Extensions cannot bypass Runtime budget, live-source/live-action, or authorization gates.
+- Core does not import Runtime or domains; Runtime does not import Mobile/CI.
+- `import tracecite` does not execute third-party Extensions; discovery is explicit.
+
+## Current status
+
+Core Extension Protocol v2 contracts, declarative loading, capability-version checks, and adaptation to current Runtime registries are implemented and pass the Core matrix. Mobile v2 migration, the stronger Context Engine, and MCP v2 integration continue in that order; incomplete phases are not presented as implemented.
 
 ## License
 
