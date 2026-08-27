@@ -10,6 +10,9 @@ from tracecite.runtime import tools
 from tracecite.integrations import cli
 
 
+VALID_REF = "evidence://sha256/" + ("a" * 64) + "#L2"
+
+
 def _store(tmp_path: Path) -> InvestigationStore:
     store = InvestigationStore(tmp_path / "investigation.json")
     store.create("why did the request fail?", scope={"sources": ["app.log"]})
@@ -34,10 +37,12 @@ def test_investigation_lifecycle_persists_version_and_links(tmp_path: Path) -> N
             "data": {"raw": "x" * 100_000},
             "evidence": [
                 {
-                    "uri": "evidence://sha256/abc#L2",
+                    "uri": VALID_REF,
                     "metadata": {"text": "raw log " * 100_000},
                 }
             ],
+            "coverage": {"complete": True},
+            "verification": {"integrity_checked": True},
         },
         hypothesis_id="H1",
         test_id="T1",
@@ -46,7 +51,8 @@ def test_investigation_lifecycle_persists_version_and_links(tmp_path: Path) -> N
         "H1",
         "supported",
         "timeout evidence was found",
-        supporting_evidence=["evidence://sha256/abc#L2"],
+        supporting_evidence=[VALID_REF],
+        coverage={"complete": True},
     )
     completed = store.stop("the hypothesis was evaluated")
 
@@ -259,8 +265,6 @@ def test_persisted_execution_over_budget_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(InvestigationError, match="execution.evidence 元素过多"):
         store.load()
 
-    # A state file must not claim that an over-budget error is canonical just
-    # because a recording flag is present; persisted errors are strict too.
     raw["executions"][0]["evidence"] = [{"uri": "evidence://one"}]
     raw["executions"][0]["error"] = {"message": "x" * 4_097}
     raw["executions"][0]["recording"]["error_truncated"] = True
