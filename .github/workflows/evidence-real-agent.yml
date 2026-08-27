@@ -91,7 +91,6 @@ jobs:
               --output "$transcript" \
               --pass-env OPENAI_API_KEY \
               --pass-env OPENAI_BASE_URL \
-              --pass-env TRACECITE_BENCH_MAX_TURNS \
               --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
               -- python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_host.py"
             python -m tracecite.benchmarking score "$case_dir" "$transcript" > "$score"
@@ -101,7 +100,6 @@ jobs:
             --output /tmp/tracecite-real-runs/aggregate.json
           cat /tmp/tracecite-real-runs/aggregate.json
         env:
-          TRACECITE_BENCH_MAX_TURNS: "6"
           TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1800"
       - name: Upload pilot results
         if: always()
