@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "provider": "client",
+  "source": "client-log-export",
+  "evidence": [
+    {
+      "id": "client:callback",
+      "kind": "client_log",
+      "timestamp": "2026-08-27T10:03:13.050Z",
+      "severity": "error",
+      "label": "payment callback arrived for a released target",
+      "entities": [
+        {"namespace": "app", "kind": "session", "value": "S88"},
+        {"namespace": "edge", "kind": "request", "value": "R19"}
+      ],
+      "attributes": {"message": "callback target is no longer active"}
+    },
+    {
+      "id": "client:heartbeat-1",
+      "kind": "client_log",
+      "timestamp": "2026-08-27T10:03:10Z",
+      "severity": "debug",
+      "label": "heartbeat 1001",
+      "entities": [
+        {"namespace": "app", "kind": "session", "value": "S88"}
+      ],
+      "attributes": {"message": "heartbeat 1001"}
+    },
+    {
+      "id": "client:heartbeat-2",
+      "kind": "client_log",
+      "timestamp": "2026-08-27T10:03:10.500Z",
+      "severity": "debug",
+      "label": "heartbeat 1002",
+      "entities": [
+        {"namespace": "app", "kind": "session", "value": "S88"}
+      ],
+      "attributes": {"message": "heartbeat 1002"}
+    }
+  ],
+  "relations": []
+}
