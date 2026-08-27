@@ -13,6 +13,7 @@ from typing import Any, Iterable, Mapping
 
 SCHEMA_VERSION = 1
 USER_AGENT = "TraceCite-Agent-Investigation-Benchmark/1"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -55,6 +56,11 @@ def validate_case(case_dir: Path) -> dict[str, Any]:
             for key in ("id", "url", "filename"):
                 if not isinstance(item.get(key), str) or not str(item[key]).strip():
                     errors.append(f"inputs[{index}].{key} must be a non-empty string")
+            expected_sha256 = item.get("sha256")
+            if not isinstance(expected_sha256, str) or _SHA256_RE.fullmatch(expected_sha256) is None:
+                errors.append(
+                    f"inputs[{index}].sha256 must be a 64-character lowercase SHA-256 digest"
+                )
 
     gold: dict[str, Any] = {}
     if gold_path.is_file():
@@ -107,8 +113,8 @@ def prepare_case(case_dir: Path, work_dir: Path) -> dict[str, Any]:
     for source in case["inputs"]:
         target = input_root / str(source["filename"])
         size, sha256 = _download(str(source["url"]), target)
-        expected = source.get("sha256")
-        if expected and expected != sha256:
+        expected = str(source["sha256"])
+        if expected != sha256:
             target.unlink(missing_ok=True)
             raise ValueError(
                 f"sha256 mismatch for {source['id']}: expected {expected}, got {sha256}"
