@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "flutter-179398",
+  "title": "Intermittent iOS fatal crash around Cupertino list deletion",
+  "source_issue": "https://github.com/flutter/flutter/issues/179398",
+  "fix_reference": "https://github.com/flutter/flutter/commit/e09862d718f1c2b111434c2f8787f8b5e8524bfc",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "ios-crash-report",
+      "url": "https://gist.github.com/jonmountjoy/44d2ef560a5c82161ce4a0bbc061e898/raw/",
+      "filename": "crash-report.txt",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "flutter/flutter",
+    "issue_state": "closed",
+    "issue_closed_at": "2026-08-17",
+    "public_log": true,
+    "maintainer_confirmation": "Flutter maintainers identified the report as the same arbitrary-memory-corruption bug fixed by e09862d; the fix landed in 3.39.",
+    "notes": "The Agent prompt omits the issue title, suspected subsystem, related issue, maintainer comments, and fix commit."
+  }
+}
