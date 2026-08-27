@@ -1,7 +1,7 @@
 """Mechanical validation for proposed investigation Findings.
 
 The validator intentionally checks only claims TraceCite can verify from
-InvestigationState.  It does not interpret natural-language causality.  Its job
+InvestigationState. It does not interpret natural-language causality. Its job
 is to prevent a host from presenting an ungrounded decisive Finding as if it
 were TraceCite-validated.
 """
@@ -12,14 +12,19 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Sequence
 
-from .investigation import FINDING_OUTCOMES, InvestigationError, InvestigationState, InvestigationStore
+from .investigation import (
+    FINDING_OUTCOMES,
+    InvestigationError,
+    InvestigationState,
+    InvestigationStore,
+)
 
 _EVIDENCE_URI_RE = re.compile(
     r"^evidence://sha256/(?P<digest>[0-9a-fA-F]{64})"
     r"#L(?P<start>[1-9][0-9]*)(?:-L(?P<end>[1-9][0-9]*))?$"
 )
 _DECISIVE_OUTCOMES = frozenset({"supported", "contradicted"})
-_BLOCKING_STATUSES = frozenset({"partial", "error"})
+_BLOCKING_STATUSES = frozenset({"partial", "error", "no_match"})
 
 
 @dataclass(frozen=True)
@@ -104,10 +109,8 @@ def validate_finding(
 
     Decisive Findings must be grounded in at least one executed Test, cite only
     immutable line-addressable Evidence produced by those executions, and have
-    no explicit execution/coverage gaps. ``no_match`` is never accepted as
-    decisive proof by itself, and an execution that explicitly reports failed
-    integrity verification cannot certify a Finding. ``unknown`` remains valid
-    with less evidence because uncertainty is the safe fallback.
+    no explicit execution/coverage gaps. ``unknown`` remains valid with less
+    evidence because uncertainty is the safe fallback.
     """
 
     state = store_or_state.load() if isinstance(store_or_state, InvestigationStore) else store_or_state
@@ -169,22 +172,19 @@ def validate_finding(
             status = str(execution.get("status") or "").strip().lower()
             if status == "no_match":
                 reasons.append("linked_execution_no_match")
-            elif status in _BLOCKING_STATUSES:
+            elif status in {"partial", "error"}:
                 reasons.append("linked_execution_incomplete")
-
             recording = execution.get("recording") or {}
             if isinstance(recording, Mapping) and any(
                 recording.get(key) is True
                 for key in ("evidence_truncated", "warnings_truncated", "error_truncated")
             ):
                 reasons.append("linked_execution_truncated")
-
+            if _coverage_has_blocking_gap(execution.get("coverage") or {}):
+                reasons.append("linked_execution_coverage_gap")
             verification = execution.get("verification") or {}
             if isinstance(verification, Mapping) and verification.get("integrity_checked") is False:
                 reasons.append("linked_execution_unverified")
-
-            if _coverage_has_blocking_gap(execution.get("coverage") or {}):
-                reasons.append("linked_execution_coverage_gap")
 
         if _coverage_has_blocking_gap(coverage or {}):
             reasons.append("finding_coverage_gap")
@@ -207,3 +207,57 @@ def validate_finding(
         supporting_evidence=tuple(support),
         contradicting_evidence=tuple(contradiction),
     )
+
+
+# Enforce the epistemic gate at the persistence boundary while preserving
+# exploration flexibility. Decisive findings that fail validation are rejected
+# without mutating InvestigationState, so the hypothesis remains open and the
+# Agent can continue investigating. Explicit ``unknown`` findings remain
+# writable through the original state transition.
+_ORIGINAL_ADD_FINDING = InvestigationStore.add_finding
+
+
+def _validated_add_finding(
+    self: InvestigationStore,
+    hypothesis_id: str,
+    outcome: str,
+    summary: str,
+    *,
+    supporting_evidence: Sequence[str] = (),
+    contradicting_evidence: Sequence[str] = (),
+    coverage: Mapping[str, Any] | None = None,
+    limitations: Sequence[str] = (),
+) -> Dict[str, Any]:
+    requested_outcome = str(outcome or "").strip().lower()
+    if requested_outcome in _DECISIVE_OUTCOMES:
+        validation = validate_finding(
+            self,
+            hypothesis_id,
+            requested_outcome,
+            supporting_evidence=supporting_evidence,
+            contradicting_evidence=contradicting_evidence,
+            coverage=coverage,
+        )
+        if not validation.valid:
+            reasons = ", ".join(validation.reasons) or "unknown"
+            raise InvestigationError(
+                "Finding Validation 拒绝未经验证的决定性结论；"
+                f"requested_outcome={requested_outcome}, reasons={reasons}. "
+                "调查状态未修改，可继续探索或显式记录 unknown Finding。"
+            )
+    return _ORIGINAL_ADD_FINDING(
+        self,
+        hypothesis_id,
+        requested_outcome,
+        summary,
+        supporting_evidence=supporting_evidence,
+        contradicting_evidence=contradicting_evidence,
+        coverage=coverage,
+        limitations=limitations,
+    )
+
+
+InvestigationStore.add_finding = _validated_add_finding
+
+
+__all__ = ["FindingValidationResult", "validate_finding"]
