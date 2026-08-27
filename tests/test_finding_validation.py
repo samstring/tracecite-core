@@ -126,6 +126,7 @@ def test_valid_supported_finding_passes_mechanical_validation(tmp_path: Path) ->
             "outcome": "not_assessed",
             "evidence": [{"uri": EVIDENCE}],
             "coverage": {"complete": True},
+            "verification": {"integrity_checked": True},
         },
         hypothesis_id="H1",
         test_id="T1",
@@ -154,3 +155,101 @@ def test_unknown_is_safe_without_evidence_or_execution(tmp_path: Path) -> None:
     assert result.valid is True
     assert result.validated_outcome == "unknown"
     assert result.reasons == ()
+
+
+def test_adversarial_no_match_cannot_be_used_as_decisive_proof(tmp_path: Path) -> None:
+    """A hostile host must not turn a successful zero-match search into proof."""
+
+    store = _store(tmp_path)
+    store.record_execution(
+        "search",
+        {
+            "status": "no_match",
+            "outcome": "unknown",
+            # Deliberately attach a syntactically valid pointer to simulate a
+            # hostile/malformed host result trying to make no_match look citable.
+            "evidence": [{"uri": EVIDENCE}],
+            "coverage": {"complete": True},
+            "verification": {"integrity_checked": True},
+        },
+        hypothesis_id="H1",
+        test_id="T1",
+    )
+
+    result = validate_finding(
+        store,
+        "H1",
+        "supported",
+        supporting_evidence=[EVIDENCE],
+    )
+
+    assert result.valid is False
+    assert result.validated_outcome == "unknown"
+    assert "linked_execution_no_match" in result.reasons
+
+
+def test_adversarial_unverified_evidence_cannot_be_certified(tmp_path: Path) -> None:
+    """A valid-looking evidence URI is insufficient when integrity was not checked."""
+
+    store = _store(tmp_path)
+    store.record_execution(
+        "search",
+        {
+            "status": "ok",
+            "outcome": "not_assessed",
+            "evidence": [{"uri": EVIDENCE}],
+            "coverage": {"complete": True},
+            "verification": {"integrity_checked": False},
+        },
+        hypothesis_id="H1",
+        test_id="T1",
+    )
+
+    result = validate_finding(
+        store,
+        "H1",
+        "supported",
+        supporting_evidence=[EVIDENCE],
+    )
+
+    assert result.valid is False
+    assert result.validated_outcome == "unknown"
+    assert "linked_execution_unverified" in result.reasons
+
+
+def test_adversarial_evidence_from_other_hypothesis_is_rejected(tmp_path: Path) -> None:
+    """Evidence recorded under a different investigation branch cannot be stolen."""
+
+    store = _store(tmp_path)
+    store.add_hypothesis("the request succeeded", hypothesis_id="H2")
+    store.add_test(
+        "H2",
+        "inspect success records",
+        expected_observation="success is present",
+        contradicting_observation="success is absent",
+        test_id="T2",
+    )
+    store.record_execution(
+        "search",
+        {
+            "status": "ok",
+            "outcome": "not_assessed",
+            "evidence": [{"uri": EVIDENCE}],
+            "coverage": {"complete": True},
+            "verification": {"integrity_checked": True},
+        },
+        hypothesis_id="H2",
+        test_id="T2",
+    )
+
+    result = validate_finding(
+        store,
+        "H1",
+        "supported",
+        supporting_evidence=[EVIDENCE],
+    )
+
+    assert result.valid is False
+    assert result.validated_outcome == "unknown"
+    assert "test_not_executed" in result.reasons
+    assert "evidence_not_from_linked_test" in result.reasons
