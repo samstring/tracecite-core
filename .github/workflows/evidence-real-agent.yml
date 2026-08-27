@@ -1,6 +1,11 @@
 name: Evidence Real Agent Pilot
 
 on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - ".github/workflows/evidence-real-agent.yml"
   workflow_dispatch:
 
 permissions:
@@ -43,13 +48,9 @@ jobs:
           import urllib.error
           import urllib.request
           from pathlib import Path
-
           base = os.environ["OPENAI_BASE_URL"].rstrip("/")
           key = os.environ["OPENAI_API_KEY"]
-          req = urllib.request.Request(
-              f"{base}/models",
-              headers={"Authorization": f"Bearer {key}"},
-          )
+          req = urllib.request.Request(f"{base}/models", headers={"Authorization": f"Bearer {key}"})
           try:
               with urllib.request.urlopen(req, timeout=60) as response:
                   payload = json.loads(response.read().decode("utf-8"))
@@ -57,11 +58,7 @@ jobs:
               print(f"Model catalog probe unavailable: HTTP {exc.code}; continuing with configured model.")
               raise SystemExit(0)
           data = payload.get("data", []) if isinstance(payload, dict) else []
-          ids = sorted(
-              str(item.get("id"))
-              for item in data
-              if isinstance(item, dict) and item.get("id")
-          )
+          ids = sorted(str(item.get("id")) for item in data if isinstance(item, dict) and item.get("id"))
           Path("/tmp/tracecite-provider-models.txt").write_text("\n".join(ids) + "\n", encoding="utf-8")
           print(f"Available models reported by provider: {len(ids)}")
           for model_id in ids:
