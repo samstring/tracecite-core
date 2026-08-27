@@ -20,6 +20,23 @@ def encoded_json(payload: Any) -> str:
     )
 
 
+def prefer_smaller_agent_view(candidate: Mapping[str, Any], fallback: Mapping[str, Any]) -> dict[str, Any]:
+    """Return ``candidate`` only when it is strictly cheaper to serialize.
+
+    Agent-context optimizations are optional projections over recoverable
+    canonical data.  A projection that saves too little payload to cover its
+    own metadata should not make the Agent turn larger.  Ties deliberately keep
+    the fallback so enabling an optimization never increases model-visible
+    transport cost.
+    """
+
+    candidate_view = dict(candidate)
+    fallback_view = dict(fallback)
+    if len(encoded_json(candidate_view)) < len(encoded_json(fallback_view)):
+        return candidate_view
+    return fallback_view
+
+
 def dedupe_survey_coverage(coverage: Mapping[str, Any]) -> dict[str, Any]:
     """Collapse synonymous survey coverage keys for agent transport."""
 
@@ -170,4 +187,5 @@ __all__ = [
     "dedupe_survey_coverage",
     "encoded_json",
     "lightweight_result",
+    "prefer_smaller_agent_view",
 ]
