@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Sequence
 
 from . import cli
+from .agent_projection import prefer_smaller_agent_view
 from .context_engine import ContextEngine
 
 
@@ -67,14 +68,6 @@ def _search_command(argv: Sequence[str]) -> bool:
     return bool(argv) and argv[0] == "search"
 
 
-def _smaller_agent_view(delta: dict, baseline: dict) -> dict:
-    """Choose delta only when it really reduces serialized Agent context."""
-
-    if len(cli.encoded_json(delta)) < len(cli.encoded_json(baseline)):
-        return delta
-    return baseline
-
-
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -97,7 +90,7 @@ def main(
 
         def context_compact(payload, *, max_output_chars=None):
             # Compute the ordinary view first so Context optimization has a
-            # same-budget baseline.  The canonical Result has already been
+            # same-budget baseline. The canonical Result has already been
             # stored in the private Ledger at this point.
             baseline = original_compact(
                 payload,
@@ -115,7 +108,7 @@ def main(
                 projected,
                 max_output_chars=max_output_chars,
             )
-            return _smaller_agent_view(delta, baseline)
+            return prefer_smaller_agent_view(delta, baseline)
 
         cli._compact_search_result = context_compact
         try:
