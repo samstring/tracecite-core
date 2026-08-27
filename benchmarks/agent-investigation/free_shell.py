@@ -81,7 +81,7 @@ def tools(files: Sequence[Path]) -> list[dict[str, Any]]:
                 "Run one read-only local analysis utility directly inside the isolated evidence directory. "
                 "You freely choose the utility and arguments. No shell expansion, pipes, network tools, "
                 "write-capable flags, subprocess-spawning flags, or arbitrary code execution are available. "
-                "Evidence files: " + names
+                "Every args item must be a string. Evidence files: " + names
             ),
             {
                 "program": {"type": "string", "enum": list(ALLOWED_PROGRAMS)},
@@ -122,13 +122,15 @@ def _validate_program_args(program: str, argv: Sequence[str]) -> None:
 
 class Runtime(common.ToolRuntime):
     def _shell_exec(self, args: Mapping[str, Any]) -> str:
-        program = str(args.get("program") or "")
-        if program not in ALLOWED_PROGRAMS:
+        program = args.get("program")
+        if not isinstance(program, str) or program not in ALLOWED_PROGRAMS:
             raise ValueError(f"program is not allowed: {program}")
         raw_args = args.get("args")
         if not isinstance(raw_args, list) or len(raw_args) > 32:
             raise ValueError("args must be an array with at most 32 items")
-        argv = [_validate_arg(str(value)) for value in raw_args]
+        if not all(isinstance(value, str) for value in raw_args):
+            raise ValueError("every shell argument must be a string")
+        argv = [_validate_arg(value) for value in raw_args]
         _validate_program_args(program, argv)
         env = {
             "PATH": os.environ.get("PATH", ""),
