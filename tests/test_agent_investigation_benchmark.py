@@ -3,24 +3,36 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tracecite.benchmarking import score_transcript, validate_case
 
 
-CASE_DIR = (
+CASES_ROOT = (
     Path(__file__).resolve().parents[1]
     / "benchmarks"
     / "agent-investigation"
     / "cases"
-    / "kubernetes-140848"
 )
+KUBERNETES_CASE = CASES_ROOT / "kubernetes-140848"
+FLUTTER_CASE = CASES_ROOT / "flutter-179398"
 
 
-def test_kubernetes_case_is_valid_and_does_not_leak_gold() -> None:
-    result = validate_case(CASE_DIR)
+@pytest.mark.parametrize(
+    ("case_dir", "case_id", "forbidden"),
+    [
+        (KUBERNETES_CASE, "kubernetes-140848", "PodLevelResourcesFixDefaulting"),
+        (FLUTTER_CASE, "flutter-179398", "RoundSuperellipse"),
+    ],
+)
+def test_real_world_case_is_valid_and_does_not_leak_gold(
+    case_dir: Path, case_id: str, forbidden: str
+) -> None:
+    result = validate_case(case_dir)
     assert result["status"] == "ok"
-    assert result["case_id"] == "kubernetes-140848"
-    question = (CASE_DIR / "question.md").read_text(encoding="utf-8")
-    assert "PodLevelResourcesFixDefaulting" not in question
+    assert result["case_id"] == case_id
+    question = (case_dir / "question.md").read_text(encoding="utf-8")
+    assert forbidden not in question
 
 
 def test_benchmark_scores_quality_and_context_cost(tmp_path: Path) -> None:
@@ -53,7 +65,7 @@ def test_benchmark_scores_quality_and_context_cost(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = score_transcript(CASE_DIR, transcript)
+    result = score_transcript(KUBERNETES_CASE, transcript)
     assert result["passed"] is True
     assert result["quality"]["concept_recall"] == 1.0
     assert result["quality"]["evidence_marker_recall"] == 1.0
@@ -78,7 +90,7 @@ def test_benchmark_counts_exact_duplicate_visible_output(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    result = score_transcript(CASE_DIR, transcript)
+    result = score_transcript(KUBERNETES_CASE, transcript)
     assert result["context_cost"]["tool_output_chars"] == len(repeated) * 2
     assert result["context_cost"]["unique_tool_output_chars"] == len(repeated)
     assert result["context_cost"]["exact_duplicate_tool_output_chars"] == len(repeated)
