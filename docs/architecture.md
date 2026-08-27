@@ -215,7 +215,9 @@ Progressive disclosure is a base strategy:
 metadata -> bounded sample/survey -> EvidencePointer -> on-demand expand -> full Artifact
 ```
 
-Canonical Evidence and Results remain complete and recoverable. Agent-facing projections may compress them but must retain required Coverage, truncation signals, and recovery paths. Runtime already provides budgets, Agent profiles, compact projection, Evidence Ledger, and `expand-many`. Seen Evidence, cross-turn deltas, representative grouping, and a stronger Context Engine belong to Runtime/Integration evolution and do not enter the Extension Protocol.
+Canonical Evidence and Results remain complete and recoverable. Agent-facing projections may compress them but must retain required Coverage, truncation signals, and recovery paths. Runtime/Integration provides budgets, Agent profiles, compact projection, Evidence Ledger, `expand-many`, bounded Seen Evidence, and persistent cross-turn Context Delta. The Context Engine stores transport memory separately from InvestigationState and applies delta only after the canonical Result is recoverable. See [Context Engine](context-engine.md).
+
+Representative Evidence grouping and semantic compaction remain later Runtime/Integration optimizations and do not enter Extension Protocol v2.
 
 Token reduction must never hide missing Evidence, approximation, parsing failure, or Coverage gaps.
 
@@ -258,12 +260,13 @@ The main package supplies mechanisms; domains supply facts and semantics:
 | Agent profile, compact projection, Evidence Ledger, `expand-many` | implemented |
 | Agent Capability Registry and live safety gates | implemented |
 | Declarative Extension Protocol v2 and internal Scenario adaptation | implemented |
-| Mobile Extension Protocol v2 migration | planned |
-| Context Engine: Seen Evidence, cross-turn dedupe, Context Delta, representative samples | planned |
-| MCP adapter on v2 Runtime/Context APIs | planned |
-| Mobile device and CI cross-domain validation | partially implemented: Mobile offline fixtures exist; device and full CI validation remain |
+| Mobile Extension Protocol v2 migration | implemented |
+| Context Engine: Seen Evidence, cross-turn dedupe, Context Delta | implemented |
+| Representative Evidence grouping / semantic compaction | planned |
+| MCP adapter on v2 Runtime/Context APIs | implemented |
+| Mobile device and CI cross-domain validation | partially implemented: automated Mobile real-log/matrix validation exists; real-device and a separate CI-domain extension validation remain |
 
-Evolution order is contract/document/test first, then Context Engine, then Mobile migration, and finally MCP consuming only public Runtime/Context APIs.
+The contract → Context Engine → Mobile → MCP migration sequence is complete on the refactor branches. Remaining validation priorities are real Agent-host/token benchmarks, real-device Mobile acceptance, and a second independent domain such as CI before generalizing additional domain concepts into the main package.
 
 ## 12. Architecture evolution and maintenance
 
