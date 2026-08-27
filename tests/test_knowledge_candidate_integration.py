@@ -26,13 +26,27 @@ def _ready(tmp_path: Path, *, outcome: str = "supported") -> tuple[Investigation
         strategy={"operation": "search", "query": "timeout"},
         test_id="T1",
     )
+    if outcome in {"supported", "contradicted"}:
+        evidence_ref = SUPPORT_REF if outcome == "supported" else CONTRADICT_REF
+        state.record_execution(
+            "search",
+            {
+                "status": "ok",
+                "outcome": "not_assessed",
+                "evidence": [{"uri": evidence_ref}],
+                "coverage": {"records": 1, "complete": True},
+                "verification": {"integrity_checked": True},
+            },
+            hypothesis_id="H1",
+            test_id="T1",
+        )
     finding = state.add_finding(
         "H1",
         outcome,
         "timeout evidence was found" if outcome == "supported" else "not enough evidence",
         supporting_evidence=[SUPPORT_REF] if outcome == "supported" else (),
         contradicting_evidence=[CONTRADICT_REF] if outcome == "contradicted" else (),
-        coverage={"records": 1, "complete": False},
+        coverage={"records": 1, "complete": True} if outcome != "unknown" else {},
         limitations=["one bounded sample"],
     )
     return state, finding
@@ -51,7 +65,7 @@ def test_supported_finding_proposal_contains_refs_scope_tests_and_source(
         exclusions=["synthetic test traffic"],
     )
 
-    assert candidate.status == "candidate"  # independent review is still required
+    assert candidate.status == "candidate"
     assert candidate.payload["investigation_id"] == "INV-1"
     assert candidate.payload["hypothesis_claim"] == "the request timed out"
     assert candidate.payload["outcome"] == "supported"
@@ -59,12 +73,12 @@ def test_supported_finding_proposal_contains_refs_scope_tests_and_source(
     assert candidate.payload["exclusions"] == ["synthetic test traffic"]
     assert candidate.payload["supporting_refs"] == [SUPPORT_REF]
     assert candidate.payload["contradicting_refs"] == []
-    assert candidate.payload["coverage"] == {"records": 1, "complete": False}
+    assert candidate.payload["coverage"] == {"records": 1, "complete": True}
     assert candidate.payload["limitations"] == ["one bounded sample"]
     assert candidate.payload["test_strategy"][0]["strategy"]["query"] == "timeout"
     assert candidate.payload["test_recipes"][0]["expected_observation"] == "timeout is present"
     assert candidate.payload["source_schema"] == 1
-    assert candidate.payload["source_revision"] == 3
+    assert candidate.payload["source_revision"] == 4
 
     persisted = json.loads(state.path.read_text(encoding="utf-8"))
     link = persisted["knowledge_candidates"]
@@ -72,8 +86,6 @@ def test_supported_finding_proposal_contains_refs_scope_tests_and_source(
     assert link[0]["candidate_id"] == candidate.id
     assert link[0]["finding_id"] == finding["id"]
     assert link[0]["status"] == "candidate"
-    # The investigation contains only a pointer/status record, not candidate
-    # payload or review data.
     assert "payload" not in link[0]
     assert "hypothesis_claim" not in json.dumps(link)
 
