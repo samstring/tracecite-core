@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_id": "kubernetes-140848",
+  "confirmed_by": [
+    "https://github.com/kubernetes/kubernetes/issues/140848",
+    "https://github.com/kubernetes/kubernetes/pull/140853"
+  ],
+  "summary": "The kubelet panics while loading/defaulting its configuration because PodLevelResourcesFixDefaulting is enabled while its dependency PodLevelResources is disabled. The process is restarted and panics again, so /configz becomes unavailable and the e2e test later reports a context deadline exceeded symptom.",
+  "required_concepts": [
+    {
+      "id": "kubelet-panic",
+      "patterns": ["kubelet.{0,80}panic", "panic.{0,80}kubelet", "panics? (at|during) startup"]
+    },
+    {
+      "id": "feature-gate-conflict",
+      "patterns": ["PodLevelResourcesFixDefaulting.{0,180}PodLevelResources", "PodLevelResources.{0,180}PodLevelResourcesFixDefaulting"]
+    },
+    {
+      "id": "dependency-validation",
+      "patterns": ["depends? on.{0,120}disabled", "feature gate.{0,120}dependenc", "dependency (check|validation)"]
+    },
+    {
+      "id": "timeout-is-downstream",
+      "patterns": ["configz.{0,160}(downstream|symptom|unavailable|timeout)", "(panic|restart).{0,180}configz"]
+    }
+  ],
+  "evidence_markers": [
+    "failed to merge global and in-flight KubeletConfiguration while setting defaults",
+    "PodLevelResourcesFixDefaulting is enabled",
+    "disabled: [PodLevelResources]"
+  ],
+  "thresholds": {
+    "concept_recall": 0.75,
+    "evidence_marker_recall": 0.6667
+  },
+  "leak_terms": [
+    "PodLevelResourcesFixDefaulting",
+    "failed to merge global and in-flight KubeletConfiguration while setting defaults"
+  ]
+}
