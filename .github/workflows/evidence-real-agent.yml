@@ -1,17 +1,6 @@
 name: Evidence Real Agent Pilot
 
 on:
-  push:
-    branches:
-      - experiment/evidence-intelligence
-    paths:
-      - "benchmarks/agent-investigation/openai_host.py"
-      - "benchmarks/agent-investigation/gmi_host.py"
-      - "benchmarks/agent-investigation/run_host.py"
-      - "benchmarks/agent-investigation/aggregate_scores.py"
-      - "benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence/**"
-      - ".github/workflows/evidence-real-agent.yml"
-      - "src/tracecite/**"
   workflow_dispatch:
 
 permissions:
@@ -117,7 +106,7 @@ jobs:
           cat /tmp/tracecite-real-runs/aggregate.json
         env:
           TRACECITE_BENCH_MAX_TURNS: "4"
-          TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1800"
+          TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1000"
       - name: Upload pilot results
         if: always()
         uses: actions/upload-artifact@v4
