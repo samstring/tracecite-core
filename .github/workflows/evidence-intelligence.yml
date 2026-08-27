@@ -1,0 +1,35 @@
+name: Evidence Intelligence Benchmark
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+      - name: Run architecture governance
+        run: python scripts/check_architecture.py
+      - name: Run Evidence Intelligence tests
+        run: >-
+          python -m pytest -q
+          tests/test_evidence_orchestrator.py
+          tests/test_evidence_investigation_loop_benchmark.py
+          tests/test_agent_benchmark_evidence_modes.py
+      - name: Print correlation and reduction benchmark
+        run: python -m tracecite.evidence_benchmarking
+      - name: Print deterministic exploration benchmark
+        run: >-
+          python -m tracecite.evidence_investigation_benchmarking
+          benchmarks/evidence-intelligence/cases/mobile-payment-crash
