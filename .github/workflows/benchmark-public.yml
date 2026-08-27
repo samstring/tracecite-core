@@ -38,9 +38,15 @@ jobs:
           benchmarks/agent-investigation/cases/${{ matrix.case }}
           --work-dir /tmp/tracecite-public-inputs
 
-  kubernetes-140848-transport:
+  transport:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        case:
+          - kubernetes-140848
+          - flutter-179398
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -56,16 +62,16 @@ jobs:
       - name: Validate leak-free case
         run: >-
           python -m tracecite.benchmarking validate
-          benchmarks/agent-investigation/cases/kubernetes-140848
-      - name: Download public kubelet log
+          benchmarks/agent-investigation/cases/${{ matrix.case }}
+      - name: Download public source input
         run: >-
           python -m tracecite.benchmarking prepare
-          benchmarks/agent-investigation/cases/kubernetes-140848
+          benchmarks/agent-investigation/cases/${{ matrix.case }}
           --work-dir /tmp/tracecite-public-bench
       - name: Run two-turn Context Engine smoke
         run: >-
           python benchmarks/agent-investigation/public_smoke.py
-          /tmp/tracecite-public-bench/kubernetes-140848/prepared.json
-          --output /tmp/tracecite-public-bench/kubernetes-140848/report.json
+          /tmp/tracecite-public-bench/${{ matrix.case }}/prepared.json
+          --output /tmp/tracecite-public-bench/${{ matrix.case }}/report.json
       - name: Show report
-        run: cat /tmp/tracecite-public-bench/kubernetes-140848/report.json
+        run: cat /tmp/tracecite-public-bench/${{ matrix.case }}/report.json
