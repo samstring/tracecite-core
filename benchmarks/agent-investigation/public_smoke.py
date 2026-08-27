@@ -105,6 +105,16 @@ def _cost(outputs: list[str]) -> dict[str, Any]:
     }
 
 
+def _read_context_state(root: Path, context_id: str) -> dict[str, Any]:
+    path = root / "_contexts" / f"{context_id}.json"
+    if not path.is_file():
+        raise AssertionError(f"missing Context state: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise AssertionError("Context state must be a JSON object")
+    return payload
+
+
 def _experiment(
     *,
     source: Path,
@@ -145,6 +155,7 @@ def _experiment(
     baseline_counts = [_evidence_count(item[0]) for item in baseline_outputs]
     context_counts = [_evidence_count(item[0]) for item in context_outputs]
     context_meta = dict((context_outputs[1][0].get("data") or {}).get("context") or {})
+    context_state = _read_context_state(context_ledger, context_id)
     baseline_visible = [item[1] for item in baseline_outputs]
     context_visible = [item[1] for item in context_outputs]
     baseline_cost = _cost(baseline_visible)
@@ -157,13 +168,20 @@ def _experiment(
         raise AssertionError(f"{name}: baseline search returned no evidence: {baseline_counts}")
     if context_counts[0] < 1:
         raise AssertionError(f"{name}: Context first turn returned no evidence")
-    if int(context_meta.get("repeated_evidence") or 0) < 1:
-        raise AssertionError(f"{name}: second turn did not detect any overlapping Evidence")
     if context_counts[1] > baseline_counts[1]:
-        raise AssertionError(f"{name}: Context cannot add Evidence beyond the canonical view")
+        raise AssertionError(f"{name}: Context cannot add Evidence beyond the ordinary Agent view")
+    if int(context_state.get("revision") or 0) != 2:
+        raise AssertionError(f"{name}: Context state did not advance across both turns")
 
     baseline_chars = int(baseline_cost["visible_chars_two_turns"])
     context_chars = int(context_cost["visible_chars_two_turns"])
+    if context_chars > baseline_chars:
+        raise AssertionError(
+            f"{name}: gain-aware Context view became larger than ordinary TraceCite: "
+            f"{context_chars} > {baseline_chars}"
+        )
+
+    projection = "delta" if context_meta else "canonical_fallback"
     return {
         "queries": queries,
         "shell_rg": {
@@ -178,7 +196,13 @@ def _experiment(
         "tracecite_context": {
             "evidence_per_turn": context_counts,
             **context_cost,
+            "second_turn_projection": projection,
             "second_turn_context": context_meta,
+            "state_after_two_turns": {
+                "revision": context_state.get("revision"),
+                "seen_evidence": len(context_state.get("seen_evidence") or []),
+                "seen_results": len(context_state.get("seen_results") or []),
+            },
         },
         "context_vs_tracecite": {
             "visible_chars_saved": baseline_chars - context_chars,
@@ -207,7 +231,9 @@ def run_smoke(prepared_manifest: Path, output: Path) -> dict[str, Any]:
         queries=[repeated_query, repeated_query],
     )
     if repeated["tracecite_context"]["evidence_per_turn"][1] != 0:
-        raise AssertionError("repeated-query second turn should suppress all citable Evidence")
+        raise AssertionError("repeated-query second turn should use the smaller all-seen delta")
+    if repeated["tracecite_context"]["second_turn_projection"] != "delta":
+        raise AssertionError("repeated-query experiment should select the smaller delta view")
 
     exact_panic = "failed to merge global and in-flight KubeletConfiguration while setting defaults"
     overlapping = _experiment(
