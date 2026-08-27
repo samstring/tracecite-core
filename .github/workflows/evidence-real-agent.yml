@@ -69,13 +69,17 @@ jobs:
           PY
       - name: Validate host and prepare pinned case
         run: |
-          python -m py_compile benchmarks/agent-investigation/openai_host.py benchmarks/agent-investigation/gmi_host.py
+          python -m py_compile \
+            benchmarks/agent-investigation/openai_host.py \
+            benchmarks/agent-investigation/gmi_host.py \
+            benchmarks/agent-investigation/free_shell.py \
+            benchmarks/agent-investigation/run_host.py
           python -m tracecite.benchmarking validate benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence
           rm -rf /tmp/tracecite-real-agent
           python -m tracecite.benchmarking prepare \
             benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence \
             --work-dir /tmp/tracecite-real-agent
-      - name: Run three-mode smoke test
+      - name: Run four-mode smoke test
         id: real_model
         shell: bash
         run: |
@@ -83,7 +87,7 @@ jobs:
           case_dir="benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence"
           manifest="/tmp/tracecite-real-agent/mobile-payment-runtime-evidence/prepared.json"
           seed=1
-          for mode in shell_rg tracecite_intelligence tracecite_investigate; do
+          for mode in shell_rg free_shell tracecite_intelligence tracecite_investigate; do
             transcript="/tmp/tracecite-real-runs/${mode}-${seed}.jsonl"
             score="/tmp/tracecite-real-scores/${mode}-${seed}.json"
             python benchmarks/agent-investigation/run_host.py \
