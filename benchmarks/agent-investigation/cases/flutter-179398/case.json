@@ -11,6 +11,7 @@
       "id": "ios-crash-report",
       "url": "https://gist.github.com/jonmountjoy/44d2ef560a5c82161ce4a0bbc061e898/raw/",
       "filename": "crash-report.txt",
+      "sha256": "30648164fcb18db2e2dbcce133be619e9bd8de8f3453860825b16d2bd8ff9f9d",
       "required": true
     }
   ],
