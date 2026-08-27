@@ -10,7 +10,12 @@ from tracecite import (
     list_capabilities,
     register_capability,
 )
-from tracecite.extension import ExtensionAPI
+from tracecite.extension import (
+    AgentCapability,
+    ExtensionManifest,
+    TraceCiteExtension,
+    register_extension,
+)
 
 
 def test_capability_registration_listing_and_execution() -> None:
@@ -82,13 +87,24 @@ def test_live_source_and_live_action_are_denied_by_default() -> None:
     ) == "action-ok"
 
 
-def test_extension_api_registers_capability_without_domain_import_in_runtime() -> None:
+def test_extension_declares_capability_without_domain_import_in_runtime() -> None:
     spec = CapabilitySpec(
         name="unit.extension.inspect",
         kind="query",
         description="Extension-provided inspection capability",
     )
-    ExtensionAPI().register_capability(spec, lambda args: {"args": args})
+    register_extension(
+        TraceCiteExtension(
+            manifest=ExtensionManifest(
+                id="unit-capability-extension",
+                version="1",
+                domain="unit",
+            ),
+            capabilities=(
+                AgentCapability(spec=spec, executor=lambda args: {"args": args}),
+            ),
+        )
+    )
 
     assert get_capability("unit.extension.inspect") == spec
     assert execute_capability("unit.extension.inspect", {"x": 2}) == {
