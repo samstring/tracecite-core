@@ -117,30 +117,32 @@ python benchmarks/agent-investigation/aggregate_scores.py \
 
 ## Transcript schema
 
-One JSON object per line. Tool adapters should record exactly what the model could see.
+One JSON object per line. Tool adapters record exactly what the model could see; model events carry provider-reported usage when available.
 
 ```json
-{"type":"session","mode":"tracecite_context","model":"example-model"}
-{"type":"tool","tool":"search","input":{"query":"panic|configz"},"output":"...model-visible tool output...","input_tokens":120,"output_tokens":530}
+{"type":"session","mode":"tracecite_context","model":"provider/model"}
+{"type":"model","content":"I will inspect the failure.","usage":{"input_tokens":1200,"output_tokens":80,"reasoning_tokens":20,"cached_input_tokens":400}}
+{"type":"tool","tool":"search","input":{"query":"panic|configz"},"output":"...exact model-visible tool output..."}
 {"type":"final","answer":"...final diagnosis...","evidence":["evidence://sha256/...#L120"]}
 ```
 
-Token fields are optional. When host-reported token usage is absent, the scorer reports a clearly labelled character-based estimate (`ceil(chars / 4)`) rather than pretending it is an exact tokenizer count.
+Provider-reported model usage is authoritative. The scorer keeps input, output, reasoning, cached-input, cache-read, and cache-creation usage as separate dimensions and does not invent a combined total. Old transcripts with token fields attached to tool events remain supported as a legacy fallback. When no provider usage exists, `ceil(chars / 4)` is reported only as a clearly labelled rough estimate.
 
 ## Metrics
 
 The scorer reports:
 
-- tool calls;
-- tool-output characters;
-- exact duplicate tool-output characters;
-- host-reported input/output tokens when available;
+- tool calls and model calls;
+- tool-output characters and exact duplicate tool-output characters;
+- provider-reported input/output tokens when available;
+- separately reported reasoning/cache token dimensions when available;
+- usage source (`model_events` or legacy fallback);
 - estimated visible-output tokens as a fallback;
 - root-cause concept recall;
 - required evidence-marker recall;
 - final pass/fail according to the case's thresholds.
 
-The full Agent benchmark must additionally compare wall time, raw bytes scanned, `expand` count, duplicate Evidence suppressed, and model-level total tokens across all three modes.
+The full Agent benchmark should additionally compare wall time, raw bytes scanned, `expand` count, duplicate Evidence suppressed, and other host-level operational metrics across all three modes.
 
 ## Fairness rules
 
