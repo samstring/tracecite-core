@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "kubernetes-140848",
+  "title": "Serial node e2e failures after kubelet restart loop",
+  "source_issue": "https://github.com/kubernetes/kubernetes/issues/140848",
+  "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140853",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "kubelet-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-kubelet-containerd-resource-managers/2079792906901655552/artifacts/n2d-standard-32-cos-125-19216-532-25-913c732d/kubelet.log",
+      "filename": "kubelet.log",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "kubernetes/kubernetes",
+    "issue_state": "closed",
+    "issue_closed_at": "2026-07-27",
+    "public_log": true,
+    "notes": "The Agent prompt intentionally omits the issue's Reason for failure section and fix PR contents."
+  }
+}
