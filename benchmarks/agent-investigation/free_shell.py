@@ -12,7 +12,6 @@ ALLOWED_PROGRAMS = (
     "rg",
     "jq",
     "cat",
-    "sed",
     "head",
     "tail",
     "find",
@@ -22,6 +21,56 @@ ALLOWED_PROGRAMS = (
     "ls",
 )
 
+_FORBIDDEN_EXACT_ARGS = {
+    "rg": frozenset(),
+    "jq": frozenset(),
+    "cat": frozenset(),
+    "head": frozenset(),
+    "tail": frozenset({"-f", "-F", "--follow"}),
+    "find": frozenset(
+        {
+            "-exec",
+            "-execdir",
+            "-ok",
+            "-okdir",
+            "-delete",
+            "-fls",
+            "-fprint",
+            "-fprint0",
+            "-fprintf",
+            "-files0-from",
+        }
+    ),
+    "wc": frozenset(),
+    "sort": frozenset({"-o", "--output", "--compress-program"}),
+    "uniq": frozenset(),
+    "ls": frozenset(),
+}
+
+_FORBIDDEN_PREFIX_ARGS = {
+    "rg": ("--pre",),
+    "jq": ("-L", "--library-path"),
+    "cat": (),
+    "head": (),
+    "tail": ("--follow=",),
+    "find": (
+        "-exec",
+        "-execdir",
+        "-ok",
+        "-okdir",
+        "-delete",
+        "-fls",
+        "-fprint",
+        "-fprint0",
+        "-fprintf",
+        "-files0-from",
+    ),
+    "wc": (),
+    "sort": ("-o", "--output=", "--compress-program="),
+    "uniq": (),
+    "ls": (),
+}
+
 
 def tools(files: Sequence[Path]) -> list[dict[str, Any]]:
     names = ", ".join(path.name for path in files)
@@ -29,9 +78,10 @@ def tools(files: Sequence[Path]) -> list[dict[str, Any]]:
         common._function_tool(
             "shell_exec",
             (
-                "Run one read-only shell utility directly inside the isolated evidence directory. "
+                "Run one read-only local analysis utility directly inside the isolated evidence directory. "
                 "You freely choose the utility and arguments. No shell expansion, pipes, network tools, "
-                "or arbitrary code execution are available. Evidence files: " + names
+                "write-capable flags, subprocess-spawning flags, or arbitrary code execution are available. "
+                "Evidence files: " + names
             ),
             {
                 "program": {"type": "string", "enum": list(ALLOWED_PROGRAMS)},
@@ -54,7 +104,20 @@ def _validate_arg(value: str) -> str:
         raise ValueError("absolute paths are not allowed")
     if any(part == ".." for part in candidate.parts):
         raise ValueError("parent path traversal is not allowed")
+    if "=" in value:
+        embedded = value.split("=", 1)[1]
+        embedded_path = Path(embedded)
+        if embedded_path.is_absolute() or any(part == ".." for part in embedded_path.parts):
+            raise ValueError("embedded paths must stay inside the evidence workspace")
     return value
+
+
+def _validate_program_args(program: str, argv: Sequence[str]) -> None:
+    exact = _FORBIDDEN_EXACT_ARGS.get(program, frozenset())
+    prefixes = _FORBIDDEN_PREFIX_ARGS.get(program, ())
+    for arg in argv:
+        if arg in exact or any(arg.startswith(prefix) for prefix in prefixes):
+            raise ValueError(f"argument is not allowed for {program}: {arg}")
 
 
 class Runtime(common.ToolRuntime):
@@ -66,6 +129,7 @@ class Runtime(common.ToolRuntime):
         if not isinstance(raw_args, list) or len(raw_args) > 32:
             raise ValueError("args must be an array with at most 32 items")
         argv = [_validate_arg(str(value)) for value in raw_args]
+        _validate_program_args(program, argv)
         env = {
             "PATH": os.environ.get("PATH", ""),
             "LANG": "C.UTF-8",
