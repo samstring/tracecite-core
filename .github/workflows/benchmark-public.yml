@@ -12,7 +12,33 @@ on:
   workflow_dispatch:
 
 jobs:
-  kubernetes-140848:
+  case-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        case:
+          - kubernetes-140848
+          - flutter-179398
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install package
+        run: python -m pip install -e .
+      - name: Validate leak-free case
+        run: >-
+          python -m tracecite.benchmarking validate
+          benchmarks/agent-investigation/cases/${{ matrix.case }}
+      - name: Download and hash public source input
+        run: >-
+          python -m tracecite.benchmarking prepare
+          benchmarks/agent-investigation/cases/${{ matrix.case }}
+          --work-dir /tmp/tracecite-public-inputs
+
+  kubernetes-140848-transport:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
