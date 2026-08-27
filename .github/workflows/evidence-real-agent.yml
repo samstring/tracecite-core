@@ -76,7 +76,7 @@ jobs:
           python -m tracecite.benchmarking prepare \
             benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence \
             --work-dir /tmp/tracecite-real-agent
-      - name: Run four-mode smoke test
+      - name: Run hardened four-mode smoke test
         id: real_model
         shell: bash
         run: |
