@@ -30,50 +30,42 @@ jobs:
           python-version: "3.12"
       - name: Install TraceCite
         run: python -m pip install -e ".[dev]"
-      - name: Validate benchmark credentials
+      - name: Validate benchmark configuration
         shell: bash
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
             echo "OPENAI_API_KEY is not configured."
             exit 1
           fi
+          if [ -z "$BENCH_MODEL" ]; then
+            echo "TRACECITE_BENCH_MODEL is not configured."
+            exit 1
+          fi
           echo "Provider base URL: $OPENAI_BASE_URL"
-      - name: Discover models available to this key
-        id: models
+          echo "Benchmark model: $BENCH_MODEL"
+      - name: Probe provider model catalog
+        continue-on-error: true
         shell: bash
         run: |
           python - <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.request
           from pathlib import Path
 
           base = os.environ["OPENAI_BASE_URL"].rstrip("/")
           key = os.environ["OPENAI_API_KEY"]
-          auth = {"Authorization": f"Bearer {key}"}
-
-          verify_req = urllib.request.Request(
-              "https://console.gmicloud.ai/api/v1/me/api-keys/current",
-              headers=auth,
+          req = urllib.request.Request(
+              f"{base}/models",
+              headers={"Authorization": f"Bearer {key}"},
           )
-          with urllib.request.urlopen(verify_req, timeout=60) as response:
-              verified = json.loads(response.read().decode("utf-8"))
-
-          key_info = verified.get("key", {}) if isinstance(verified, dict) else {}
-          organization = verified.get("organization", {}) if isinstance(verified, dict) else {}
-          scope = str(key_info.get("scope") or key_info.get("type") or "")
-          org_id = str(organization.get("id") or "")
-          if scope and scope != "ie_model":
-              raise RuntimeError(f"GMI API key scope is {scope!r}; expected 'ie_model'")
-          if not org_id:
-              raise RuntimeError("GMI API key verification did not return an organization id")
-
-          headers = dict(auth)
-          headers["X-Organization-ID"] = org_id
-          models_req = urllib.request.Request(f"{base}/models", headers=headers)
-          with urllib.request.urlopen(models_req, timeout=60) as response:
-              payload = json.loads(response.read().decode("utf-8"))
-
+          try:
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as exc:
+              print(f"Model catalog probe unavailable: HTTP {exc.code}; continuing with configured model.")
+              raise SystemExit(0)
           data = payload.get("data", []) if isinstance(payload, dict) else []
           ids = sorted(
               str(item.get("id"))
@@ -81,19 +73,11 @@ jobs:
               if isinstance(item, dict) and item.get("id")
           )
           Path("/tmp/tracecite-provider-models.txt").write_text("\n".join(ids) + "\n", encoding="utf-8")
-          print(f"GMI key verified with inference scope. Available models: {len(ids)}")
+          print(f"Available models reported by provider: {len(ids)}")
           for model_id in ids:
               print(model_id)
           PY
-          if [ -n "$BENCH_MODEL" ]; then
-            echo "run_benchmark=true" >> "$GITHUB_OUTPUT"
-            echo "Benchmark model: $BENCH_MODEL"
-          else
-            echo "run_benchmark=false" >> "$GITHUB_OUTPUT"
-            echo "TRACECITE_BENCH_MODEL is empty; discovery-only run, no inference calls will be made."
-          fi
       - name: Validate host and prepare pinned case
-        if: steps.models.outputs.run_benchmark == 'true'
         run: |
           python -m py_compile benchmarks/agent-investigation/openai_host.py
           python -m tracecite.benchmarking validate benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence
@@ -102,7 +86,6 @@ jobs:
             benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence \
             --work-dir /tmp/tracecite-real-agent
       - name: Run three-mode smoke test
-        if: steps.models.outputs.run_benchmark == 'true'
         id: real_model
         shell: bash
         run: |
