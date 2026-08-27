@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import time
@@ -10,6 +11,10 @@ from typing import Any, Mapping, Sequence
 
 import free_shell
 import openai_host as common
+from tracecite.integrations import cli as trace_cli
+from tracecite.integrations.context_engine import ContextEngine
+from tracecite.integrations.evidence_ledger import EvidenceLedger
+from tracecite.runtime.tools import search as tracecite_search
 
 
 DEFAULT_BASE_URL = "https://api.gmi-serving.com/v1"
@@ -144,6 +149,57 @@ def _tool_calls(message: Mapping[str, Any]) -> list[dict[str, Any]]:
     return calls
 
 
+class BenchmarkToolRuntime(common.ToolRuntime):
+    """TraceCite runtime adapter with no benchmark-level output character caps."""
+
+    def _tracecite_search(self, args: Mapping[str, Any]) -> str:
+        path = common._safe_input(self.input_root, str(args.get("file") or ""))
+        query = str(args.get("query") or "")
+        if not query:
+            raise ValueError("query must be non-empty")
+
+        # Deliberately leave max_evidence/max_line_chars unset. The benchmark
+        # must measure TraceCite's natural evidence selection rather than a host
+        # character budget imposed only on one tool surface.
+        payload = tracecite_search(
+            path,
+            query,
+            regex=bool(args.get("regex")),
+            snapshot=True,
+            segmenter="auto",
+            max_evidence=None,
+            max_line_chars=None,
+            cache=True,
+        )
+        if not isinstance(payload, Mapping):
+            payload = payload.to_dict()
+        canonical = copy.deepcopy(dict(payload))
+
+        ledger_dir = self.scratch / "ledger"
+        ledger_dir.mkdir(parents=True, exist_ok=True)
+        result_id = EvidenceLedger(ledger_dir).store(canonical)
+        data = dict(canonical.get("data") or {})
+        data["result_id"] = result_id
+        canonical["data"] = data
+
+        baseline = trace_cli._compact_search_result(canonical, max_output_chars=None)
+        baseline = trace_cli.lightweight_result(baseline)
+        if self.mode != "tracecite_context":
+            return trace_cli.render_frame(baseline)
+
+        if not self.context_id:
+            raise RuntimeError("tracecite_context requires context_id")
+        projected = ContextEngine(ledger_dir, self.context_id).project_search(
+            canonical,
+            result_id=result_id,
+        )
+        delta = trace_cli._compact_search_result(projected, max_output_chars=None)
+        delta = trace_cli.lightweight_result(delta)
+        baseline_frame = trace_cli.render_frame(baseline)
+        delta_frame = trace_cli.render_frame(delta)
+        return delta_frame if len(delta_frame) < len(baseline_frame) else baseline_frame
+
+
 def run() -> int:
     mode = os.environ.get("TRACECITE_BENCH_MODE", "").strip()
     model = os.environ.get("TRACECITE_BENCH_MODEL", "").strip()
@@ -155,16 +211,14 @@ def run() -> int:
     if not model:
         raise RuntimeError("TRACECITE_BENCH_MODEL is required")
 
-    # The benchmark must not bias a tool by clipping its output. Product-level
-    # EvidencePackage reduction remains part of TraceCite itself; only the host's
-    # global character truncation is disabled here.
+    # Disable the common host's legacy global character clipping for every mode.
     common._truncate = lambda value, limit=None: value  # type: ignore[assignment]
 
     if mode == "free_shell":
         runtime = free_shell.Runtime(mode=mode, input_root=input_root, scratch=scratch, context_id=context_id)
         raw_tools = free_shell.tools(runtime.files)
     else:
-        runtime = common.ToolRuntime(mode=mode, input_root=input_root, scratch=scratch, context_id=context_id)
+        runtime = BenchmarkToolRuntime(mode=mode, input_root=input_root, scratch=scratch, context_id=context_id)
         raw_tools = common._tools_for_mode(mode, runtime.files)
     tools = _chat_tools(raw_tools)
     question = question_path.read_text(encoding="utf-8")
