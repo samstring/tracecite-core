@@ -4,13 +4,13 @@ import json
 
 import pytest
 
-from tracecite.integrations import cli
-from tracecite.integrations.agent_profile import (
+from tracecite.integrations import (
     AgentCapabilities,
     get_agent_profile,
-    render_frame,
     select_agent_profile,
 )
+from tracecite.integrations import cli
+from tracecite.integrations.agent_profile import render_frame
 
 
 def _canonical_search() -> dict[str, object]:
