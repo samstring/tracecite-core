@@ -38,6 +38,7 @@ from .investigation import (
     propose_candidate,
     propose_knowledge_candidate,
 )
+from .finding_validation import FindingValidationResult, validate_finding
 from .investigation_summary import (
     SUMMARY_SCHEMA_VERSION,
     InvestigationSummaryError,
@@ -102,6 +103,8 @@ __all__ = [
     "ScenarioProfile",
     "ScenarioRuntime",
     "FINDING_OUTCOMES",
+    "FindingValidationResult",
+    "validate_finding",
     "BUDGET_POLICY_SCHEMA_VERSION",
     "BudgetExhausted",
     "BudgetPolicy",
