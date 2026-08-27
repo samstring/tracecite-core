@@ -25,9 +25,23 @@ cases/<case-id>/
 
 The benchmark host MUST NOT expose `gold.json`, the original issue discussion, fix PR text, or web search to the Agent during a run. Public source files are downloaded into a temporary work directory. Large third-party logs are not vendored into this repository.
 
-## First validated case
+## Validated cases
 
-`kubernetes-140848` is based on Kubernetes issue #140848 and fix PR #140853. The issue is closed and links a public Prow build plus the original kubelet log. The Agent-facing question removes the issue's `Reason for failure` section; the evaluator keeps the confirmed root cause in `gold.json`.
+### `kubernetes-140848`
+
+Based on Kubernetes issue #140848 and fix PR #140853. The issue is closed and links a public Prow build plus the original kubelet log. The Agent-facing question removes the issue's `Reason for failure` section; the evaluator keeps the confirmed root cause in `gold.json`.
+
+The public benchmark workflow has successfully downloaded and processed the original kubelet log:
+
+- source size: **14,495,302 bytes**;
+- source SHA-256: `6217dc9fd7bb8b44f08920909318d2cf87c920049a267c4fd08d1dca4de5d762`;
+- smoke query: `panic|PodLevelResources|KubeletConfiguration|configz`;
+- plain TraceCite/Ledger returned 30 Evidence rows on turn 1 and the same 30 again on turn 2;
+- TraceCite + Context returned 30 on turn 1 and 0 on turn 2, reporting all 30 as previously seen;
+- model-visible JSON over the two turns fell from **12,920** to **8,011** characters, a reduction of **4,909 characters (37.9954%)**;
+- the rough `chars / 4` fallback fell from 3,230 to 2,003 visible-output tokens.
+
+This is deliberately labelled a **transport smoke result**, not an Agent benchmark result. The query was fixed rather than model-selected, the second query was intentionally repeated, and no model reasoning tokens were measured. It demonstrates that persistent Seen Evidence / Context Delta works on a real 14.5 MB public log; it does **not** establish that TraceCite beats `shell + rg` on total investigation cost.
 
 ## Commands
 
@@ -74,7 +88,7 @@ The scorer reports:
 - required evidence-marker recall;
 - final pass/fail according to the case's thresholds.
 
-Future benchmark reports should additionally compare wall time, raw bytes scanned, `expand` count, duplicate Evidence suppressed, and model-level total tokens across all three modes.
+The full Agent benchmark must additionally compare wall time, raw bytes scanned, `expand` count, duplicate Evidence suppressed, and model-level total tokens across all three modes.
 
 ## Fairness rules
 
@@ -85,3 +99,4 @@ Future benchmark reports should additionally compare wall time, raw bytes scanne
 - Gold/fix material is evaluator-only.
 - Report failures and `unknown` results; do not discard losing runs.
 - Run multiple seeds/attempts before making product claims.
+- Never present a deterministic transport smoke as a model-level Agent benchmark.
