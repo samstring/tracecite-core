@@ -162,7 +162,13 @@ class ExplorationStats:
 
 
 def budget_stop_reason(policy: ExplorationPolicy, stats: ExplorationStats) -> str | None:
-    """Return the first hard stop reason in stable priority order."""
+    """Return the first hard stop reason in stable priority order.
+
+    ``max_sources`` is admission-based: reaching N sources does not stop the
+    investigation if more evidence can still be retrieved from those sources.
+    The orchestrator sets ``source_limit_exhausted`` only when a candidate from
+    a new source had to be rejected.
+    """
 
     if stats.elapsed_seconds >= policy.max_wall_seconds:
         return "max_wall_seconds"
@@ -170,7 +176,7 @@ def budget_stop_reason(policy: ExplorationPolicy, stats: ExplorationStats) -> st
         return "max_retrievals"
     if stats.evidence >= policy.max_evidence:
         return "max_evidence"
-    if stats.sources >= policy.max_sources:
+    if stats.sources >= policy.max_sources and stats.details.get("source_limit_exhausted"):
         return "max_sources"
     if stats.bytes_scanned >= policy.max_bytes_scanned:
         return "max_bytes_scanned"
