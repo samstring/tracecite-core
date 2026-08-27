@@ -12,6 +12,23 @@ from typing import Any
 MAX_VISIBLE_EVIDENCE = 30
 MAX_VISIBLE_LINE_CHARS = 1024
 
+CASE_PROFILES: dict[str, dict[str, Any]] = {
+    "kubernetes-140848": {
+        "repeated_query": "panic|PodLevelResources|KubeletConfiguration|configz",
+        "overlap_queries": [
+            "failed to merge global and in-flight KubeletConfiguration while setting defaults",
+            "failed to merge global and in-flight KubeletConfiguration while setting defaults|PodLevelResourcesFixDefaulting",
+        ],
+    },
+    "flutter-179398": {
+        "repeated_query": "EXC_BAD_ACCESS|DrawCircularArc|RoundSuperellipse|_dispatch_cache_cleanup",
+        "overlap_queries": [
+            "DrawCircularArc|RoundSuperellipseGeometry",
+            "DrawCircularArc|RoundSuperellipseGeometry|_dispatch_cache_cleanup",
+        ],
+    },
+}
+
 
 def _run(command: list[str]) -> tuple[dict[str, Any], str]:
     completed = subprocess.run(
@@ -117,6 +134,7 @@ def _read_context_state(root: Path, context_id: str) -> dict[str, Any]:
 
 def _experiment(
     *,
+    case_id: str,
     source: Path,
     root: Path,
     name: str,
@@ -125,9 +143,9 @@ def _experiment(
     if len(queries) != 2:
         raise ValueError("public smoke experiments require exactly two turns")
 
-    baseline_ledger = root / f"{name}-baseline-ledger"
-    context_ledger = root / f"{name}-context-ledger"
-    context_id = f"kubernetes-140848-{name}"
+    baseline_ledger = root / f"{case_id}-{name}-baseline-ledger"
+    context_ledger = root / f"{case_id}-{name}-context-ledger"
+    context_id = f"{case_id}-{name}"
 
     rg_counts: list[int] = []
     rg_outputs: list[str] = []
@@ -163,21 +181,25 @@ def _experiment(
     rg_cost = _cost(rg_outputs)
 
     if min(rg_counts) < 1:
-        raise AssertionError(f"{name}: rg returned no evidence: {rg_counts}")
+        raise AssertionError(f"{case_id}/{name}: rg returned no evidence: {rg_counts}")
     if baseline_counts[0] < 1 or baseline_counts[1] < 1:
-        raise AssertionError(f"{name}: baseline search returned no evidence: {baseline_counts}")
+        raise AssertionError(
+            f"{case_id}/{name}: baseline search returned no evidence: {baseline_counts}"
+        )
     if context_counts[0] < 1:
-        raise AssertionError(f"{name}: Context first turn returned no evidence")
+        raise AssertionError(f"{case_id}/{name}: Context first turn returned no evidence")
     if context_counts[1] > baseline_counts[1]:
-        raise AssertionError(f"{name}: Context cannot add Evidence beyond the ordinary Agent view")
+        raise AssertionError(
+            f"{case_id}/{name}: Context cannot add Evidence beyond the ordinary Agent view"
+        )
     if int(context_state.get("revision") or 0) != 2:
-        raise AssertionError(f"{name}: Context state did not advance across both turns")
+        raise AssertionError(f"{case_id}/{name}: Context state did not advance across both turns")
 
     baseline_chars = int(baseline_cost["visible_chars_two_turns"])
     context_chars = int(context_cost["visible_chars_two_turns"])
     if context_chars > baseline_chars:
         raise AssertionError(
-            f"{name}: gain-aware Context view became larger than ordinary TraceCite: "
+            f"{case_id}/{name}: gain-aware Context view became larger than ordinary TraceCite: "
             f"{context_chars} > {baseline_chars}"
         )
 
@@ -223,8 +245,14 @@ def run_smoke(prepared_manifest: Path, output: Path) -> dict[str, Any]:
     if not source.is_file():
         raise FileNotFoundError(source)
 
-    repeated_query = "panic|PodLevelResources|KubeletConfiguration|configz"
+    case_id = str(prepared.get("case_id") or "")
+    profile = CASE_PROFILES.get(case_id)
+    if profile is None:
+        raise ValueError(f"no public transport smoke profile for case: {case_id}")
+
+    repeated_query = str(profile["repeated_query"])
     repeated = _experiment(
+        case_id=case_id,
         source=source,
         root=output.parent,
         name="repeated",
@@ -235,20 +263,17 @@ def run_smoke(prepared_manifest: Path, output: Path) -> dict[str, Any]:
     if repeated["tracecite_context"]["second_turn_projection"] != "delta":
         raise AssertionError("repeated-query experiment should select the smaller delta view")
 
-    exact_panic = "failed to merge global and in-flight KubeletConfiguration while setting defaults"
     overlapping = _experiment(
+        case_id=case_id,
         source=source,
         root=output.parent,
         name="overlap",
-        queries=[
-            exact_panic,
-            f"{exact_panic}|PodLevelResourcesFixDefaulting",
-        ],
+        queries=[str(item) for item in profile["overlap_queries"]],
     )
 
     result = {
         "schema_version": 1,
-        "case_id": prepared.get("case_id"),
+        "case_id": case_id,
         "source_bytes": inputs[0].get("bytes"),
         "source_sha256": inputs[0].get("sha256"),
         "warning": "Fixed-query transport comparison only. It does not measure model reasoning, diagnosis accuracy, or total Agent tokens.",
