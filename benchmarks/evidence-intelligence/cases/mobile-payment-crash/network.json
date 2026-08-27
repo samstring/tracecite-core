@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "provider": "network",
+  "source": "client-network-export",
+  "evidence": [
+    {
+      "id": "network:R19",
+      "kind": "http_request",
+      "timestamp": "2026-08-27T10:03:11.200Z",
+      "severity": "error",
+      "label": "POST /checkout timed out after app backgrounded",
+      "entities": [
+        {"namespace": "app", "kind": "session", "value": "S88"},
+        {"namespace": "edge", "kind": "request", "value": "R19"}
+      ],
+      "attributes": {"method": "POST", "path": "/checkout", "status": "timeout"}
+    },
+    {
+      "id": "network:noise",
+      "kind": "http_request",
+      "timestamp": "2026-08-27T10:03:11.100Z",
+      "severity": "info",
+      "label": "GET /config succeeded",
+      "entities": [
+        {"namespace": "app", "kind": "session", "value": "S99"},
+        {"namespace": "edge", "kind": "request", "value": "R77"}
+      ],
+      "attributes": {"method": "GET", "path": "/config", "status": 200}
+    }
+  ],
+  "relations": []
+}
