@@ -11,6 +11,7 @@
       "id": "kubelet-log",
       "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-kubelet-containerd-resource-managers/2079792906901655552/artifacts/n2d-standard-32-cos-125-19216-532-25-913c732d/kubelet.log",
       "filename": "kubelet.log",
+      "sha256": "6217dc9fd7bb8b44f08920909318d2cf87c920049a267c4fd08d1dca4de5d762",
       "required": true
     }
   ],
