@@ -2,8 +2,13 @@
 
 The underlying :mod:`tracecite.integrations.cli` remains the canonical command
 implementation. This wrapper recognizes the optional ``--context-id`` search
-argument and applies Context Engine delta projection after the canonical Result
-has been stored in the Evidence Ledger but before compact transport rendering.
+argument and applies Context Engine seen-state after the canonical Result has
+been stored in the Evidence Ledger but before compact transport rendering.
+
+Context state is always advanced, but the Agent-facing delta is used only when
+its serialized compact view is strictly smaller than the ordinary compact view.
+This keeps Context optimization monotonic: remembering Evidence must not make a
+turn more expensive merely because delta metadata outweighs a tiny omission.
 """
 
 from __future__ import annotations
@@ -62,6 +67,14 @@ def _search_command(argv: Sequence[str]) -> bool:
     return bool(argv) and argv[0] == "search"
 
 
+def _smaller_agent_view(delta: dict, baseline: dict) -> dict:
+    """Choose delta only when it really reduces serialized Agent context."""
+
+    if len(cli.encoded_json(delta)) < len(cli.encoded_json(baseline)):
+        return delta
+    return baseline
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -83,6 +96,13 @@ def main(
         original_compact = cli._compact_search_result
 
         def context_compact(payload, *, max_output_chars=None):
+            # Compute the ordinary view first so Context optimization has a
+            # same-budget baseline.  The canonical Result has already been
+            # stored in the private Ledger at this point.
+            baseline = original_compact(
+                payload,
+                max_output_chars=max_output_chars,
+            )
             data = dict(payload.get("data") or {})
             result_id = str(data.get("result_id") or "")
             if not result_id:
@@ -91,10 +111,11 @@ def main(
                 payload,
                 result_id=result_id,
             )
-            return original_compact(
+            delta = original_compact(
                 projected,
                 max_output_chars=max_output_chars,
             )
+            return _smaller_agent_view(delta, baseline)
 
         cli._compact_search_result = context_compact
         try:
