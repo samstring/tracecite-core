@@ -6,9 +6,10 @@ argument and applies Context Engine seen-state after the canonical Result has
 been stored in the Evidence Ledger but before compact transport rendering.
 
 Context state is always advanced, but the Agent-facing delta is used only when
-its serialized compact view is strictly smaller than the ordinary compact view.
-This keeps Context optimization monotonic: remembering Evidence must not make a
-turn more expensive merely because delta metadata outweighs a tiny omission.
+its final selected transport is strictly smaller than the ordinary compact
+view. This keeps Context optimization monotonic for both JSON and TCF frame
+hosts: remembering Evidence must not make a turn more expensive merely because
+delta metadata outweighs a tiny omission.
 """
 
 from __future__ import annotations
@@ -68,6 +69,19 @@ def _search_command(argv: Sequence[str]) -> bool:
     return bool(argv) and argv[0] == "search"
 
 
+def _prefer_for_transport(
+    candidate: dict,
+    fallback: dict,
+    *,
+    profile_name: str,
+) -> dict:
+    if profile_name == "frame":
+        if len(cli.render_frame(candidate)) < len(cli.render_frame(fallback)):
+            return candidate
+        return fallback
+    return prefer_smaller_agent_view(candidate, fallback)
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -85,6 +99,7 @@ def main(
         ledger_dir = _read_option(forwarded, "--ledger-dir")
         if not ledger_dir:
             raise ValueError("--context-id requires --ledger-dir")
+        profile_name = _read_option(forwarded, "--agent-profile") or "agent"
 
         original_compact = cli._compact_search_result
 
@@ -108,7 +123,11 @@ def main(
                 projected,
                 max_output_chars=max_output_chars,
             )
-            return prefer_smaller_agent_view(delta, baseline)
+            return _prefer_for_transport(
+                delta,
+                baseline,
+                profile_name=profile_name,
+            )
 
         cli._compact_search_result = context_compact
         try:
