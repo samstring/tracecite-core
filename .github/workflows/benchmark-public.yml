@@ -1,0 +1,40 @@
+name: Public Agent Benchmark Smoke
+
+on:
+  pull_request:
+    branches: [feature_for_agent]
+    paths:
+      - "benchmarks/agent-investigation/**"
+      - "src/tracecite/benchmarking.py"
+      - "src/tracecite/integrations/context_engine.py"
+      - "src/tracecite/integrations/stateful_cli.py"
+      - ".github/workflows/benchmark-public.yml"
+  workflow_dispatch:
+
+jobs:
+  kubernetes-140848:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install package
+        run: python -m pip install -e .
+      - name: Validate leak-free case
+        run: >-
+          python -m tracecite.benchmarking validate
+          benchmarks/agent-investigation/cases/kubernetes-140848
+      - name: Download public kubelet log
+        run: >-
+          python -m tracecite.benchmarking prepare
+          benchmarks/agent-investigation/cases/kubernetes-140848
+          --work-dir /tmp/tracecite-public-bench
+      - name: Run two-turn Context Engine smoke
+        run: >-
+          python benchmarks/agent-investigation/public_smoke.py
+          /tmp/tracecite-public-bench/kubernetes-140848/prepared.json
+          --output /tmp/tracecite-public-bench/kubernetes-140848/report.json
+      - name: Show report
+        run: cat /tmp/tracecite-public-bench/kubernetes-140848/report.json
