@@ -8,6 +8,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import free_shell
 import openai_host as common
 
 
@@ -146,8 +147,13 @@ def run() -> int:
     if not model:
         raise RuntimeError("TRACECITE_BENCH_MODEL is required")
 
-    runtime = common.ToolRuntime(mode=mode, input_root=input_root, scratch=scratch, context_id=context_id)
-    tools = _chat_tools(common._tools_for_mode(mode, runtime.files))
+    if mode == "free_shell":
+        runtime = free_shell.Runtime(mode=mode, input_root=input_root, scratch=scratch, context_id=context_id)
+        raw_tools = free_shell.tools(runtime.files)
+    else:
+        runtime = common.ToolRuntime(mode=mode, input_root=input_root, scratch=scratch, context_id=context_id)
+        raw_tools = common._tools_for_mode(mode, runtime.files)
+    tools = _chat_tools(raw_tools)
     question = question_path.read_text(encoding="utf-8")
     file_names = ", ".join(path.name for path in runtime.files)
     prompt = f"{question}\n\nAvailable evidence files: {file_names}."
