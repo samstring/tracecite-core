@@ -10,10 +10,9 @@
       "severity": "fatal",
       "label": "EXC_BAD_ACCESS in PaymentCallback after checkout",
       "entities": [
-        {"namespace": "app", "kind": "session", "value": "S88"},
-        {"namespace": "app", "kind": "release", "value": "8.4.1"}
+        {"namespace": "app", "kind": "session", "value": "S88"}
       ],
-      "attributes": {"message": "payment callback dereferenced a released target"}
+      "attributes": {"message": "payment callback dereferenced a released target", "release": "8.4.1"}
     }
   ],
   "relations": []
