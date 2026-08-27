@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""通用文本过滤：快照定界 + scope + grep，供 Agent 分析（省 token）。"""
+"""通用文本过滤：快照定界 + scope + grep，供 Agent 分析。"""
 
 from __future__ import annotations
 
-import random
+import hashlib
 import re
 import shutil
 from collections import Counter
@@ -11,11 +11,22 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
-from .matcher import Matcher
+from .matcher import Matcher, PatternComponent, coerce_pattern_components
 from .state_file import state_lock
-from .segmenter import RawTextSegmenter, Segmenter
+from .segmenter import RawTextSegmenter, Segmenter, _normalize_timestamp
 
 _LAST_DURATION_RE = re.compile(
     r"^(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>s|sec|secs|m|min|mins|h|hr|hrs|hour|hours)?$",
@@ -115,6 +126,7 @@ _UNMATCHED_SAMPLE_CHARS = 300
 # 开启（--fold / scenario fold:true）。折叠绝不替代全量：正文 .filtered/ 始终
 # 完整，命中侧 term_usage + 未命中侧 unmatched_summary 才是「环境无遗漏」的双侧覆盖。
 DEFAULT_TEMPLATE_THRESHOLD = 10
+DEFAULT_MAX_LINE_CHARS = 1024
 # 模板折叠后的样本截断长度
 _TEMPLATE_SAMPLE_CHARS = 300
 # 模板 count 达到该阈值才输出 value_distribution（碎片模板不输出，控体积）
@@ -227,9 +239,19 @@ def _build_unmatched_summary(
     chosen_ids = {id(s) for row in samples.values() for s in row}
     rest = [s for s in pool if id(s) not in chosen_ids]
     if rest:
-        rand = random.sample(rest, min(3, len(rest)))
-        if rand:
-            samples["random"] = rand
+        # Stable pseudo-random coverage: same input produces the same summary,
+        # while hash ordering avoids always selecting only adjacent head rows.
+        selected = sorted(
+            enumerate(rest),
+            key=lambda item: (
+                hashlib.sha256(item[1].encode("utf-8", errors="replace")).hexdigest(),
+                item[0],
+            ),
+        )[:3]
+        if selected:
+            # Keep the published key for schema compatibility; selection is now
+            # deterministic even though the historical name is ``random``.
+            samples["random"] = [value for _, value in selected]
     summary["samples"] = samples  # type: ignore[assignment]
     return summary
 
@@ -316,7 +338,7 @@ def _fold_templates(
     for group in sorted(groups.values(), key=lambda g: -int(g["count"])):  # type: ignore[arg-type]
         terms = sorted(str(t) for t in group["terms"])  # type: ignore[union-attr]
         # 值分布只对高频模板输出（count 达到阈值）：碎片模板（count=1 等）输出空，
-        # 否则值分布会把 JSONL 体积放大 2-3 倍，省 token 的目的落空
+        # 否则值分布会把 JSONL 体积放大 2-3 倍，输出会变得难以使用
         count = int(group["count"])  # type: ignore[arg-type]
         if count >= _VALUE_DIST_MIN_COUNT:
             value_dist = {
@@ -344,7 +366,7 @@ def template_stats(
     """折叠质量指标：碎片率/覆盖率 —— 帮助判断「折叠是否还有效」。
 
     碎片化时（url/接口名等字符串字段各异）模板数 ≈ 命中数、fold_ratio 很低，
-    此时折叠视图既不能省 token 也不能看分布，应提示直接看原文或按字段收窄。
+        此时折叠视图既不能提供有效摘要也不能看分布，应提示直接看原文或按字段收窄。
     """
     if not entries or match_records <= 0:
         return {
@@ -361,6 +383,36 @@ def template_stats(
         "singleton_templates": singletons,
         "fold_ratio": round(folded_records / match_records, 4),
     }
+
+
+# Provenance is intentionally bounded: patterns are useful for reproducing a
+# run, but a filter component must never become a second copy of a large query
+# or log body in every result row.
+_MAX_COMPONENT_PATTERN_CHARS = 4096
+
+
+def _bounded_component_dict(component: PatternComponent) -> Dict[str, Any]:
+    payload = component.to_dict()
+    pattern = str(payload.get("pattern") or "")
+    if len(pattern) > _MAX_COMPONENT_PATTERN_CHARS:
+        payload["pattern"] = pattern[:_MAX_COMPONENT_PATTERN_CHARS]
+        payload["pattern_truncated"] = True
+    # Keep metadata scalar and bounded even when an extension accidentally
+    # supplies a verbose value.  Runtime-owned fields remain round-trippable.
+    for key, value in list(payload.items()):
+        if key in {"id", "pattern", "effective", "kind", "pattern_truncated"}:
+            continue
+        if isinstance(value, str) and len(value) > 1024:
+            payload[key] = value[:1024]
+            payload[f"{key}_truncated"] = True
+        elif isinstance(value, (list, tuple)) and len(value) > 32:
+            payload[key] = list(value[:32])
+            payload[f"{key}_truncated"] = True
+        elif isinstance(value, dict) and len(value) > 32:
+            keys = sorted(str(item) for item in value)[:32]
+            payload[key] = {item: value[item] for item in keys}
+            payload[f"{key}_truncated"] = True
+    return payload
 
 
 @dataclass
@@ -389,9 +441,15 @@ class FilterResult:
     template_stats: Optional[Dict[str, object]] = None
     unmatched_summary: Optional[Dict[str, object]] = None
     term_usage: Optional[Dict[str, int]] = None
+    match_mode: str = "or"
+    pattern_components: Optional[List[Dict[str, Any]]] = None
+    matched_by_counts: Optional[Dict[str, int]] = None
+    matched_by_fallback: bool = False
+    lines_truncated: int = 0
+    max_line_chars: Optional[int] = None
 
     def to_dict(self) -> Dict[str, object]:
-        return {
+        payload = {
             "original_source": str(self.original_source),
             "original_total_lines_at_run": self.original_total_lines_at_run,
             "output_path": str(self.output_path),
@@ -414,7 +472,16 @@ class FilterResult:
             "template_stats": self.template_stats,
             "unmatched_summary": self.unmatched_summary,
             "term_usage": self.term_usage,
+            "match_mode": self.match_mode,
+            "pattern_components": self.pattern_components,
+            "matched_by_counts": self.matched_by_counts,
+            "matched_by_fallback": self.matched_by_fallback,
         }
+        if self.lines_truncated:
+            payload["lines_truncated"] = self.lines_truncated
+        if self.max_line_chars is not None:
+            payload["max_line_chars"] = self.max_line_chars
+        return payload
 
     def metadata_header(self) -> str:
         lines = [
@@ -435,12 +502,17 @@ class FilterResult:
             lines.append(f"# time_to: {self.time_to}")
         if self.history_path is not None:
             lines.append(f"# history: {self.history_path}")
+        if self.lines_truncated:
+            lines.append(f"# lines_truncated: {self.lines_truncated}")
+            lines.append(f"# max_line_chars: {self.max_line_chars}")
         lines.extend(
             [
                 f"# work_input: {self.work_input}",
                 f"# tag: {self.tag}",
                 f"# pattern: {self.pattern}",
                 f"# engine: {self.engine}",
+                f"# match_mode: {self.match_mode}",
+                f"# matched_by_fallback: {str(self.matched_by_fallback).lower()}",
                 f"# filtered_at: {datetime.now(timezone.utc).astimezone().isoformat(timespec='seconds')}",
                 f"# total_lines: {self.total_lines}",
                 f"# match_records: {self.match_records}",
@@ -509,7 +581,7 @@ def reference_datetime(
     for record in selected.segment_file(path, encoding=encoding):
         ts = selected.record_timestamp(record, reference=mtime)
         if ts is not None:
-            return ts
+            return _normalize_timestamp(ts)
     return mtime
 
 
@@ -526,22 +598,38 @@ def parse_time_arg(
     text = (raw or "").strip()
     if not text:
         raise FilterError("时间参数不能为空")
+    ref = _normalize_timestamp(ref)
+
+    # ``datetime.fromisoformat`` accepts RFC3339 offsets on supported Python
+    # versions, but Python 3.9 does not accept the standard trailing ``Z``.
+    # Convert every offset-bearing result to Core's UTC-naive comparison form;
+    # offset-less inputs remain naive wall-clock values for compatibility.
+    iso_text = text[:-1] + "+00:00" if text[-1:].upper() == "Z" else text
+    if re.match(r"^\d{4}-\d{2}-\d{2}[T ]", iso_text):
+        try:
+            return _normalize_timestamp(datetime.fromisoformat(iso_text))
+        except ValueError:
+            pass
 
     for fmt in (
         "%Y-%m-%dT%H:%M:%S",
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%dT%H:%M",
         "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d %H:%M:%S.%f%z",
+        "%Y-%m-%d %H:%M:%S%z",
     ):
         try:
-            return datetime.strptime(text, fmt)
+            return _normalize_timestamp(datetime.strptime(text, fmt))
         except ValueError:
             pass
 
     if segmenter is not None:
         parsed = segmenter.parse_time_argument(text, reference=ref)
         if parsed is not None:
-            return parsed
+            return _normalize_timestamp(parsed)
 
     for fmt in ("%H:%M:%S", "%H:%M"):
         try:
@@ -569,7 +657,8 @@ def record_timestamp(
 ) -> Optional[datetime]:
     """Resolve a timestamp through the selected format strategy."""
     selected = segmenter or RawTextSegmenter()
-    return selected.record_timestamp(record, reference=ref)
+    parsed = selected.record_timestamp(record, reference=_normalize_timestamp(ref))
+    return _normalize_timestamp(parsed) if parsed is not None else None
 
 
 def _find_last_timestamp(
@@ -789,6 +878,12 @@ def _write_filter_history(
         "output_path": str(result.output_path),
         "match_records": result.match_records,
         "match_lines": result.match_lines,
+        "match_mode": result.match_mode,
+        "pattern_components": result.pattern_components,
+        "matched_by_counts": result.matched_by_counts,
+        "matched_by_fallback": result.matched_by_fallback,
+        "lines_truncated": result.lines_truncated,
+        "max_line_chars": result.max_line_chars,
     }
     with state_lock(history_path):
         with history_path.open("a", encoding="utf-8") as handle:
@@ -828,11 +923,24 @@ def resolve_preset(
     return pattern, tag
 
 
+def _truncate_output_line(text: str, *, max_line_chars: int, start_line: int) -> tuple[str, bool]:
+    body = text.rstrip("\n")
+    if max_line_chars <= 0 or len(body) <= max_line_chars:
+        return body + ("\n" if text.endswith("\n") else ""), False
+    suffix = f"...[trunc, expand:#L{start_line}]"
+    keep = max(0, max_line_chars - len(suffix))
+    return body[:keep] + suffix + "\n", True
+
+
 def filter_text(
     input_path: Path,
     *,
     pattern: str,
     tag: Optional[str] = None,
+    pattern_components: Optional[
+        Iterable[Union[PatternComponent, Mapping[str, Any]]]
+    ] = None,
+    match_mode: str = "or",
     output_path: Optional[Path] = None,
     snapshot: bool = False,
     pid: Optional[int] = None,
@@ -845,6 +953,7 @@ def filter_text(
     segmenter: Optional[Segmenter] = None,
     template_threshold: int = 0,
     encoding: str = "utf-8",
+    max_line_chars: Optional[int] = DEFAULT_MAX_LINE_CHARS,
 ) -> FilterResult:
     """
     过滤运行日志。
@@ -861,6 +970,30 @@ def filter_text(
 
     if not pattern:
         raise FilterError("必须指定 pattern（--grep 或 --preset）")
+    if str(match_mode).strip().lower() != "or":
+        raise FilterError("当前过滤组件只支持 OR 组合")
+    try:
+        normalized_components = coerce_pattern_components(pattern_components)
+    except (TypeError, ValueError) as exc:
+        raise FilterError(str(exc)) from exc
+    component_payload = [
+        _bounded_component_dict(component) for component in normalized_components
+    ]
+    matched_by_fallback = not bool(normalized_components)
+    if matched_by_fallback:
+        # ``pattern`` is a reserved compatibility identity, not a declared
+        # component.  The actual expression stays in FilterResult.pattern;
+        # this marker avoids duplicating potentially large text here.
+        component_payload = [
+            {
+                "id": "pattern",
+                "kind": "pattern",
+                "effective": True,
+                "reserved": True,
+                "fallback": True,
+                "pattern_ref": "final",
+            }
+        ]
     if tail_lines is not None and tail_lines <= 0:
         raise FilterError("--tail-lines 必须大于 0")
     if line_from is not None and line_from <= 0:
@@ -950,7 +1083,9 @@ def filter_text(
     unmatched_pool: List[str] = []
     hit_record_count = 0
     term_usage: Dict[str, int] = {}
+    matched_by_counts: Counter = Counter()
     template_items: List[Dict[str, object]] = []
+    lines_truncated = 0
     for record in _iter_merged_records(
         work_input, segmenter=segmenter, encoding=encoding
     ):
@@ -970,7 +1105,9 @@ def filter_text(
             if pid_token not in header and str(record.fields.get("pid") or "") != str(int(pid)):
                 continue
         scoped_records += 1
-        matched, term, terms_hit = matcher.match(record.text)
+        matched, term, terms_hit, matched_by = matcher.match_with_components(
+            record.text, normalized_components
+        )
         if not matched:
             unmatched_count += 1
             if len(unmatched_pool) < _UNMATCHED_POOL_MAX:
@@ -979,12 +1116,21 @@ def filter_text(
                 token_counter[tok] += 1
             continue
         text = record.text if record.text.endswith("\n") else record.text + "\n"
+        if max_line_chars is not None:
+            _, truncated = _truncate_output_line(
+                text,
+                max_line_chars=max_line_chars,
+                start_line=record.start_line,
+            )
+            if truncated:
+                lines_truncated += 1
         ts = record_timestamp(record, ref=ref, segmenter=segmenter)
         metadata = {
             "start_line": record.start_line,
             "end_line": record.end_line,
             "term": term,
             "terms": sorted(terms_hit),
+            "matched_by": list(matched_by),
             "timestamp": ts.isoformat(timespec="milliseconds") if ts is not None else None,
         }
         records_handle.write(
@@ -998,6 +1144,7 @@ def filter_text(
                 "end_line": record.end_line,
                 "term": term,
                 "hit_lines": _hit_lines(record, term),
+                "matched_by": list(matched_by),
             }
             hits_handle.write(
                 json.dumps(hit_row, ensure_ascii=False) + "\n"
@@ -1005,6 +1152,10 @@ def filter_text(
             hit_record_count += 1
             for tok in terms_hit:
                 term_usage[tok] = term_usage.get(tok, 0) + 1
+        if "pattern" in matched_by:
+            matched_by_fallback = True
+        for component_id in matched_by:
+            matched_by_counts[component_id] += 1
         if template_threshold > 0:
             template_items.append(
                 {
@@ -1016,6 +1167,20 @@ def filter_text(
 
     records_handle.close()
     hits_handle.close()
+
+    if matched_by_fallback and not any(
+        str(item.get("id")) == "pattern" for item in component_payload
+    ):
+        component_payload.append(
+            {
+                "id": "pattern",
+                "kind": "pattern",
+                "effective": True,
+                "reserved": True,
+                "fallback": True,
+                "pattern_ref": "final",
+            }
+        )
 
     unmatched_summary = _build_unmatched_summary(
         unmatched_count=unmatched_count,
@@ -1034,6 +1199,8 @@ def filter_text(
         total_lines=scoped_physical_lines,
         match_lines=match_lines,
         match_records=match_records,
+        lines_truncated=lines_truncated,
+        max_line_chars=max_line_chars,
         snapshot_path=snapshot_path,
         snapshot_lines=snapshot_lines,
         scope=scope,
@@ -1043,6 +1210,13 @@ def filter_text(
         engine=matcher.engine,
         unmatched_summary=unmatched_summary,
         term_usage=term_usage or None,
+        match_mode="or",
+        pattern_components=component_payload or None,
+        matched_by_counts=(
+            {key: matched_by_counts[key] for key in sorted(matched_by_counts)}
+            or None
+        ),
+        matched_by_fallback=matched_by_fallback,
     )
 
     history_dir.mkdir(parents=True, exist_ok=True)
@@ -1069,7 +1243,16 @@ def filter_text(
         with records_path.open("r", encoding="utf-8") as records_handle:
             for line in records_handle:
                 row = json.loads(line)
-                output_handle.write(str(row.get("text") or ""))
+                text = str(row.get("text") or "")
+                metadata = row.get("metadata") or {}
+                start_line = int(metadata.get("start_line") or 0)
+                if max_line_chars is not None:
+                    text, _ = _truncate_output_line(
+                        text,
+                        max_line_chars=max_line_chars,
+                        start_line=start_line,
+                    )
+                output_handle.write(text)
 
     return result
 
@@ -1115,6 +1298,10 @@ def filter_texts(
     *,
     pattern: str,
     tag: Optional[str] = None,
+    pattern_components: Optional[
+        Iterable[Union[PatternComponent, Mapping[str, Any]]]
+    ] = None,
+    match_mode: str = "or",
     snapshot: bool = False,
     pid: Optional[int] = None,
     tail_lines: Optional[int] = None,
@@ -1129,6 +1316,7 @@ def filter_texts(
     encoding: str = "utf-8",
     template_threshold: int = 0,
     output_dir: Optional[Path] = None,
+    max_line_chars: Optional[int] = DEFAULT_MAX_LINE_CHARS,
 ) -> MultiFilterResult:
     """对多份日志跑同一 scope/pattern；可选合并时间线。"""
     if not input_paths:
@@ -1157,6 +1345,8 @@ def filter_texts(
             path,
             pattern=pattern,
             tag=per_tag,
+            pattern_components=pattern_components,
+            match_mode=match_mode,
             output_path=(
                 resolved_output_dir
                 / f"{idx + 1:04d}_filtered_{_safe_tag(per_tag)}_{path.name}"
@@ -1174,6 +1364,7 @@ def filter_texts(
             segmenter=segmenter_for(idx),
             encoding=encoding,
             template_threshold=template_threshold,
+            max_line_chars=max_line_chars,
         )
         results.append(result)
         row = result.to_dict()

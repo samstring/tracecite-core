@@ -1,146 +1,101 @@
-<p align="center">
-  <strong>TraceCite Core</strong>
-</p>
+# TraceCite
 
-<p align="center">
-  <strong>把日志变成 Agent 能直接读的结构化证据。</strong>
-</p>
+**面向 AI 调试 Agent 的可扩展证据运行时。**
 
-<p align="center">
-  <a href="#"><img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue"></a>
-  <a href="#"><img alt="license" src="https://img.shields.io/badge/license-MIT-green"></a>
-  <a href="#"><img alt="python" src="https://img.shields.io/badge/python-3.10%2B-blue"></a>
-  <a href="#"><img alt="deps" src="https://img.shields.io/badge/零依赖-brightgreen"></a>
-</p>
+TraceCite 为大体量、持续变化的日志提供有界且可校验来源的证据视图。它会冻结输入、返回证据引用、校验证据来源，并允许第三方在不修改 TraceCite 源码的情况下增加领域能力。
 
----
-
-## 解决什么痛点
-
-分析日志时，三个反复出现的问题：
-
-**结论对不上行号。** 你找到一条错误，但是没法指向它在源文件的第几行。换个时间换个人来查，结论对不上。
-
-**重复行淹没了关键信息。** 同一个错误出现 500 次，输出就是 500 行。你得自己数、自己归类。
-
-**没找到，但不知道该换什么关键词。** 搜了 `"OOM"` 没有结果。日志里还有什么值得搜？全靠猜。
-
-## 安装
-
-```bash
-pip install -e .
+```text
+原始数据 -> Core 证据层 -> Runtime 工具层 -> 外部 Agent
+                               ^
+                               |
+                         领域扩展包
+                    Mobile / CI / 第三方
 ```
 
-零依赖。Python 3.10+。
+TraceCite 是给 Codex、Claude、ChatGPT 或自研 Agent 使用的基础设施，内部不再套一层 LLM Agent。
 
-## 怎么用
-
-```bash
-# 搜关键词，限定最近 5 分钟，相似行自动归类
-tracecite-core filter app.log --grep "Error|timeout" --last 5m --fold --json
-```
-
-这条命令做了几件事：
-
-1. 从 `app.log` 里提取最近 5 分钟的内容
-2. 匹配包含 `Error` 或 `timeout` 的行
-3. 相似的行自动归类，显示分布（比如 `"status:500" × 47` 而不是 47 行重复文本）
-4. 输出结构化 JSON
-
-跑完得到三个文件：
+## 安装与使用
 
 ```bash
-# 每条命中：源文件、第几行、什么时间、匹配了哪个词
-result.jsonl
+pip install tracecite
 
-# 相似行已归类，不重复
-result_tmpl.jsonl
-
-# 没匹配到但频率高的词——下一步搜什么，不用猜
-summary.jsonl
+tracecite probe ./logs --glob "*.log" --recursive
+tracecite search app.log "timeout|OOM" --regex --snapshot
+tracecite expand .tracecite/snapshots/app.log 120 --before 5 --after 10
+tracecite verify .tracecite/runs/<run-id>/manifest.json
+tracecite run scenario.json
 ```
 
-更多用法：
+运行环境为 Python 3.10 及以上版本，支持 Linux 和 macOS。当前暂不支持 Windows，
+因为 TraceCite 的原子状态锁依赖 POSIX `flock`。除 Python 标准库外无运行时依赖。
 
-```bash
-# 查某个进程在特定时间段的所有日志
-tracecite-core filter app.log --grep "." --pid 1234 --since 14:00 --until 15:00 --json
+所有命令返回确定性的 JSON。`status` 表示执行是否成功，`outcome` 单独表示证据支持什么。零命中是合法结果，不等于“问题没有发生”。
 
-# 安全处理正在被写入的日志（先快照再分析）
-tracecite-core filter live.log --grep "CRASH" --snapshot --json
+准备让 Codex、Claude 或其他自研 Agent 直接测试时，请先阅读[外部 Agent 接入指南](docs/agent-integration.zh-CN.md)。其中包含调用顺序、Result JSON、退出码、安全规则和可复制的测试 Prompt。
 
-# 把常用参数写成配置文件，下次直接引用
-tracecite-core filter app.log --grep "Error" --last 5m --fold --json --tag error-check
+规范性的[架构设计](docs/architecture.zh-CN.md)定义了通用调查协议、证据与知识模型、扩展边界、当前实现状态以及后续架构演进的维护规则。
+
+低层证据命令仍可通过 `tracecite-core` 使用。
+
+## 一个主项目，清晰的逻辑边界
+
+- `tracecite_core`：Source、Segment、Transform、Evidence、Snapshot、Manifest、Verify 与底层 Plugin SDK。
+- `tracecite.runtime`：Scenario、Assertion、Reporting、Result schema、预算、安全门禁和 Agent 工具。
+- `tracecite.extension`：有版本的第三方扩展契约。
+- `tracecite.integrations`：目前提供 CLI；MCP、Codex Skill 等适配器后续再接。
+
+领域语义不进入主包。`tracecite-mobile` 是独立的官方扩展，也是 Extension API 的真实验证项目。
+
+## 不改主库，增加自己的能力
+
+第三方包只依赖一个公开发行包：
+
+```toml
+[project]
+name = "my-company-tracecite"
+dependencies = ["tracecite>=0.1,<0.2"]
+
+[project.entry-points."tracecite.extensions"]
+my_domain = "my_tracecite.extension"
 ```
-
-## 相比直接丢日志给 AI
-
-| | 直接丢日志 | TraceCite Core |
-|---|---|---|
-| 输入 | 几十 MB 原始文本，AI 自己筛选 | 指定关键词和时间窗，只提取相关内容 |
-| 结果格式 | 自由文本，AI 自己解析和归类 | 结构化 JSON，行号、时间、匹配词一目了然 |
-| 重复行 | AI 需要自己判断哪些是重复的 | 自动归类，显示分布（`×500`） |
-| 没找到怎么办 | AI 重新扫描全文再试 | 返回高频词摘要，直接提示下一步搜什么 |
-| 可复现 | 两次分析中间步骤不同，结论难以对齐 | 输入被快照冻结，参数被记录，同输入同输出 |
-
-## 整体架构
-
-<img src="architecture.svg" alt="Core 执行流程：来源 → 分段 → 匹配 → 过滤 → 折叠 → 事件 → 运行" width="100%"/>
-
-七步串联，每步产出可检查的文件。Mobile 在此管线之上扩展了设备采集和行为分析。
-
-## 自定义流程
-
-**接入自定义日志格式。** 不是标准格式？描述一下就行：
 
 ```python
-from tracecite_core import register_format, FormatSegmenter
+from tracecite.extension import ExtensionAPI
+from tracecite.runtime import ScenarioRuntime
 
-register_format("my-app", FormatSegmenter(
-    start_re=r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})",  # 每行以时间戳开头
-    timestamp_formats=["%Y-%m-%d %H:%M:%S.%f"]
-))
-# tracecite-core filter app.log --segmenter my-app --grep "error"
+TRACECITE_EXTENSION_API = "1"
+MY_RUNTIME = ScenarioRuntime(
+    load_profile=load_profile,
+    resolve_scenario_pattern=resolve_pattern,
+)
+
+def register(api: ExtensionAPI) -> None:
+    api.register_runtime("my-domain", MY_RUNTIME)
 ```
 
-**把排查流程写成配置。** 不用每次回忆参数：
+加载第三方代码是显式动作：
 
-```json
-{
-  "name": "查崩溃",
-  "source": { "type": "file", "path": "crash.log" },
-  "filter": {
-    "grep": "SIGABRT|SIGSEGV",
-    "scope": { "last": "5m" },
-    "fold": true
-  }
-}
+```bash
+tracecite extension load
+tracecite run scenario.json --runtime my-domain --load-extensions
 ```
 
-**分步排查。** 第一步搜崩溃信号，第二步在第一步结果里搜堆栈——层层收窄。
+仅仅 `import tracecite` 不会执行第三方注册代码。API 版本会校验，注册冲突默认失败，默认 Runtime 不授权 live source 和 action。
 
-```json
-{
-  "filter": {
-    "stages": [
-      { "grep": "SIGABRT|SIGSEGV", "tag": "signal" },
-      { "grep": "backtrace|Thread \\d+", "tag": "stack" }
-    ]
-  }
-}
-```
+详细约束见[扩展契约](docs/extension-contract.md)；第 7 步已完成 Mobile 离线契约验证，真机与 CI 试点仍待执行，具体流程见[领域验证清单](docs/validation-checklist.md)。Agent 知识写入遵循独立的[提案、验证与晋升流程](docs/knowledge-governance.zh-CN.md)。
 
-**写扩展。** 需要内置之外的能力时，注册一个插件——不改核心代码：
+## 核心原则
 
-```python
-from tracecite_core import register_preprocessor_action
-register_preprocessor_action("normalize", lambda t, **kw: t.replace("WARNING", "WARN"))
-```
+- Evidence 可追溯，但不自动等于完整事实或真相。
+- `unknown` 和 `missing_evidence` 是一等结果。
+- Agent 自己生成的结论不能自动晋升为可信 Knowledge。
+- Extension 提供能力和领域语义；Runtime 保留执行、预算、验证和安全控制权。
+- Core 不导入 Runtime 或领域；Runtime 不导入 Mobile/CI。
 
-## 相关包
+## 当前状态
 
-- [**tracecite-mobile**](../tracecite-mobile/) — 手机版。连 iOS/Android 设备，采集和分析一体。
+主项目 Runtime 合并与旧 API 兼容层已实现。Mobile 公共扩展和 PlatformBackend 契约已通过 iOS/Android 离线 fixture；真机验收与 CI 领域试点仍待执行，通过前不推进 MCP 或其他 Agent 平台 Adapter。
 
-## 许可证
+## License
 
 MIT

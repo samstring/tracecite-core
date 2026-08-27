@@ -1,0 +1,8 @@
+include LICENSE
+include .gitignore
+include README.md
+include README.zh-CN.md
+recursive-include docs *.md
+recursive-include scripts *.py
+recursive-include tests *.py
+recursive-include tests/fixtures *.json *.jsonl *.log

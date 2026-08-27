@@ -213,7 +213,10 @@ def events_from_filter_result(result: Any) -> List[AnalysisEvent]:
         metadata = list(getattr(result, "matched_record_metadata", ()) or ())
         for index, chunk in enumerate(chunks):
             yield chunk, metadata[index] if index < len(metadata) else {}
-    source_path = str(getattr(result, "original_source", ""))
+    original_source = str(getattr(result, "original_source", ""))
+    # Line numbers are produced from work_input. When filtering used a snapshot
+    # this must point at the frozen file, not at the still-changing original.
+    source_path = str(getattr(result, "work_input", None) or original_source)
     pattern = str(getattr(result, "pattern", ""))
     out: List[AnalysisEvent] = []
     for index, (chunk, meta) in enumerate(iter_rows()):
@@ -229,8 +232,10 @@ def events_from_filter_result(result: Any) -> List[AnalysisEvent]:
                 attributes={
                     "term": term,
                     "terms": list(meta.get("terms") or []),
+                    "matched_by": list(meta.get("matched_by") or []),
                     "pattern": pattern,
                     "record_index": index,
+                    "original_source": original_source,
                 },
                 raw_ref=EventRef(
                     source_path=source_path,

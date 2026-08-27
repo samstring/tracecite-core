@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "advisory": true,
+  "status": "ok",
+  "valid": true,
+  "source_kind": "state",
+  "investigation_id": "INV-COMPAT",
+  "state_status": "active",
+  "stop": {"status": "active", "kind": "", "reason": "", "present": false},
+  "progress": {"observations": {"total": 0, "reported": 0, "omitted": 0}},
+  "unresolved_hypotheses": [],
+  "untested_hypotheses": [],
+  "untested_tests": [],
+  "execution_gaps": [],
+  "finding_gaps": [],
+  "coverage_gaps": [],
+  "suggested_actions": [],
+  "advisory_completeness": {"complete": false, "advisory_only": true, "reasons": ["investigation_active"]},
+  "omitted": {},
+  "truncated": false
+}

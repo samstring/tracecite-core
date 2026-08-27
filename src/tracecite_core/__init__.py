@@ -67,6 +67,32 @@ from .run import (
     RunWorkspace,
     verify_manifest,
 )
+from .immutable import is_stable_source, is_immutable_log_source
+from .output_layout import (
+    DEFAULT_OUTPUT_ROOT,
+    OutputLayout,
+    USER_OUTPUT_CONFIG_PATH,
+    deep_merge,
+    load_output_config,
+    write_output_config,
+)
+from .segment_store import (
+    MANIFEST_FILENAME,
+    SegmentStoreError,
+    StoredSegment,
+    append_segment,
+    load_segments,
+    manifest_path,
+    save_segments,
+    unique_segment_path,
+)
+from .live_cut import (
+    LiveCutError,
+    cooperative_live_cut,
+    cut_done_path,
+    cut_request_path,
+    rename_live_segment,
+)
 from .text_filter import (
     FilterError,
     FilterResult,
@@ -79,6 +105,27 @@ from .text_filter import (
     text_time_range,
     top_terms_in_text,
 )
+from .matcher import PatternComponent, coerce_pattern_components
+from .survey import (
+    SurveyError,
+    SurveySummary,
+    survey,
+    survey_file,
+)
+from .sample import (
+    DEFAULT_SAMPLE_CHARS,
+    DEFAULT_SAMPLE_COUNT,
+    MAX_SAMPLE_CHARS,
+    MAX_SAMPLE_COUNT,
+    MAX_SAMPLE_RECORDS,
+    SAMPLE_STRATEGIES,
+    SampleError,
+    SampleSummary,
+    peek,
+    sample,
+    sample_file,
+)
+from .format_probe import probe_format_config, probe_format_report
 
 __all__ = [
     "Record", "estimate_tokens",
@@ -93,7 +140,19 @@ __all__ = [
     "events_from_filter_result", "write_events_jsonl",
     "register_event_transformer", "available_event_transformers", "apply_event_transformers",
     "AnalysisRun", "RunFile", "RunWorkspace", "RunIntegrityError", "verify_manifest", "RUN_SCHEMA_VERSION",
+    "is_stable_source", "is_immutable_log_source",
+    "OutputLayout", "USER_OUTPUT_CONFIG_PATH", "DEFAULT_OUTPUT_ROOT",
+    "deep_merge", "load_output_config", "write_output_config",
+    "StoredSegment", "SegmentStoreError", "MANIFEST_FILENAME",
+    "load_segments", "save_segments", "append_segment", "manifest_path", "unique_segment_path",
+    "LiveCutError", "rename_live_segment", "cooperative_live_cut", "cut_request_path", "cut_done_path",
     "FilterError", "FilterResult", "filter_text", "filter_texts",
     "pattern_from_terms", "parse_time_arg", "record_timestamp", "reference_datetime",
     "text_time_range", "top_terms_in_text",
+    "PatternComponent", "coerce_pattern_components",
+    "SurveyError", "SurveySummary", "survey", "survey_file",
+    "SampleError", "SampleSummary", "sample", "sample_file", "peek",
+    "DEFAULT_SAMPLE_CHARS", "DEFAULT_SAMPLE_COUNT", "MAX_SAMPLE_CHARS",
+    "MAX_SAMPLE_COUNT", "MAX_SAMPLE_RECORDS", "SAMPLE_STRATEGIES",
+    "probe_format_config", "probe_format_report",
 ]

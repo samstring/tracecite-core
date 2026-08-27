@@ -1,0 +1,4 @@
+Dec 10 06:55:46 host sshd[30]: connection accepted
+Dec 10 06:55:47 host sshd[30]: authentication delayed
+Dec 10 06:55:48 host sshd[30]: authentication failed
+Dec 10 06:55:49 host sshd[30]: connection closed

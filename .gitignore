@@ -50,5 +50,7 @@ htmlcov/
 filter_history.jsonl
 filter_history.jsonl.lock
 *.log
+!tests/fixtures/loghub/*.log
 *.trace
 *.trace.zip
+experiments

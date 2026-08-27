@@ -45,6 +45,24 @@ def _write_sample_log(path, *, hit_count=12, miss_count=5):
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def test_unmatched_samples_are_deterministic(tmp_path):
+    src = tmp_path / "sample.log"
+    _write_sample_log(src, hit_count=1, miss_count=30)
+
+    first = filter_text(
+        src,
+        pattern="login",
+        output_path=tmp_path / "first.log",
+    )
+    second = filter_text(
+        src,
+        pattern="login",
+        output_path=tmp_path / "second.log",
+    )
+
+    assert first.unmatched_summary["samples"] == second.unmatched_summary["samples"]
+
+
 class TestPureLiteralEngine:
     @requires_ac
     def test_engine_is_aho_corasick(self, tmp_path):
@@ -432,3 +450,28 @@ class TestTimeRange:
         assert info["time_from"] == "2026-08-08T14:10:00"
         assert info["time_to"] == "2026-08-08T14:12:00"
         assert len(info["minute_distribution"]) == 3
+
+
+def test_filter_output_truncates_long_lines_but_records_stay_full(tmp_path):
+    src = tmp_path / "big.log"
+    giant = "X" * 5000
+    src.write_text(f"2026-08-08 14:10:00 INFO hit {giant}\n", encoding="utf-8")
+    out = tmp_path / "filtered.log"
+
+    result = filter_text(src, pattern="hit", output_path=out, max_line_chars=512)
+
+    body = out.read_text(encoding="utf-8")
+    assert "...[trunc, expand:#L1]" in body
+    assert len(body.splitlines()[-1]) <= 520
+    records = (tmp_path / "filtered.log.records.jsonl").read_text(encoding="utf-8")
+    assert giant in records
+    assert result.lines_truncated == 1
+    assert result.max_line_chars == 512
+    header = body.split("# ---\n", 1)[0]
+    assert "# lines_truncated: 1" in header
+    assert "# max_line_chars: 512" in header
+    assert result.history_path is not None
+    history = result.history_path.read_text(encoding="utf-8").splitlines()
+    entry = json.loads(history[-1])
+    assert entry["lines_truncated"] == 1
+    assert entry["max_line_chars"] == 512

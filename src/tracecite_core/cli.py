@@ -9,6 +9,7 @@ from pathlib import Path
 from . import __version__
 from .plugin_sdk import load_entrypoint_plugins, loaded_plugins
 from .run import verify_manifest
+from .sample import sample_file
 from .segmenter import available_segmenters, build_segmenter
 from .source import resolve_paths
 from .text_filter import filter_text
@@ -33,6 +34,25 @@ def build_parser() -> argparse.ArgumentParser:
     filt.add_argument("--since")
     filt.add_argument("--until")
     filt.add_argument("--json", action="store_true")
+
+    sample = sub.add_parser(
+        "sample", aliases=["peek"], help="sample bounded raw context from a text file"
+    )
+    sample.add_argument("input")
+    sample.add_argument(
+        "--strategy", choices=("head-tail", "head_tail", "uniform"), default="head-tail"
+    )
+    sample.add_argument("--count", type=int, default=10)
+    sample.add_argument("--max-chars", type=int, default=8_000)
+    sample_snapshot = sample.add_mutually_exclusive_group()
+    sample_snapshot.add_argument("--snapshot", dest="snapshot", action="store_true")
+    sample_snapshot.add_argument("--no-snapshot", dest="snapshot", action="store_false")
+    sample.set_defaults(snapshot=True)
+    sample.add_argument("--segmenter", default="auto")
+    sample.add_argument("--last")
+    sample.add_argument("--since")
+    sample.add_argument("--until")
+    sample.add_argument("--json", action="store_true")
 
     segment = sub.add_parser("segment", help="inspect record boundaries")
     segment.add_argument("input")
@@ -71,6 +91,24 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"{result.match_records} records -> {result.output_path}")
         return 0 if result.match_records else 2
+    if args.command in {"sample", "peek"}:
+        result = sample_file(
+            Path(args.input),
+            strategy=args.strategy,
+            count=args.count,
+            max_chars=args.max_chars,
+            snapshot=args.snapshot,
+            segmenter=args.segmenter,
+            last=args.last,
+            since=args.since,
+            until=args.until,
+        )
+        payload = result.to_dict()
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
     if args.command == "segment":
         records = []
         for index, record in enumerate(build_segmenter(args.segmenter).segment_file(Path(args.input))):
@@ -99,4 +137,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

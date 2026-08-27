@@ -1,0 +1,4 @@
+interface:
+  display_name: "TraceCite Knowledge Review"
+  short_description: "Review candidates before trusted promotion"
+  default_prompt: "Use $tracecite-review-knowledge to review these candidates and keep unapproved knowledge out of the trusted store."

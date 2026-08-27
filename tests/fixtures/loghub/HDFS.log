@@ -1,0 +1,4 @@
+081109 203518 143 INFO dfs.DataNode: block received
+081109 203519 143 WARN dfs.DataNode: block delayed
+081109 203520 143 ERROR dfs.DataNode: block rejected
+081109 203521 143 INFO dfs.DataNode: block closed

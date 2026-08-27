@@ -13,11 +13,13 @@ Application-specific formats are injected by upper layers through the public API
 from __future__ import annotations
 
 import json as _json
+import math
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
+from .matcher import _compile_safe_regex
 from .records import Record
 # ---------------------------------------------------------------------------
 # 基类
@@ -138,7 +140,7 @@ class RegexSegmenter(Segmenter):
         re_flags = 0
         if "i" in (flags or "").lower():
             re_flags |= re.IGNORECASE
-        self.pattern = re.compile(separator, re_flags)
+        self.pattern = _compile_safe_regex(separator, re_flags)
 
     def segment_lines(self, lines: Iterator[Tuple[int, str]]) -> Iterator[Record]:
         pending: List[Tuple[int, str]] = []
@@ -163,6 +165,36 @@ _JSON_LEVEL_KEYS = ("level", "lvl", "severity")
 _JSON_MSG_KEYS = ("msg", "message", "content", "text")
 
 
+def _normalize_timestamp(value: datetime) -> datetime:
+    """Return the Core comparison form for a parsed timestamp.
+
+    Core historically exposed naive ``datetime`` values for JSON/epoch
+    timestamps.  Keep that public shape while making offset-bearing values
+    comparable with them: an aware value is converted to UTC and its
+    ``tzinfo`` is removed.  A naive value is left untouched because its
+    timezone is part of the format/application contract and cannot be safely
+    guessed here.
+    """
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=None)
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _strptime_timestamp(raw: str, fmt: str) -> datetime:
+    """Parse a format timestamp without triggering yearless deprecations.
+
+    Python 3.13+ warns that ``strptime`` formats containing a day/month but
+    no year will become an error in Python 3.15.  Make the historical 1900
+    default explicit so behavior stays stable; the format or an application
+    segmenter's ``record_timestamp`` hook remains responsible for applying
+    any real year.
+    """
+    has_year = any(token in fmt for token in ("%Y", "%y", "%G"))
+    if has_year:
+        return datetime.strptime(raw, fmt)
+    return datetime.strptime(f"{raw};1900", f"{fmt};%Y")
+
+
 class JsonLineSegmenter(Segmenter):
     """每行一个 JSON 对象，自动提取时间/级别/消息字段。"""
 
@@ -180,10 +212,28 @@ class JsonLineSegmenter(Segmenter):
                 continue
             try:
                 obj = _json.loads(stripped)
-            except _json.JSONDecodeError:
+            except _json.JSONDecodeError as exc:
+                yield Record(
+                    text=line,
+                    start_line=line_number,
+                    end_line=line_number,
+                    fields={"parse_error": str(exc), "raw_fallback": True},
+                )
+                continue
+            if not isinstance(obj, dict):
+                yield Record(
+                    text=line,
+                    start_line=line_number,
+                    end_line=line_number,
+                    fields={
+                        "parse_error": f"JSON 顶层必须是对象，实际为 {type(obj).__name__}",
+                        "raw_fallback": True,
+                    },
+                )
                 continue
             fields: Dict[str, Any] = {}
             ts = None
+            timestamp_parse_error: Optional[str] = None
             tf = self._time_field
             if tf:
                 ts = obj.get(tf)
@@ -193,24 +243,68 @@ class JsonLineSegmenter(Segmenter):
                         ts = obj.get(k)
                         break
             if ts is not None:
-                if isinstance(ts, (int, float)):
-                    if ts > 1e11:
-                        ts = datetime.utcfromtimestamp(ts / 1000)
-                    else:
-                        ts = datetime.utcfromtimestamp(ts)
+                raw_timestamp = ts
+                raw_display = repr(raw_timestamp)
+                if len(raw_display) > 160:
+                    raw_display = raw_display[:157] + "..."
+                if isinstance(ts, bool):
+                    timestamp_parse_error = "布尔值不是有效的数值时间戳"
+                    ts = None
+                elif isinstance(ts, (int, float)):
+                    try:
+                        numeric_ts = float(ts)
+                        if not math.isfinite(numeric_ts):
+                            raise ValueError("时间戳必须是有限数值")
+                        # Keep the historical seconds/milliseconds heuristic,
+                        # but use abs() so negative epoch milliseconds follow
+                        # the same rule as positive values.
+                        seconds = numeric_ts / 1000 if abs(numeric_ts) > 1e11 else numeric_ts
+                        ts = datetime.fromtimestamp(seconds, tz=timezone.utc)
+                        ts = _normalize_timestamp(ts)
+                    except (OverflowError, OSError, ValueError) as exc:
+                        timestamp_parse_error = f"无法解析数值时间戳 {raw_display}: {exc}"
+                        ts = None
                 elif isinstance(ts, str):
-                    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
-                                "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
-                        try:
-                            ts = datetime.strptime(ts, fmt)
-                            break
-                        except ValueError:
-                            continue
-            for k in _JSON_LEVEL_KEYS:
+                    raw = ts.strip()
+                    # ``datetime.fromisoformat`` only gained support for
+                    # RFC3339's trailing Z in newer Python versions.  Rewrite
+                    # it to the equivalent explicit UTC offset for 3.9/3.10.
+                    iso_raw = raw[:-1] + "+00:00" if raw[-1:].upper() == "Z" else raw
+                    try:
+                        ts = _normalize_timestamp(datetime.fromisoformat(iso_raw))
+                    except ValueError:
+                        ts = None
+                        for fmt in (
+                            "%Y-%m-%dT%H:%M:%S.%fZ",
+                            "%Y-%m-%dT%H:%M:%SZ",
+                            "%Y-%m-%dT%H:%M:%S.%f%z",
+                            "%Y-%m-%dT%H:%M:%S%z",
+                            "%Y-%m-%d %H:%M:%S.%f",
+                            "%Y-%m-%d %H:%M:%S.%f%z",
+                            "%Y-%m-%d %H:%M:%S",
+                            "%Y-%m-%d %H:%M:%S%z",
+                        ):
+                            try:
+                                ts = _normalize_timestamp(_strptime_timestamp(raw, fmt))
+                                break
+                            except ValueError:
+                                continue
+                        if ts is None:
+                            timestamp_parse_error = f"无法解析字符串时间戳 {raw_display}"
+                else:
+                    timestamp_parse_error = (
+                        f"时间戳类型不受支持: {type(raw_timestamp).__name__}"
+                    )
+                    ts = None
+                if timestamp_parse_error is not None:
+                    fields["timestamp_parse_error"] = timestamp_parse_error
+            level_keys = (self._level_field,) if self._level_field else _JSON_LEVEL_KEYS
+            for k in level_keys:
                 if k in obj:
                     fields["level"] = obj[k]
                     break
-            for k in _JSON_MSG_KEYS:
+            message_keys = (self._msg_field,) if self._msg_field else _JSON_MSG_KEYS
+            for k in message_keys:
                 if k in obj:
                     fields["msg"] = str(obj[k])[:200]
                     break
@@ -268,18 +362,19 @@ class FormatSegmenter(Segmenter):
         re_flags = 0
         if "i" in (flags or "").lower():
             re_flags |= re.IGNORECASE
-        self.pattern = re.compile(start, re_flags)
+        self.pattern = _compile_safe_regex(start, re_flags)
         self.ts_formats = tuple(
             timestamp_formats or ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S")
         )
         self.multiline = multiline
         self.continuation = continuation or {}
-        self._header_strip_re = re.compile(header_strip) if header_strip else None
-        self._token_re = re.compile(token_re) if token_re else None
+        self._header_strip_re = _compile_safe_regex(header_strip) if header_strip else None
+        self._token_re = _compile_safe_regex(token_re) if token_re else None
         self._template_normalizers: Optional[List[Tuple[re.Pattern, str]]] = None
         if template_normalizers:
             self._template_normalizers = [
-                (re.compile(r["pattern"]), r["replacement"]) for r in template_normalizers
+                (_compile_safe_regex(r["pattern"]), r["replacement"])
+                for r in template_normalizers
             ]
         self._continu_max_lines = int(self.continuation.get("max_lines", 100))
 
@@ -325,7 +420,11 @@ class FormatSegmenter(Segmenter):
             raw = m.group("ts") if "ts" in (m.groupdict() or {}) else m.group()
             for fmt in self.ts_formats:
                 try:
-                    ts = datetime.strptime(raw.strip(), fmt)
+                    # Keep yearless formats at their historical 1900 value;
+                    # application segmenters may resolve the real year from
+                    # a reference timestamp.  The helper also avoids the
+                    # Python 3.13+ deprecation path for that format.
+                    ts = _strptime_timestamp(raw.strip(), fmt)
                     break
                 except ValueError:
                     continue
@@ -443,15 +542,36 @@ def _detect_core_segmenter(path: Path, *, sample_lines: int = 200) -> str:
     return "rawtext"
 
 
-def detect_segmenter_kind(path: Path, *, sample_lines: int = 200) -> str:
-    """通过公开 detector 链嗅探格式，最后回落 core 默认实现。"""
+def detect_segmenter_kind(
+    path: Path, *, sample_lines: int = 200
+) -> Union[str, Dict[str, Any]]:
+    """通过公开 detector 链嗅探格式，最后回落 core 默认实现。
+
+    返回 ``str``（内置/插件格式名）或 ``FormatSegmenter`` 定义 dict
+    （L1 线索探测器高置信时对陌生日志自动推断出的声明式配置，
+    可直接喂 build_segmenter）。
+    """
     for _name, (_priority, detector) in sorted(
         _DETECTORS.items(), key=lambda item: item[1][0], reverse=True
     ):
         detected = detector(Path(path), sample_lines=sample_lines)
-        if detected:
+        if detected and str(detected) != "rawtext":
+            # 明确的格式识别（插件名 / jsonline 等）：立即返回。
+            # "rawtext" 是兜底信号（上层 detector 可能用它表示"只认得它是文本"），
+            # 不中断探测链，继续尝试 L1 线索探测——若推断出时间戳格式更优。
             return str(detected)
-    return _detect_core_segmenter(Path(path), sample_lines=sample_lines)
+    core = _detect_core_segmenter(Path(path), sample_lines=sample_lines)
+    if core != "rawtext":
+        # 内置链明确识别（jsonline 等）：优先，不触发探测。
+        return core
+    # 内置链只能兜底 rawtext → L1 线索探测器高置信分支。
+    # 惰性导入：format_probe 是本模块新增的探测能力，避免模块加载循环。
+    from .format_probe import probe_format_config
+
+    inferred = probe_format_config(Path(path), sample_lines=sample_lines)
+    if inferred:
+        return inferred
+    return "rawtext"
 
 
 def build_segmenter(kind: Any = "rawtext", **options: Any) -> Segmenter:

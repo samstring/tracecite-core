@@ -1,0 +1,43 @@
+name: Core CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.10"
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: ubuntu-latest
+            python: "3.14"
+          - os: macos-latest
+            python: "3.14"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Check architecture governance
+        run: python scripts/check_architecture.py
+      - name: Check schema compatibility
+        run: python scripts/check_schema_compat.py
+      - name: Install development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run Core tests
+        run: python -m pytest -W error::DeprecationWarning
+      - name: Build source and wheel distributions
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
+        run: python -m build

@@ -1,0 +1,4 @@
+2015-10-18 18:01:47,978 INFO scheduler.Job: accepted job 1
+2015-10-18 18:01:48,102 WARN scheduler.Job: retrying job 1
+2015-10-18 18:01:49,203 ERROR scheduler.Job: job 1 failed
+2015-10-18 18:01:50,304 INFO scheduler.Job: cleanup complete

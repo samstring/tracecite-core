@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """声明式格式分段器：任意文本格式一条 start 正则接入。"""
 
+import warnings
+from datetime import datetime
+
 import pytest
 
-from tracecite_core.segmenter import FormatSegmenter, build_segmenter
+from tracecite_core.segmenter import FormatSegmenter, JsonLineSegmenter, build_segmenter
 
 CUSTOM_SAMPLE = """\
 [2026-08-08 10:00:01.123] INFO  user-42 action=login
@@ -74,3 +77,84 @@ class TestFormatSegmenter:
         assert records[1].timestamp is None
 
 
+def test_jsonline_preserves_invalid_rows_as_evidence() -> None:
+    segmenter = JsonLineSegmenter()
+    records = list(
+        segmenter.segment_lines(
+            [
+                (1, '{"message":"ok"}\n'),
+                (2, "not-json\n"),
+                (3, "[1, 2]\n"),
+            ]
+        )
+    )
+
+    assert len(records) == 3
+    assert records[1].fields["raw_fallback"] is True
+    assert records[2].fields["raw_fallback"] is True
+
+
+def test_jsonline_honors_custom_level_and_message_fields() -> None:
+    segmenter = JsonLineSegmenter(level_field="severity_name", msg_field="body")
+    record = next(
+        segmenter.segment_lines(
+            [(1, '{"severity_name":"WARN","body":"custom"}\n')]
+        )
+    )
+
+    assert record.fields == {"level": "WARN", "msg": "custom"}
+
+
+def test_jsonline_parses_rfc3339_offsets_to_utc_naive() -> None:
+    segmenter = JsonLineSegmenter()
+    records = list(
+        segmenter.segment_lines(
+            [
+                (1, '{"ts":"2026-08-19T10:00:00Z","msg":"z"}\n'),
+                (2, '{"ts":"2026-08-19T10:00:00+08:00","msg":"offset"}\n'),
+            ]
+        )
+    )
+
+    assert records[0].timestamp == datetime(2026, 8, 19, 10, 0, 0)
+    assert records[1].timestamp == datetime(2026, 8, 19, 2, 0, 0)
+    assert records[0].timestamp.tzinfo is None
+    assert records[1].timestamp.tzinfo is None
+
+
+def test_jsonline_invalid_numeric_timestamps_keep_rows() -> None:
+    segmenter = JsonLineSegmenter()
+    records = list(
+        segmenter.segment_lines(
+            [
+                (1, '{"ts":NaN,"msg":"nan"}\n'),
+                (2, '{"ts":1e309,"msg":"inf"}\n'),
+                (3, '{"ts":1e100,"msg":"overflow"}\n'),
+                (4, '{"ts":"2026-08-19T10:00:00Z","msg":"ok"}\n'),
+                (5, '{"ts":"' + ("x" * 1_000) + '","msg":"bounded"}\n'),
+            ]
+        )
+    )
+
+    assert len(records) == 5
+    assert all(record.timestamp is None for record in records[:3])
+    assert all(record.fields.get("timestamp_parse_error") for record in records[:3])
+    assert records[3].timestamp == datetime(2026, 8, 19, 10, 0, 0)
+    assert records[4].timestamp is None
+    assert len(records[4].fields["timestamp_parse_error"]) <= 200
+
+
+def test_yearless_timestamp_does_not_emit_deprecation_warning() -> None:
+    segmenter = FormatSegmenter(
+        start=r"^(?P<ts>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})",
+        timestamp_formats=["%b %d %H:%M:%S"],
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        record = next(
+            segmenter.segment_lines([(1, "Aug  8 14:10:00 message\n")])
+        )
+
+    # Core keeps the historical yearless value.  A format/application layer
+    # may resolve it against a reference timestamp later.
+    assert record.timestamp == datetime(1900, 8, 8, 14, 10, 0)

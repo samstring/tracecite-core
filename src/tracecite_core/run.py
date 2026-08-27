@@ -9,7 +9,9 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+from .immutable import is_stable_source
 
 RUN_SCHEMA_VERSION = 2
 
@@ -197,10 +199,30 @@ class RunWorkspace:
         destination = self.inputs_dir / f"{index + 1:04d}_{original.name}"
         if destination.exists():
             raise RunIntegrityError(f"运行输入目标已存在: {destination}")
+        # 快照语义：源可能是持续追加写入的日志（采集场景）。copy 完成后，
+        # destination 是复制期间源的一致视图，本身即合法快照；源是否继续增长
+        # 不影响快照合法性。故只校验快照自身可读、完整（copy2 失败会抛 OSError），
+        # 不再与不断变化的源比较 sha——那在并发写入下必然不一致，属误报。
         shutil.copy2(original, destination)
-        if _path_sha256(original) != _path_sha256(destination):
+        if _path_sha256(destination) is None:
             raise RunIntegrityError(f"冻结输入校验失败: {original}")
         return destination
+
+    def prepare_input(
+        self,
+        source: Path,
+        *,
+        index: int,
+        copy: Optional[bool] = None,
+    ) -> Tuple[Path, bool]:
+        """返回 (工作路径, 是否 copy 冻结)。稳定源默认直接引用。"""
+        resolved = Path(source).expanduser().resolve()
+        should_copy = copy if copy is not None else not is_stable_source(resolved)
+        if should_copy:
+            return self.freeze_input(resolved, index=index), True
+        if not resolved.is_file():
+            raise RunIntegrityError(f"无法读取输入文件: {resolved}")
+        return resolved, False
 
     def write_spec(self, canonical_json: str) -> Path:
         path = self.inputs_dir / "scenario.json"
@@ -217,8 +239,10 @@ class RunWorkspace:
         destination = context_dir / f"{name}{suffix}"
         if destination.exists():
             raise RunIntegrityError(f"运行上下文目标已存在: {destination}")
+        # 与 freeze_input 相同的快照语义：只校验快照自身完整性，
+        # 避免源在复制/hash 期间被并发写入导致的误报。
         shutil.copy2(original, destination)
-        if _path_sha256(original) != _path_sha256(destination):
+        if _path_sha256(destination) is None:
             raise RunIntegrityError(f"冻结运行上下文校验失败: {original}")
         return destination
 

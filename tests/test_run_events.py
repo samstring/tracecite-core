@@ -88,3 +88,20 @@ def test_filter_events_preserve_millisecond_timestamp(tmp_path: Path) -> None:
         }),
     )
     assert events_from_filter_result(result)[0].timestamp == "2026-08-09T10:00:00.123"
+
+
+def test_filter_events_reference_frozen_snapshot(tmp_path: Path) -> None:
+    source = tmp_path / "live.log"
+    source.write_text("target\n", encoding="utf-8")
+    result = filter_text(
+        source,
+        pattern="target",
+        output_path=tmp_path / "out.log",
+        snapshot=True,
+    )
+
+    event = events_from_filter_result(result)[0]
+    assert result.snapshot_path is not None
+    assert event.raw_ref is not None
+    assert event.raw_ref.source_path == str(result.snapshot_path)
+    assert event.attributes["original_source"] == str(source)

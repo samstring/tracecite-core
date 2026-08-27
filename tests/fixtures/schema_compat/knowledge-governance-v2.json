@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "revision": 0,
+  "policy": {
+    "min_independent_cases": 2,
+    "require_distinct_reviewer": true,
+    "allow_contradictions": false
+  },
+  "candidates": [],
+  "managed_targets": {}
+}

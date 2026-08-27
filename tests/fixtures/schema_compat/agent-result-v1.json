@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "operation": "compatibility-fixture",
+  "status": "ok",
+  "outcome": "not_assessed",
+  "hypotheses": [],
+  "evidence": [],
+  "artifacts": [],
+  "coverage": {},
+  "missing_evidence": [],
+  "verification": {},
+  "warnings": [],
+  "next_queries": [],
+  "data": {}
+}

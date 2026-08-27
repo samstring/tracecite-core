@@ -62,6 +62,50 @@ class LogFilterTimeScopeTest(unittest.TestCase):
             datetime(2026, 7, 25, 18, 42, 30),
         )
 
+    def test_parse_time_arg_rfc3339_offset_uses_utc_comparison_form(self) -> None:
+        ref = datetime(2026, 7, 25, 19, 0, 0)
+        self.assertEqual(
+            parse_time_arg("2026-07-25T18:42:30+08:00", ref=ref),
+            datetime(2026, 7, 25, 10, 42, 30),
+        )
+        self.assertEqual(
+            parse_time_arg("2026-07-25T10:42:30Z", ref=ref),
+            datetime(2026, 7, 25, 10, 42, 30),
+        )
+        self.assertEqual(
+            parse_time_arg("2026-07-25T18:42:30+0800", ref=ref),
+            datetime(2026, 7, 25, 10, 42, 30),
+        )
+
+    def test_since_until_offset_does_not_compare_aware_and_naive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "offset.log"
+            src.write_text(
+                "2026-07-25T18:42:00+08:00 I before\n"
+                "2026-07-25T18:43:00+08:00 I keep\n"
+                "2026-07-25T18:44:00+08:00 I after\n",
+                encoding="utf-8",
+            )
+            segmenter = FormatSegmenter(
+                start=r"^(?P<ts>\S+)",
+                timestamp_formats=["%Y-%m-%dT%H:%M:%S%z"],
+            )
+            result = filter_text(
+                src,
+                pattern=r"I ",
+                tag="offset",
+                since="2026-07-25T10:42:30Z",
+                until="2026-07-25T10:43:30Z",
+                segmenter=segmenter,
+            )
+            body = result.output_path.read_text(encoding="utf-8").split(
+                "# ---\n", 1
+            )[1]
+            self.assertIn("keep", body)
+            self.assertNotIn("before", body)
+            self.assertNotIn("after", body)
+            self.assertEqual(result.match_records, 1)
+
     def test_last_one_minute_keeps_recent_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "sample.log"
