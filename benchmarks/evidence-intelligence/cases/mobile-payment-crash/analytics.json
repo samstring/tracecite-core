@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "provider": "analytics",
+  "source": "analytics-export",
+  "evidence": [
+    {
+      "id": "event:tap-pay",
+      "kind": "user_event",
+      "timestamp": "2026-08-27T10:03:11Z",
+      "severity": "info",
+      "label": "user tapped Pay",
+      "entities": [
+        {"namespace": "app", "kind": "session", "value": "S88"}
+      ],
+      "attributes": {"event": "tap_pay"}
+    },
+    {
+      "id": "event:background",
+      "kind": "lifecycle",
+      "timestamp": "2026-08-27T10:03:12Z",
+      "severity": "info",
+      "label": "application entered background",
+      "entities": [
+        {"namespace": "app", "kind": "session", "value": "S88"}
+      ],
+      "attributes": {"event": "did_enter_background"}
+    },
+    {
+      "id": "event:noise",
+      "kind": "user_event",
+      "timestamp": "2026-08-27T10:03:11Z",
+      "severity": "info",
+      "label": "unrelated user opened settings",
+      "entities": [
+        {"namespace": "app", "kind": "session", "value": "S99"}
+      ],
+      "attributes": {"event": "open_settings"}
+    }
+  ],
+  "relations": []
+}
