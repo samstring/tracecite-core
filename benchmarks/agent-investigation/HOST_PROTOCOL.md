@@ -12,6 +12,8 @@ For every run the host creates a fresh temporary workspace containing only:
 
 The host MUST NOT mount or expose `gold.json`, `case.json` fields that reveal fix references, issue comments, fix commits/PRs, repository checkout history, browser/search tools, or general network access. The model prompt MUST NOT include the upstream issue number unless the Agent-visible question itself requires it.
 
+`run_host.py` constructs this clean workspace, verifies prepared input SHA-256 values, creates the transcript/session, and starts the external Agent Host with a reduced environment. It is **not** an OS/container security sandbox. A publishable run still needs a host/container policy that prevents the Agent from reading evaluator/repository paths outside the workspace and that separates provider API connectivity from browser/search/general network access.
+
 ## Controlled variables
 
 Keep these identical across the three modes:
@@ -37,7 +39,7 @@ Expose a constrained local shell suitable for evidence exploration. The benchmar
 - `wc`;
 - read-only file metadata commands.
 
-Do not give this mode TraceCite commands. The shell must not have network access.
+Do not give this mode TraceCite commands. The shell must not have general network access.
 
 ### `tracecite`
 
@@ -56,6 +58,47 @@ The Agent receives bounded Agent-facing projections, but each search is projecte
 Expose the same TraceCite tool set and budgets as `tracecite`, but bind every compatible turn to one fresh per-run `context_id`. Previously seen Evidence is therefore suppressed from later Agent-facing views while canonical Results remain in the private Ledger.
 
 Do not add extra semantic hints to this mode merely because Context State is enabled.
+
+## External Host runner
+
+The repository provides a provider-neutral runner:
+
+```bash
+python benchmarks/agent-investigation/run_host.py \
+  benchmarks/agent-investigation/cases/kubernetes-140848 \
+  /tmp/tracecite-bench/kubernetes-140848/prepared.json \
+  --mode tracecite_context \
+  --model provider/model \
+  --seed 1 \
+  --output /tmp/runs/kube-context-1.jsonl \
+  --pass-env PROVIDER_API_KEY \
+  -- python /path/to/agent_host_adapter.py
+```
+
+Everything after the literal `--` is executed directly as argv; it is not passed through a shell. This allows provider-specific commands to use their own flags without colliding with benchmark-runner arguments.
+
+The runner exposes these environment variables to the Host adapter:
+
+- `TRACECITE_BENCH_WORKSPACE` — fresh per-run workspace;
+- `TRACECITE_BENCH_QUESTION` — path to `QUESTION.md`;
+- `TRACECITE_BENCH_INPUTS` — path to the prepared `inputs/` directory;
+- `TRACECITE_BENCH_SCRATCH` — writable per-run scratch directory;
+- `TRACECITE_BENCH_TRANSCRIPT` — JSONL file the Host must append to;
+- `TRACECITE_BENCH_MODE` — one of the three benchmark modes;
+- `TRACECITE_BENCH_MODEL` — requested provider/model identifier;
+- `TRACECITE_BENCH_SEED` — attempt seed/index supplied by the matrix;
+- `TRACECITE_BENCH_RUN_ID` — unique run identifier;
+- `TRACECITE_BENCH_CONTEXT_ID` — fresh value only for `tracecite_context`, otherwise empty.
+
+The runner creates the initial `session` event. The Host adapter MUST append `model`, `tool`, and `final` events; it MUST NOT replace the transcript or add a second `session` event.
+
+### Environment and credential boundary
+
+Arbitrary parent-process environment variables are not inherited by default. Only a small OS/runtime allowlist is retained. Provider credentials or provider-specific settings must be passed explicitly with repeated `--pass-env NAME` arguments.
+
+This reduces accidental evaluator/CI secret leakage, but it is not a replacement for process/container isolation. In particular, retaining runtime variables such as `HOME` can be necessary for installed Agent CLIs; a strict benchmark container should mount only the configuration required by the selected Host.
+
+The runner itself does not attempt to distinguish a legitimate model-provider API request from arbitrary web browsing. The selected Host/container must enforce that policy.
 
 ## Transcript requirements
 
@@ -95,6 +138,8 @@ A publishable result requires, per case:
 - all attempts retained, including tool errors, `unknown`, and incorrect diagnoses.
 
 Do not rerun only losing modes until they pass.
+
+A simple matrix driver may invoke `run_host.py` repeatedly; the provider/model adapter remains outside TraceCite Core. Do not add a provider SDK dependency merely to automate the matrix.
 
 ## Evaluation order
 
