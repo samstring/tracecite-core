@@ -35,6 +35,34 @@ def test_real_world_case_is_valid_and_does_not_leak_gold(
     assert forbidden not in question
 
 
+def test_case_requires_pinned_source_sha256(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "question.md").write_text("Why did this fail?\n", encoding="utf-8")
+    (case_dir / "gold.json").write_text("{}\n", encoding="utf-8")
+    (case_dir / "case.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "unpinned",
+                "question_file": "question.md",
+                "gold_file": "gold.json",
+                "inputs": [
+                    {
+                        "id": "log",
+                        "url": "https://example.invalid/log.txt",
+                        "filename": "log.txt",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="sha256"):
+        validate_case(case_dir)
+
+
 def test_benchmark_scores_quality_and_context_cost(tmp_path: Path) -> None:
     transcript = tmp_path / "run.jsonl"
     events = [
