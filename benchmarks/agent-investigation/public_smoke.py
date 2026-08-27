@@ -209,13 +209,14 @@ def run_smoke(prepared_manifest: Path, output: Path) -> dict[str, Any]:
     if repeated["tracecite_context"]["evidence_per_turn"][1] != 0:
         raise AssertionError("repeated-query second turn should suppress all citable Evidence")
 
+    exact_panic = "failed to merge global and in-flight KubeletConfiguration while setting defaults"
     overlapping = _experiment(
         source=source,
         root=output.parent,
         name="overlap",
         queries=[
-            "panic|PodLevelResourcesFixDefaulting",
-            "PodLevelResourcesFixDefaulting|KubeletConfiguration|configz",
+            exact_panic,
+            f"{exact_panic}|PodLevelResourcesFixDefaulting",
         ],
     )
 
