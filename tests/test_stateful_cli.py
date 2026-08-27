@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from tracecite.integrations import cli, stateful_cli
+from tracecite.integrations.agent_projection import prefer_smaller_agent_view
 
 
 def _search_payload(count: int = 1, *, label_suffix: str = "") -> dict[str, object]:
@@ -119,8 +120,8 @@ def test_smaller_agent_view_never_selects_a_larger_delta() -> None:
     larger_delta = {"evidence": [], "context": "x" * 100}
     smaller_delta = {"evidence": []}
 
-    assert stateful_cli._smaller_agent_view(larger_delta, baseline) is baseline
-    assert stateful_cli._smaller_agent_view(smaller_delta, baseline) is smaller_delta
+    assert prefer_smaller_agent_view(larger_delta, baseline) == baseline
+    assert prefer_smaller_agent_view(smaller_delta, baseline) == smaller_delta
 
 
 def test_context_id_requires_ledger_and_stays_machine_readable(capsys) -> None:
