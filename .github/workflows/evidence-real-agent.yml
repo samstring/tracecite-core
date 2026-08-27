@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
       BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
     steps:
       - uses: actions/checkout@v4
@@ -30,24 +30,52 @@ jobs:
           python-version: "3.12"
       - name: Install TraceCite
         run: python -m pip install -e ".[dev]"
-      - name: Validate benchmark configuration
+      - name: Validate benchmark credentials
         shell: bash
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
             echo "OPENAI_API_KEY is not configured."
             exit 1
           fi
-          if [ -z "$OPENAI_BASE_URL" ]; then
-            echo "TRACECITE_BENCH_BASE_URL is not configured."
-            exit 1
-          fi
-          if [ -z "$BENCH_MODEL" ]; then
-            echo "TRACECITE_BENCH_MODEL is not configured."
-            exit 1
-          fi
           echo "Provider base URL: $OPENAI_BASE_URL"
-          echo "Benchmark model: $BENCH_MODEL"
+      - name: Discover models available to this key
+        id: models
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          base = os.environ["OPENAI_BASE_URL"].rstrip("/")
+          key = os.environ["OPENAI_API_KEY"]
+          req = urllib.request.Request(
+              f"{base}/models",
+              headers={"Authorization": f"Bearer {key}"},
+          )
+          with urllib.request.urlopen(req, timeout=60) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+          data = payload.get("data", []) if isinstance(payload, dict) else []
+          ids = sorted(
+              str(item.get("id"))
+              for item in data
+              if isinstance(item, dict) and item.get("id")
+          )
+          Path("/tmp/tracecite-provider-models.txt").write_text("\n".join(ids) + "\n", encoding="utf-8")
+          print(f"Available models: {len(ids)}")
+          for model_id in ids:
+              print(model_id)
+          PY
+          if [ -n "$BENCH_MODEL" ]; then
+            echo "run_benchmark=true" >> "$GITHUB_OUTPUT"
+            echo "Benchmark model: $BENCH_MODEL"
+          else
+            echo "run_benchmark=false" >> "$GITHUB_OUTPUT"
+            echo "TRACECITE_BENCH_MODEL is empty; discovery-only run, no inference calls will be made."
+          fi
       - name: Validate host and prepare pinned case
+        if: steps.models.outputs.run_benchmark == 'true'
         run: |
           python -m py_compile benchmarks/agent-investigation/openai_host.py
           python -m tracecite.benchmarking validate benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence
@@ -56,6 +84,7 @@ jobs:
             benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence \
             --work-dir /tmp/tracecite-real-agent
       - name: Run three-mode smoke test
+        if: steps.models.outputs.run_benchmark == 'true'
         id: real_model
         shell: bash
         run: |
@@ -91,6 +120,7 @@ jobs:
         with:
           name: evidence-real-agent-pilot
           path: |
+            /tmp/tracecite-provider-models.txt
             /tmp/tracecite-real-runs
             /tmp/tracecite-real-scores
           if-no-files-found: warn
