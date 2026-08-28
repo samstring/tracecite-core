@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "kubernetes-140628-scale",
+  "title": "Kubelet panics on an invalid PodLevelResources feature-gate combination",
+  "source_issue": "https://github.com/kubernetes/kubernetes/issues/140628",
+  "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140631",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "kubelet-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-node-crio-swap-serial/2077851676416413696/artifacts/e2-standard-2-fedora-coreos-44-20260621-3-1-gcp-x86-64-ae042d69/kubelet.log",
+      "filename": "kubelet.log",
+      "sha256": "7a38e3bab38392c4fa4fda94e9409d75e9d9178aba85fe855600d1d641731866",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "kubernetes/kubernetes",
+    "public_log": true,
+    "scale_bucket": "stress-over-50MiB",
+    "bytes": 67426003,
+    "notes": "Optional stress case. Prompt omits the feature-gate names and maintainer diagnosis."
+  }
+}

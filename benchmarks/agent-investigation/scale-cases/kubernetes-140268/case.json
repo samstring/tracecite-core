@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "kubernetes-140268",
+  "title": "Device health update routed to the wrong pod when device IDs collide",
+  "source_issue": "https://github.com/kubernetes/kubernetes/issues/140268",
+  "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140323",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "ci-build-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-containerd/2074205743732494336/build-log.txt",
+      "filename": "build-log.txt",
+      "sha256": "201850aabf8100794bcd50ca6017a6e927c4f3d98333248d163563190e2253ad",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "kubernetes/kubernetes",
+    "public_log": true,
+    "scale_bucket": "10-25MiB",
+    "bytes": 24216286,
+    "notes": "Prompt exposes the observed timeout only; maintainer diagnosis and fix contents are evaluator-only."
+  }
+}

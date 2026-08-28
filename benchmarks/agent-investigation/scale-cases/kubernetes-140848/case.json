@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "kubernetes-140848-scale",
+  "title": "Kubelet restart loop caused by a feature-gate dependency violation",
+  "source_issue": "https://github.com/kubernetes/kubernetes/issues/140848",
+  "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140853",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "kubelet-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-kubelet-containerd-resource-managers/2079792906901655552/artifacts/n2d-standard-32-cos-125-19216-532-25-913c732d/kubelet.log",
+      "filename": "kubelet.log",
+      "sha256": "6217dc9fd7bb8b44f08920909318d2cf87c920049a267c4fd08d1dca4de5d762",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "kubernetes/kubernetes",
+    "public_log": true,
+    "scale_bucket": "10-25MiB",
+    "bytes": 14495302,
+    "notes": "Scale-specific root-cause fixture derived from the existing real online case without embedding maintainer truth in the prompt."
+  }
+}

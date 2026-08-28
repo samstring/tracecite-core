@@ -1,0 +1,14 @@
+{
+  "root_cause_schema_version": 1,
+  "root_cause": {
+    "failure_localization": {"patterns": ["(?:kubelet.{0,120}(?:config|default|feature.?gate)|KubeletConfiguration|PodLevelResourcesFixKubeletQOSClass)"]},
+    "immediate_failure_mechanism": {"patterns": ["(?:kubelet.{0,100}panic|panic.{0,100}(?:kubelet|KubeletConfiguration)|failed to merge global and in-flight KubeletConfiguration)"]},
+    "upstream_contributor": {"patterns": ["(?:PodLevelResourcesFixKubeletQOSClass.{0,220}(?:enabled|true).{0,220}PodLevelResources.{0,120}(?:disabled|false)|PodLevelResources.{0,220}(?:disabled|false).{0,220}PodLevelResourcesFixKubeletQOSClass.{0,120}(?:enabled|true)|feature.?gate.{0,180}dependenc)"]},
+    "fix_alignment": {"patterns": ["(?:disable|couple|align|set).{0,180}PodLevelResourcesFixKubeletQOSClass.{0,220}(?:PodLevelResources|false|disabled)|PodLevelResourcesFixKubeletQOSClass.{0,220}(?:follow|depend|match).{0,120}PodLevelResources"]}
+  },
+  "evidence_markers": ["failed to merge global and in-flight KubeletConfiguration while setting defaults", "PodLevelResourcesFixKubeletQOSClass is enabled", "disabled: [PodLevelResources]"],
+  "unsupported_claims": [{"id": "multiple-kubelet-services-root-cause", "patterns": ["(?:multiple|more than one) kubelet service.{0,160}(?:root cause|caused|because)"]}],
+  "contradictions": [],
+  "root_cause_thresholds": {"dimension_recall": 0.75, "supported_dimension_recall": 0.75, "citation_accuracy": 0.5, "evidence_marker_recall": 0.0, "max_unsupported_claim_hits": 0, "max_contradiction_hits": 0},
+  "leak_terms": ["PodLevelResourcesFixKubeletQOSClass", "failed to merge global and in-flight KubeletConfiguration while setting defaults"]
+}

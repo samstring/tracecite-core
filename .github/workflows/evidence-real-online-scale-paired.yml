@@ -1,0 +1,222 @@
+name: Real Online Scale Paired
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - benchmarks/agent-investigation/scale-cases/**
+      - .github/workflows/evidence-real-online-scale-paired.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evidence-real-online-scale-paired
+  cancel-in-progress: true
+
+jobs:
+  paired:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        case:
+          - id: kubernetes-140268
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140268
+          - id: kubernetes-140848-scale
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140848
+          - id: kubernetes-140628-scale
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140628
+        mode:
+          - free_shell
+          - tracecite
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1800"
+      TRACECITE_BENCH_MAX_ROUNDS: "12"
+      TRACECITE_BENCH_NO_GROWTH_ROUNDS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install TraceCite
+        run: python -m pip install -e ".[dev]"
+      - name: Install and verify ripgrep
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ripgrep
+          fi
+          rg --version
+      - name: Prepare immutable public evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/scale-prepared /tmp/paired-result
+          mkdir -p /tmp/paired-result
+          python -m tracecite.benchmarking prepare "${{ matrix.case.dir }}" \
+            --work-dir /tmp/scale-prepared \
+            > /tmp/paired-result/prepare.json
+          PREPARED="$(find /tmp/scale-prepared -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          echo "PREPARED=$PREPARED" >> "$GITHUB_ENV"
+      - name: Run same-agent-loop tool A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          TRANSCRIPT="/tmp/paired-result/transcript.jsonl"
+          set +e
+          python benchmarks/agent-investigation/run_host.py \
+            "${{ matrix.case.dir }}" "$PREPARED" \
+            --mode "${{ matrix.mode }}" \
+            --model "$BENCH_MODEL" \
+            --seed 1 \
+            --timeout-seconds 900 \
+            --output "$TRANSCRIPT" \
+            --pass-env OPENAI_API_KEY \
+            --pass-env OPENAI_BASE_URL \
+            --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
+            --pass-env TRACECITE_BENCH_MAX_ROUNDS \
+            --pass-env TRACECITE_BENCH_NO_GROWTH_ROUNDS \
+            -- python benchmarks/agent-investigation/gmi_canonical_host.py \
+            > /tmp/paired-result/run-result.json
+          RUN_RC=$?
+          set -e
+          echo "$RUN_RC" > /tmp/paired-result/run-rc.txt
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          run_path = Path('/tmp/paired-result/run-result.json')
+          try:
+              run = json.loads(run_path.read_text())
+          except Exception:
+              run = {}
+          status = str(run.get('status') or 'host_error')
+          Path('/tmp/paired-result/status.txt').write_text(status + '\n')
+          PY
+
+          STATUS="$(cat /tmp/paired-result/status.txt)"
+          if [[ "$STATUS" == "ok" || "$STATUS" == "incomplete" ]]; then
+            set +e
+            python -m tracecite.root_cause_benchmarking score \
+              "${{ matrix.case.dir }}" "$TRANSCRIPT" \
+              > /tmp/paired-result/score.json
+            echo "$?" > /tmp/paired-result/score-rc.txt
+            set -e
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('/tmp/paired-result')
+          def load(name):
+              p = root / name
+              if not p.is_file():
+                  return None
+              try:
+                  return json.loads(p.read_text())
+              except Exception:
+                  return None
+          run = load('run-result.json') or {}
+          score = load('score.json')
+          transcript = root / 'transcript.jsonl'
+          failure_reason = None
+          if transcript.is_file():
+              for line in transcript.read_text(errors='replace').splitlines():
+                  try:
+                      event = json.loads(line)
+                  except Exception:
+                      continue
+                  if event.get('type') == 'host_error':
+                      failure_reason = event.get('failure_reason') or event.get('error')
+          payload = {
+              'schema_version': 1,
+              'case_id': '${{ matrix.case.id }}',
+              'mode': '${{ matrix.mode }}',
+              'model': '${{ env.BENCH_MODEL }}',
+              'run_status': run.get('status'),
+              'host_failure_reason': failure_reason,
+              'run': run,
+              'score': score,
+          }
+          (root / 'outcome.json').write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+      - name: Upload paired result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-online-scale-paired-${{ matrix.case.id }}-${{ matrix.mode }}
+          path: /tmp/paired-result
+          if-no-files-found: error
+
+  aggregate:
+    needs: paired
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: real-online-scale-paired-*
+          path: /tmp/paired-all
+      - name: Aggregate paired metrics
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/paired-summary
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          records = []
+          for path in sorted(Path('/tmp/paired-all').rglob('outcome.json')):
+              outcome = json.loads(path.read_text())
+              score = outcome.get('score') or {}
+              quality = score.get('quality') or {}
+              cost = score.get('context_cost') or {}
+              records.append({
+                  'case_id': outcome.get('case_id'),
+                  'mode': outcome.get('mode'),
+                  'model': outcome.get('model'),
+                  'run_status': outcome.get('run_status'),
+                  'host_failure_reason': outcome.get('host_failure_reason'),
+                  'passed': score.get('passed') if score else None,
+                  'dimension_recall': quality.get('dimension_recall'),
+                  'supported_dimension_recall': quality.get('supported_dimension_recall'),
+                  'citation_accuracy': (quality.get('citation') or {}).get('accuracy'),
+                  'unsupported_claim_hits': quality.get('unsupported_claim_hits'),
+                  'contradiction_hits': quality.get('contradiction_hits'),
+                  'reported_input_tokens': cost.get('reported_input_tokens'),
+                  'reported_output_tokens': cost.get('reported_output_tokens'),
+                  'tool_output_chars': cost.get('tool_output_chars'),
+                  'cumulative_attempted_context_chars': cost.get('cumulative_attempted_context_chars'),
+                  'peak_attempted_context_chars': cost.get('peak_attempted_context_chars'),
+                  'tool_calls': cost.get('tool_calls'),
+                  'model_calls': cost.get('model_calls'),
+              })
+          pairs = {}
+          for row in records:
+              pairs.setdefault(row['case_id'], {})[row['mode']] = row
+          payload = {
+              'schema_version': 1,
+              'comparison': 'same model + same agent loop; tool surface differs only',
+              'records': records,
+              'pairs': pairs,
+          }
+          out = Path('/tmp/paired-summary/summary.json')
+          out.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: real-online-scale-paired-summary
+          path: /tmp/paired-summary/summary.json
