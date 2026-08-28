@@ -1,16 +1,21 @@
 {
   "schema_version": 1,
   "policy": {
-    "case_count": 10,
+    "minimum_case_count": 10,
     "synthetic_evidence_allowed": false,
     "padding_allowed": false,
-    "selection_rule": "Every case must be a real public incident with currently downloadable original reporter/runtime evidence and a verified merged fix. Size buckets are assigned from downloaded bytes, never manufactured.",
+    "selection_rule": "Every case must be a real public incident with currently downloadable original reporter/runtime evidence, root-cause-relevant signals in the selected evidence, and a verified merged fix. Qualified cases may exceed the minimum count; size is always measured from the original downloaded object and is never manufactured.",
     "size_buckets_bytes": {
-      "small": {"max_exclusive": 1048576},
-      "medium_1_10m": {"min_inclusive": 1048576, "max_inclusive": 10485760},
-      "large": {"min_exclusive": 10485760, "max_inclusive": 52428800}
+      "small_direct_guard": {"max_exclusive": 1048576},
+      "mb_1_10": {"min_inclusive": 1048576, "max_inclusive": 10485760},
+      "mb_10_25": {"min_exclusive": 10485760, "max_inclusive": 26214400},
+      "mb_25_50": {"min_exclusive": 26214400, "max_inclusive": 52428800},
+      "stress_over_50": {"min_exclusive": 52428800}
     },
+    "model_acceptance_ceiling_bytes": 52428800,
     "small_case_purpose": "DIRECT anti-over-escalation guard only",
+    "mb_scale_purpose": "Primary scale evidence. Prefer naturally large, high-cardinality real incident evidence across the full 1-50 MiB range rather than optimizing for a narrow 1-10 MiB band.",
+    "over_50m_policy": "Discover and retain strong >50 MiB incidents as optional stress cases, but do not make them part of the release acceptance gate unless the benchmark ceiling is explicitly raised later.",
     "retention_rule": "A historical issue is not sufficient if its original evidence object has expired; scale cases must remain reproducible from the public evidence URL at qualification time."
   },
   "cases": [
