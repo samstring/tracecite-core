@@ -1,0 +1,207 @@
+name: TraceBench Scale Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - ".github/workflows/evidence-tracebench-scale-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-scale-bundles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore TraceBench archive cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/tracebench-cache/HDFS_v3_TraceBench.zip
+          key: tracebench-hdfs-v3-c69999ff28933d2b163170d26c2faf64
+      - name: Download pinned TraceBench archive
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tracebench-cache
+          curl -L --retry 5 --retry-delay 2 \
+            -o /tmp/tracebench-cache/HDFS_v3_TraceBench.zip \
+            'https://zenodo.org/records/8196385/files/HDFS_v3_TraceBench.zip?download=1'
+      - name: Verify archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'c69999ff28933d2b163170d26c2faf64  /tmp/tracebench-cache/HDFS_v3_TraceBench.zip' | md5sum -c -
+      - name: Extract target fault evidence and real normal background
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/tb-scale
+          mkdir -p /tmp/tb-scale/extracted
+          cd /tmp/tb-scale/extracted
+          unzip -q /tmp/tracebench-cache/HDFS_v3_TraceBench.zip \
+            'tracebench/AN_Data_corruptBlk_r_30FDN_30C_1to19B_0to120INT_15RT_5WT/event.csv' \
+            'tracebench/NM_*/event.csv'
+          du -sh /tmp/tb-scale/extracted
+      - name: Build paired real-evidence size ladder
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+          import csv, hashlib, json
+          from pathlib import Path
+
+          root = Path('/tmp/tb-scale/extracted/tracebench')
+          fault = root / 'AN_Data_corruptBlk_r_30FDN_30C_1to19B_0to120INT_15RT_5WT' / 'event.csv'
+          target_task = 'EC78D31AEC1E64FD'
+          out_root = Path('/tmp/tb-scale/bundles')
+          out_root.mkdir(parents=True, exist_ok=True)
+
+          with fault.open(encoding='utf-8', errors='replace', newline='') as fh:
+              reader = csv.reader(fh)
+              header = next(reader)
+              target_rows = [row for row in reader if row and row[0] == target_task]
+          if not target_rows:
+              raise SystemExit('target task not found')
+
+          normal_files = sorted(
+              p for p in root.glob('NM_*/event.csv') if p.is_file()
+          )
+          if not normal_files:
+              raise SystemExit('no normal event files found')
+
+          # Materialize a deterministic stream of normal rows only once. Keep source
+          # metadata separate; Agent sees only runtime.csv with no scenario names.
+          normal_stream = out_root / '_normal_stream.csv'
+          provenance = []
+          with normal_stream.open('w', encoding='utf-8', newline='') as out:
+              writer = csv.writer(out)
+              writer.writerow(header)
+              for source in normal_files:
+                  source_rows = 0
+                  with source.open(encoding='utf-8', errors='replace', newline='') as fh:
+                      reader = csv.reader(fh)
+                      source_header = next(reader, None)
+                      if source_header != header:
+                          raise SystemExit(f'header mismatch: {source}')
+                      for row in reader:
+                          writer.writerow(row)
+                          source_rows += 1
+                  provenance.append({'source': str(source.relative_to(root)), 'rows': source_rows, 'bytes': source.stat().st_size})
+
+          # Write the target trace by itself first to establish the natural tens-KB tier.
+          target_only = out_root / 'target-only.csv'
+          with target_only.open('w', encoding='utf-8', newline='') as out:
+              writer = csv.writer(out)
+              writer.writerow(header)
+              writer.writerows(target_rows)
+          target_bytes = target_only.stat().st_size
+
+          requested = [500_000, 5_000_000, 50_000_000, 100_000_000, 500_000_000]
+          tiers = [('target-only', target_bytes)]
+
+          def row_iter():
+              with normal_stream.open(encoding='utf-8', errors='replace', newline='') as fh:
+                  reader = csv.reader(fh)
+                  next(reader, None)
+                  yield from reader
+
+          for target_size in requested:
+              if target_size <= target_bytes:
+                  continue
+              out_path = out_root / f'{target_size}.csv'
+              before_budget = max(0, (target_size - target_bytes) // 2)
+              inserted = False
+              normal_rows = 0
+              with out_path.open('w', encoding='utf-8', newline='') as out:
+                  writer = csv.writer(out)
+                  writer.writerow(header)
+                  for row in row_iter():
+                      if not inserted and out.tell() >= before_budget:
+                          writer.writerows(target_rows)
+                          inserted = True
+                      writer.writerow(row)
+                      normal_rows += 1
+                      if inserted and out.tell() >= target_size:
+                          break
+                  if not inserted:
+                      writer.writerows(target_rows)
+                      inserted = True
+              tiers.append((str(target_size), out_path.stat().st_size))
+
+          def sha256(path: Path) -> str:
+              h = hashlib.sha256()
+              with path.open('rb') as fh:
+                  for block in iter(lambda: fh.read(1024*1024), b''):
+                      h.update(block)
+              return h.hexdigest()
+
+          manifests = []
+          for name, size in tiers:
+              path = target_only if name == 'target-only' else out_root / f'{name}.csv'
+              # Verify target identity and observable fault signatures survived construction.
+              text_hits = {'target_task': 0, 'checksum_exception': 0, 'report_bad_blocks': 0}
+              with path.open(encoding='utf-8', errors='replace') as fh:
+                  for line in fh:
+                      low = line.lower()
+                      if target_task in line:
+                          text_hits['target_task'] += 1
+                      if 'checksumexception' in low and 'checksum error' in low:
+                          text_hits['checksum_exception'] += 1
+                      if 'reportbadblocks' in low:
+                          text_hits['report_bad_blocks'] += 1
+              if text_hits['target_task'] != len(target_rows):
+                  raise SystemExit(f'target row mismatch in {path}: {text_hits}')
+              if text_hits['checksum_exception'] < 1:
+                  raise SystemExit(f'checksum truth missing in {path}')
+              manifests.append({
+                  'tier': name,
+                  'path': path.name,
+                  'bytes': size,
+                  'sha256': sha256(path),
+                  'target_task': target_task,
+                  'target_rows': len(target_rows),
+                  'target_fraction': round(target_bytes / size, 8),
+                  'truth_hits': text_hits,
+              })
+
+          construction = {
+              'dataset': 'HDFS_v3 TraceBench',
+              'archive_md5': 'c69999ff28933d2b163170d26c2faf64',
+              'hidden_fault_scenario': 'AN_Data_corruptBlk_r_30FDN_30C_1to19B_0to120INT_15RT_5WT',
+              'hidden_fault_truth': 'data blocks modified on some DataNodes',
+              'target_task': target_task,
+              'target_rows': len(target_rows),
+              'target_only_bytes': target_bytes,
+              'normal_source_count': len(normal_files),
+              'normal_sources': provenance,
+              'tiers': manifests,
+          }
+          (Path('/tmp/tb-scale') / 'construction.json').write_text(json.dumps(construction, indent=2), encoding='utf-8')
+          print(json.dumps({k:v for k,v in construction.items() if k != 'normal_sources'}, indent=2))
+          PY
+      - name: Preview target trace without scenario-name leakage
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/tb-scale/bundles/target-only.csv /tmp/tb-scale/runtime-target.csv
+          {
+            echo '=== target runtime rows containing checksum/reportBadBlocks/no-live-node ==='
+            rg -n -i 'checksum|reportBadBlocks|no live nodes|could not obtain block' /tmp/tb-scale/runtime-target.csv | head -n 120
+          } | tee /tmp/tb-scale/target-preview.txt
+      - name: Upload manifests only
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracebench-scale-build-manifest
+          path: |
+            /tmp/tb-scale/construction.json
+            /tmp/tb-scale/target-preview.txt
+          if-no-files-found: error
+
+# Temporary self-scoped push trigger for model-free size-ladder construction; restore manual-only after validation.
