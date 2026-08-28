@@ -82,6 +82,37 @@ def test_root_cause_score_uses_fixed_dimensions_citations_and_attempted_context(
     assert score["context_cost"]["reported_input_tokens"] == 90
 
 
+def test_root_cause_score_accepts_cat_n_tool_line_as_visible_citation(tmp_path: Path) -> None:
+    case_dir = _case(tmp_path)
+    transcript = tmp_path / "cat-n.jsonl"
+    events = [
+        {"type": "session", "mode": "free_shell", "model": "demo"},
+        {"type": "tool", "tool": "free_shell", "output": "    12\tChecksumException in worker queue from stale cache entry; invalidate cache", "duration_ms": 1},
+        {"type": "final", "answer": "The worker queue hit a checksum mismatch because a stale cache entry was reused; invalidate the cache. Evidence: L12.", "evidence": []},
+    ]
+    transcript.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+
+    score = score_transcript(case_dir, transcript)
+    assert score["quality"]["citation"]["accuracy"] == 1.0
+    assert score["quality"]["citation"]["cited_lines"] == [12]
+    assert score["quality"]["citation"]["invalid_lines"] == []
+
+
+def test_numbered_final_answer_is_not_treated_as_shell_visible_citation(tmp_path: Path) -> None:
+    case_dir = _case(tmp_path)
+    transcript = tmp_path / "numbered-answer.jsonl"
+    events = [
+        {"type": "session", "mode": "free_shell", "model": "demo"},
+        {"type": "tool", "tool": "free_shell", "output": "worker queue ChecksumException stale cache entry invalidate cache", "duration_ms": 1},
+        {"type": "final", "answer": "12\tThe worker queue hit a checksum mismatch due to a stale cache entry; invalidate the cache.", "evidence": []},
+    ]
+    transcript.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+
+    score = score_transcript(case_dir, transcript)
+    assert score["quality"]["citation"]["citations"] == 0
+    assert score["quality"]["citation"]["accuracy"] == 0.0
+
+
 def test_root_cause_score_rejects_unsupported_claim_and_invalid_citation(tmp_path: Path) -> None:
     case_dir = _case(tmp_path)
     transcript = tmp_path / "bad.jsonl"
