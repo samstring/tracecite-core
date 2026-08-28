@@ -2,11 +2,6 @@ name: TraceBench Scale Build
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - experiment/evidence-intelligence
-    paths:
-      - ".github/workflows/evidence-tracebench-scale-build.yml"
 
 permissions:
   contents: read
@@ -184,7 +179,7 @@ jobs:
           cp /tmp/tb-scale/bundles/target-only.csv /tmp/tb-scale/runtime-target.csv
           {
             echo '=== target runtime rows containing checksum/reportBadBlocks/no-live-node ==='
-            rg -n -i 'checksum|reportBadBlocks|no live nodes|could not obtain block' /tmp/tb-scale/runtime-target.csv | head -n 120
+            grep -Eni 'checksum|reportBadBlocks|no live nodes|could not obtain block' /tmp/tb-scale/runtime-target.csv | head -n 120
           } | tee /tmp/tb-scale/target-preview.txt
       - name: Upload manifests only
         uses: actions/upload-artifact@v4
@@ -194,5 +189,3 @@ jobs:
             /tmp/tb-scale/construction.json
             /tmp/tb-scale/target-preview.txt
           if-no-files-found: error
-
-# Trigger once to verify target-only through 500MB bundles; model-free.
