@@ -111,7 +111,7 @@ def test_scale_host_uses_survey_then_targeted_search_tools(tmp_path: Path) -> No
             scratch=tmp_path,
             context_id="",
         )
-        names = [item["function"]["name"] for item in module._tools_for_mode("tracecite", runtime.files)]
+        names = [item["name"] for item in module._tools_for_mode("tracecite", runtime.files)]
         assert names == ["tracecite_survey", "tracecite_search"]
     finally:
         _restore_scale_host_globals(module)
