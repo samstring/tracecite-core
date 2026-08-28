@@ -1,4 +1,4 @@
-name: Real Online Scale 10 Preflight
+name: Real Online Scale Preflight
 
 # Deterministic, no-model qualification for the real online benchmark set.
 # It downloads the selected original public incident evidence, records actual
@@ -51,8 +51,11 @@ jobs:
 
           cases = manifest.get('cases') or []
           policy = manifest.get('policy') or {}
-          if len(cases) != 10:
-              global_errors.append(f'expected exactly 10 cases, got {len(cases)}')
+          minimum_case_count = int(policy.get('minimum_case_count') or 10)
+          if len(cases) < minimum_case_count:
+              global_errors.append(
+                  f'expected at least {minimum_case_count} cases, got {len(cases)}'
+              )
           if policy.get('synthetic_evidence_allowed') is not False:
               global_errors.append('synthetic evidence must be explicitly forbidden')
           if policy.get('padding_allowed') is not False:
@@ -119,12 +122,14 @@ jobs:
           def classify_size(size):
               mib = 1024 * 1024
               if size < mib:
-                  return 'small'
+                  return 'small_direct_guard'
               if size <= 10 * mib:
-                  return 'medium_1_10m'
+                  return 'mb_1_10'
+              if size <= 25 * mib:
+                  return 'mb_10_25'
               if size <= 50 * mib:
-                  return 'large_10_50m'
-              return 'over_50m'
+                  return 'mb_25_50'
+              return 'stress_over_50'
 
           for case in cases:
               case_id = str(case.get('id') or '')
@@ -178,9 +183,9 @@ jobs:
                       row['errors'].append(
                           f'expected sha256 {expected_sha}, downloaded {digest}'
                       )
-                  if bucket == 'over_50m':
+                  if bucket == 'stress_over_50' and case.get('purpose') != 'optional_stress':
                       row['errors'].append(
-                          f'evidence exceeds 50 MiB model benchmark ceiling: {size} bytes'
+                          f'evidence exceeds 50 MiB release-gate ceiling and must be marked optional_stress: {size} bytes'
                       )
                   if size == 0:
                       row['errors'].append('evidence download is empty')
@@ -197,6 +202,7 @@ jobs:
           report = {
               'schema_version': 1,
               'manifest': str(manifest_path),
+              'minimum_case_count': minimum_case_count,
               'case_count': len(rows),
               'bucket_counts': buckets,
               'global_errors': global_errors,
@@ -223,7 +229,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-online-scale-10-preflight
+          name: real-online-scale-preflight
           path: |
             /tmp/real-online-scale-10/preflight.json
             /tmp/real-online-scale-10/discovery.json
