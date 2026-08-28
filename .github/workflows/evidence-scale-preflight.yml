@@ -95,4 +95,4 @@ jobs:
             /tmp/tracebench/inventory.json
           if-no-files-found: error
 
-# Temporary push trigger for one model-free dataset inventory run; restore manual-only after validation.
+# Triggered once to inventory the pinned TraceBench archive; restore manual-only after validation.
