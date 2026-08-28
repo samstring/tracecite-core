@@ -87,7 +87,7 @@ jobs:
             --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
             --pass-env TRACECITE_BENCH_MAX_ROUNDS \
             --pass-env TRACECITE_BENCH_NO_GROWTH_ROUNDS \
-            -- python benchmarks/agent-investigation/gmi_canonical_host.py \
+            -- python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_canonical_host.py" \
             > /tmp/paired-result/run-result.json
           RUN_RC=$?
           set -e
