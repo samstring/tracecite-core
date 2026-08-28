@@ -49,6 +49,7 @@ def _case(tmp_path: Path) -> Path:
             "contradictions": [{"id": "success", "patterns": ["request succeeded"]}],
             "root_cause_thresholds": {
                 "dimension_recall": 1.0,
+                "supported_dimension_recall": 1.0,
                 "citation_accuracy": 1.0,
                 "evidence_marker_recall": 1.0,
                 "max_unsupported_claim_hits": 0,
@@ -75,6 +76,8 @@ def test_root_cause_score_uses_fixed_dimensions_citations_and_attempted_context(
     score = score_transcript(case_dir, transcript)
     assert score["passed"] is True
     assert score["quality"]["dimension_recall"] == 1.0
+    assert score["quality"]["supported_dimension_recall"] == 1.0
+    assert all(item["supported"] for item in score["quality"]["dimension_evidence_support"])
     assert score["quality"]["citation"]["accuracy"] == 1.0
     assert score["quality"]["unsupported_claim_hits"] == 0
     assert score["context_cost"]["attempted_context_requests"] == 1
@@ -96,6 +99,7 @@ def test_root_cause_score_accepts_cat_n_tool_line_as_visible_citation(tmp_path: 
     assert score["quality"]["citation"]["accuracy"] == 1.0
     assert score["quality"]["citation"]["cited_lines"] == [12]
     assert score["quality"]["citation"]["invalid_lines"] == []
+    assert score["quality"]["supported_dimension_recall"] == 1.0
 
 
 def test_numbered_final_answer_is_not_treated_as_shell_visible_citation(tmp_path: Path) -> None:
@@ -111,6 +115,8 @@ def test_numbered_final_answer_is_not_treated_as_shell_visible_citation(tmp_path
     score = score_transcript(case_dir, transcript)
     assert score["quality"]["citation"]["citations"] == 0
     assert score["quality"]["citation"]["accuracy"] == 0.0
+    assert score["quality"]["supported_dimension_recall"] == 0.0
+    assert score["passed"] is False
 
 
 def test_root_cause_score_rejects_unsupported_claim_and_invalid_citation(tmp_path: Path) -> None:
@@ -127,3 +133,28 @@ def test_root_cause_score_rejects_unsupported_claim_and_invalid_citation(tmp_pat
     assert score["passed"] is False
     assert score["quality"]["unsupported_claim_hits"] == 1
     assert score["quality"]["citation"]["invalid_lines"] == [99]
+
+
+def test_root_cause_score_rejects_correct_claims_with_unrelated_valid_citation(tmp_path: Path) -> None:
+    case_dir = _case(tmp_path)
+    transcript = tmp_path / "unsupported-by-citation.jsonl"
+    events = [
+        {"type": "session", "mode": "tracecite", "model": "demo"},
+        {"type": "tool", "tool": "tracecite_search", "output": "runtime.log #L12 ChecksumException", "duration_ms": 1},
+        {
+            "type": "final",
+            "answer": (
+                "The worker queue hit a checksum mismatch because a stale cache entry was reused; "
+                "the fix should invalidate the cache.\n\n"
+                "A separate observation is visible at L12."
+            ),
+            "evidence": [],
+        },
+    ]
+    transcript.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+
+    score = score_transcript(case_dir, transcript)
+    assert score["quality"]["dimension_recall"] == 1.0
+    assert score["quality"]["citation"]["accuracy"] == 1.0
+    assert score["quality"]["supported_dimension_recall"] == 0.0
+    assert score["passed"] is False
