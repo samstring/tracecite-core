@@ -122,7 +122,11 @@ Context state is bounded transport memory, not trusted Evidence or Investigation
 
 ## Current status
 
-Extension Protocol v2, declarative capability loading, stable domain contracts, Evidence Ledger, bounded cross-turn Context Delta, and the stateful CLI path are implemented and pass the Core Python 3.10–3.14 Linux/macOS matrix. The matching Mobile v2 branch and MCP v2/context integration are also validated on their own matrices; real-host and token-savings benchmarks remain separate acceptance work.
+Extension Protocol v2, declarative capability loading, stable domain contracts, Evidence Ledger, bounded cross-turn Context Delta, and the stateful CLI path are implemented and pass the Core Python 3.10–3.14 Linux/macOS matrix. The matching Mobile v2 branch and MCP v2/context integration are also validated on their own matrices.
+
+On the experimental `experiment/evidence-intelligence` branch, real-model scale validation now covers **25 KiB, 5 MiB, and 50 MiB**. The 50 MiB TraceBench candidate preserved all required concepts/evidence markers while a paired unrestricted read-only shell baseline exceeded the model context window after a very large tool result. This is evidence for bounded, provenance-aware investigation context; it is not a claim that every TraceCite search is smaller than `rg` or that one fixed token-saving percentage applies to every incident.
+
+The current Evidence Intelligence acceptance plan stops scale testing at **50 MiB**. Larger 100 MiB / 500 MiB runs are optional stress tooling, not merge gates. The remaining experimental work is to move progress/coverage/novelty stop semantics into the canonical runtime and validate them across more independent real root-cause incidents. See [Evidence Intelligence experiment](docs/evidence-intelligence-experiment.zh-CN.md) and the [current work handoff](docs/evidence-intelligence-work-progress-handoff.zh-CN.md).
 
 ## License
 
