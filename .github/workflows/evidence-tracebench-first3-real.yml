@@ -33,13 +33,21 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq ripgrep
           command -v rg
+          test -f "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_scale_host.py"
       - name: Validate model configuration
         shell: bash
         run: |
           set -euo pipefail
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is not configured"; exit 1; }
           test -n "$BENCH_MODEL" || { echo "TRACECITE_BENCH_MODEL is not configured"; exit 1; }
-      - name: Download and verify pinned TraceBench
+      - name: Restore TraceBench archive cache
+        id: tracebench-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/tb-first3/archive/HDFS_v3_TraceBench.zip
+          key: tracebench-hdfs-v3-c69999ff28933d2b163170d26c2faf64
+      - name: Download pinned TraceBench
+        if: steps.tracebench-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -47,6 +55,10 @@ jobs:
           curl -L --retry 5 --retry-delay 2 \
             -o /tmp/tb-first3/archive/HDFS_v3_TraceBench.zip \
             'https://zenodo.org/records/8196385/files/HDFS_v3_TraceBench.zip?download=1'
+      - name: Verify pinned TraceBench
+        shell: bash
+        run: |
+          set -euo pipefail
           echo 'c69999ff28933d2b163170d26c2faf64  /tmp/tb-first3/archive/HDFS_v3_TraceBench.zip' | md5sum -c -
       - name: Build deterministic 25KB, 500KB and 5MB evidence tiers
         shell: bash
@@ -87,14 +99,11 @@ jobs:
                           raise RuntimeError(f'header mismatch: {source}')
                       yield from reader
 
-          def write_target(path: Path) -> None:
-              with path.open('w', encoding='utf-8', newline='') as out:
-                  writer = csv.writer(out)
-                  writer.writerow(header)
-                  writer.writerows(target_rows)
-
           target_path = out_root / 'target-only.csv'
-          write_target(target_path)
+          with target_path.open('w', encoding='utf-8', newline='') as out:
+              writer = csv.writer(out)
+              writer.writerow(header)
+              writer.writerows(target_rows)
           target_bytes = target_path.stat().st_size
           assert target_bytes == 25600, target_bytes
 
@@ -138,6 +147,8 @@ jobs:
         run: |
           set -uo pipefail
           root=/tmp/tb-first3
+          host="$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_scale_host.py"
+          test -f "$host" || { echo "benchmark host missing: $host"; exit 1; }
           mkdir -p "$root/results/runs" "$root/results/scores" "$root/results/failures"
           failed=0
           for spec in 'target-only.csv:25kb' '500000.csv:500kb' '5000000.csv:5mb'; do
@@ -211,7 +222,7 @@ jobs:
                 --pass-env OPENAI_API_KEY \
                 --pass-env OPENAI_BASE_URL \
                 --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
-                -- python benchmarks/agent-investigation/gmi_scale_host.py; then
+                -- python "$host"; then
                 if python -m tracecite.benchmarking score "$case_dir" "$transcript" > "$score"; then
                   cat "$score"
                 else
@@ -236,4 +247,4 @@ jobs:
             /tmp/tb-first3/tier-manifest.json
           if-no-files-found: error
 
-# Trigger the registered workflow once; restore manual-only after this validation run.
+# Temporary branch/path push trigger. Restore manual-only after the fixed validation run.
