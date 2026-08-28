@@ -29,6 +29,8 @@ jobs:
             dir: benchmarks/agent-investigation/scale-cases/kubernetes-140848
           - id: kubernetes-140628-scale
             dir: benchmarks/agent-investigation/scale-cases/kubernetes-140628
+          - id: kubernetes-140039-runc-5347-scale
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347
         mode:
           - free_shell
           - tracecite

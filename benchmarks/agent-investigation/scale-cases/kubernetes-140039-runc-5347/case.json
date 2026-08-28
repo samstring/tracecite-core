@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "kubernetes-140039-runc-5347-scale",
+  "title": "runc 1.5.0 container sandbox creation failures in Kubernetes CI",
+  "source_issue": "https://github.com/kubernetes/kubernetes/issues/140039",
+  "fix_reference": "https://github.com/opencontainers/runc/pull/5347",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "containerd-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-containerd-e2e-ubuntu-gce/2070389396091179008/artifacts/bootstrap-e2e-master/containerd.log",
+      "filename": "containerd.log",
+      "sha256": "77d5ff0fa00bfffdeb4722879c1bf8ff667444cfb34a8cf55344273307e78ff8",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "opencontainers/runc",
+    "incident_project": "kubernetes/kubernetes",
+    "public_log": true,
+    "evidence_kind": "original_public_containerd_log",
+    "evidence_bytes": 2292856,
+    "notes": "The Agent sees only the public runtime log and question; issue diagnosis and merged fix contents are excluded."
+  }
+}
