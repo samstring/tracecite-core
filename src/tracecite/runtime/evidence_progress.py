@@ -1,8 +1,8 @@
 """Explainable evidence-progress and retrieval-readiness state.
 
-This module deliberately tracks only mechanical evidence state.  It can say
-that evidence did or did not grow, that a source/range/frontier is exhausted,
-and whether caller-supplied evidence requirements are satisfied.  It does not
+This module deliberately tracks only mechanical evidence state. It can say
+that evidence did or did not grow, that a source/scope/frontier is exhausted,
+and whether caller-supplied evidence requirements are satisfied. It does not
 infer causality or declare that a root cause has been found.
 """
 
@@ -13,6 +13,54 @@ from typing import Iterable, Literal, Mapping, Sequence
 
 
 RequirementStatus = Literal["pending", "satisfied", "unknown", "blocked"]
+CoverageStatus = Literal["unknown", "partial", "complete", "stale"]
+ReadinessStatus = Literal["unknown", "insufficient", "partial", "ready"]
+StopKind = Literal[
+    "no_new_evidence",
+    "source_exhausted",
+    "frontier_exhausted",
+    "budget_exhausted",
+    "provider_unavailable",
+    "source_changed",
+]
+
+
+@dataclass(frozen=True)
+class StopReason:
+    """Mechanical explanation for why evidence acquisition can stop.
+
+    A stop reason never states that a diagnosis or root cause is correct. The
+    scope and basis make the stop auditable instead of exposing a bare boolean.
+    """
+
+    kind: StopKind
+    scope: Mapping[str, object] = field(default_factory=dict)
+    basis: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.kind not in {
+            "no_new_evidence",
+            "source_exhausted",
+            "frontier_exhausted",
+            "budget_exhausted",
+            "provider_unavailable",
+            "source_changed",
+        }:
+            raise ValueError(f"unsupported stop kind: {self.kind!r}")
+        if not isinstance(self.scope, Mapping):
+            raise ValueError("stop scope must be a mapping")
+        basis = tuple(
+            dict.fromkeys(str(item).strip() for item in self.basis if str(item).strip())
+        )
+        object.__setattr__(self, "scope", dict(self.scope))
+        object.__setattr__(self, "basis", basis)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "scope": dict(self.scope),
+            "basis": list(self.basis),
+        }
 
 
 @dataclass(frozen=True)
@@ -48,7 +96,7 @@ class EvidenceRequirement:
 
 @dataclass(frozen=True)
 class EvidenceGap:
-    """A known evidence gap.  Gaps are observations, not causal hypotheses."""
+    """A known evidence gap. Gaps are observations, not causal hypotheses."""
 
     id: str
     detail: str = ""
@@ -100,11 +148,11 @@ class EvidenceDelta:
 
 @dataclass(frozen=True)
 class EvidenceReadiness:
-    """Explainable mechanical stop/readiness projection.
+    """Explainable mechanical progress/readiness projection.
 
-    ``ready_for_reasoning`` is ``None`` when no explicit requirements were
-    supplied.  This is intentional: Tracecite must not silently invent what
-    evidence is sufficient to answer the user's question.
+    ``ready_for_reasoning`` remains ``None`` when no explicit requirements
+    were supplied. TraceCite must not silently invent what evidence is
+    sufficient to answer the caller's question.
     """
 
     delta: EvidenceDelta
@@ -121,12 +169,22 @@ class EvidenceReadiness:
     ready_for_reasoning: bool | None
     stop_recommended: bool
     stop_reason: str
+    coverage_status: CoverageStatus = "unknown"
+    readiness: ReadinessStatus = "unknown"
+    stop: StopReason | None = None
 
     def to_dict(self) -> dict[str, object]:
+        stop_payload: dict[str, object] = {
+            "recommended": self.stop_recommended,
+            "reason": self.stop_reason,
+        }
+        if self.stop is not None:
+            stop_payload.update(self.stop.to_dict())
         return {
             "delta": self.delta.to_dict(),
             "seen_evidence": self.seen_evidence,
             "seen_lines": self.seen_lines,
+            "coverage_status": self.coverage_status,
             "source_complete": self.source_complete,
             "frontier_exhausted": self.frontier_exhausted,
             "scope_exhausted": self.scope_exhausted,
@@ -137,11 +195,9 @@ class EvidenceReadiness:
                 "satisfied": self.requirements_satisfied,
             },
             "actionable_gaps": self.actionable_gaps,
+            "readiness": self.readiness,
             "ready_for_reasoning": self.ready_for_reasoning,
-            "stop": {
-                "recommended": self.stop_recommended,
-                "reason": self.stop_reason,
-            },
+            "stop": stop_payload,
         }
 
 
@@ -151,7 +207,7 @@ class EvidenceProgressTracker:
 
     The tracker does not perform semantic similarity or root-cause reasoning.
     Callers may supply explicit requirements/gaps, while evidence identity and
-    source ranges are handled deterministically here.
+    versioned source ranges are handled deterministically here.
     """
 
     requirements: Sequence[EvidenceRequirement] = ()
@@ -197,12 +253,24 @@ class EvidenceProgressTracker:
             merged[-1] = (old_start, max(old_end, end))
         return merged
 
+    @property
+    def seen_evidence_ids(self) -> frozenset[str]:
+        """Return immutable mechanical identity history for projection logic."""
+
+        return frozenset(self._seen_evidence_ids)
+
+    def has_seen_evidence(self, evidence_id: str) -> bool:
+        return str(evidence_id).strip() in self._seen_evidence_ids
+
     def covered_ranges(self, source: str) -> tuple[tuple[int, int], ...]:
         return tuple(self._ranges.get(str(source), ()))
 
     def range_is_covered(self, source: str, start: int, end: int) -> bool:
         start, end = self._normalize_range(start, end)
         return any(left <= start and right >= end for left, right in self._ranges.get(str(source), ()))
+
+    def source_is_complete(self, source: str) -> bool:
+        return str(source) in self._source_complete
 
     def unseen_ranges(self, source: str, start: int, end: int) -> tuple[tuple[int, int], ...]:
         """Return only portions of ``[start, end]`` not already visible."""
@@ -223,6 +291,43 @@ class EvidenceProgressTracker:
             if not pending:
                 break
         return tuple(pending)
+
+    def restore(
+        self,
+        *,
+        source: str | None = None,
+        evidence_ids: Sequence[str] = (),
+        line_ranges: Sequence[tuple[int, int]] = (),
+        source_complete: bool = False,
+        frontier_exhausted: bool | None = None,
+        scope_exhausted: bool | None = None,
+    ) -> None:
+        """Restore persisted mechanical history without creating a new round.
+
+        Reconstruction from InvestigationState must not increment the current
+        no-growth counter merely because historical ranges are replayed.
+        """
+
+        normalized_ids = tuple(
+            dict.fromkeys(str(item).strip() for item in evidence_ids if str(item).strip())
+        )
+        self._seen_evidence_ids.update(normalized_ids)
+        if line_ranges:
+            if not source:
+                raise ValueError("source is required when line_ranges are supplied")
+            source_key = str(source)
+            normalized = [self._normalize_range(start, end) for start, end in line_ranges]
+            self._ranges[source_key] = self._merge_ranges(
+                [*self._ranges.get(source_key, ()), *normalized]
+            )
+        if source_complete:
+            if not source:
+                raise ValueError("source is required when source_complete=True")
+            self._source_complete.add(str(source))
+        if frontier_exhausted is not None:
+            self._frontier_exhausted = bool(frontier_exhausted)
+        if scope_exhausted is not None:
+            self._scope_exhausted = bool(scope_exhausted)
 
     def mark_requirement(
         self,
@@ -322,16 +427,61 @@ class EvidenceProgressTracker:
                 requirements_complete and retrieval_complete and actionable_gaps == 0
             )
 
+        if source_is_complete:
+            coverage_status: CoverageStatus = "complete"
+        elif self._ranges or self._seen_evidence_ids:
+            coverage_status = "partial"
+        else:
+            coverage_status = "unknown"
+
+        if ready_for_reasoning is True:
+            readiness: ReadinessStatus = "ready"
+        elif not requirements_total:
+            readiness = "unknown"
+        elif requirements_satisfied or self._seen_evidence_ids:
+            readiness = "partial"
+        else:
+            readiness = "insufficient"
+
         no_growth_stop = self._no_growth >= self.no_growth_threshold
+        formal_stop: StopReason | None = None
         if ready_for_reasoning is True:
             stop_reason = "requirements_satisfied_and_retrieval_complete"
             stop_recommended = True
-        elif retrieval_complete and no_growth_stop:
+            if self._frontier_exhausted:
+                formal_stop = StopReason(
+                    "frontier_exhausted",
+                    basis=("requirements_satisfied", "frontier_empty"),
+                )
+            elif self._scope_exhausted:
+                formal_stop = StopReason(
+                    "source_exhausted",
+                    scope={"source": str(source)} if source else {},
+                    basis=("requirements_satisfied", "scope_exhausted"),
+                )
+        elif self._frontier_exhausted and no_growth_stop:
             stop_reason = "retrieval_complete_no_growth"
             stop_recommended = True
+            formal_stop = StopReason(
+                "frontier_exhausted",
+                basis=("frontier_empty", "no_evidence_growth"),
+            )
+        elif self._scope_exhausted and no_growth_stop:
+            stop_reason = "retrieval_complete_no_growth"
+            stop_recommended = True
+            formal_stop = StopReason(
+                "source_exhausted",
+                scope={"source": str(source)} if source else {},
+                basis=("scope_exhausted", "no_evidence_growth"),
+            )
         elif no_growth_stop:
             stop_reason = "no_evidence_growth"
             stop_recommended = True
+            formal_stop = StopReason(
+                "no_new_evidence",
+                scope={"source": str(source)} if source else {},
+                basis=("no_evidence_growth",),
+            )
         elif delta.grew:
             stop_reason = "evidence_grew"
             stop_recommended = False
@@ -357,14 +507,21 @@ class EvidenceProgressTracker:
             ready_for_reasoning=ready_for_reasoning,
             stop_recommended=stop_recommended,
             stop_reason=stop_reason,
+            coverage_status=coverage_status,
+            readiness=readiness,
+            stop=formal_stop,
         )
 
 
 __all__ = [
+    "CoverageStatus",
     "EvidenceDelta",
     "EvidenceGap",
     "EvidenceProgressTracker",
     "EvidenceReadiness",
     "EvidenceRequirement",
+    "ReadinessStatus",
     "RequirementStatus",
+    "StopKind",
+    "StopReason",
 ]
