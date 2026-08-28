@@ -123,12 +123,31 @@ jobs:
 
           size = path.stat().st_size
           assert 50_000_000 <= size < 50_001_000, size
-          text = path.read_text(encoding='utf-8', errors='replace')
-          assert text.count(target_task) == 143
-          assert text.lower().count('checksumexception') >= 4
-          assert text.lower().count('reportbadblocks') >= 8
-          digest = hashlib.sha256(path.read_bytes()).hexdigest()
-          manifest = {'file':'runtime.csv','bytes':size,'sha256':digest,'target_task':target_task,'target_rows':143}
+
+          target_seen = 0
+          checksum_seen = 0
+          bad_blocks_seen = 0
+          digest_state = hashlib.sha256()
+          with path.open('rb') as fh:
+              for raw in fh:
+                  digest_state.update(raw)
+                  text = raw.decode('utf-8', errors='replace')
+                  lower = text.lower()
+                  target_seen += text.count(target_task)
+                  checksum_seen += lower.count('checksumexception')
+                  bad_blocks_seen += lower.count('reportbadblocks')
+          assert target_seen == 143
+          assert checksum_seen >= 4
+          assert bad_blocks_seen >= 8
+          digest = digest_state.hexdigest()
+
+          manifest = {
+              'file':'runtime.csv',
+              'bytes':size,
+              'sha256':digest,
+              'target_task':target_task,
+              'target_rows':143,
+          }
           (work/'tier-manifest.json').write_text(json.dumps(manifest, indent=2)+'\n', encoding='utf-8')
           print(json.dumps(manifest, indent=2))
           PY
@@ -180,6 +199,7 @@ jobs:
             echo "== TraceBench 50MB / $mode =="
             transcript="$root/results/runs/50mb-${mode}.jsonl"
             score="$root/results/scores/50mb-${mode}.json"
+            failure="$root/results/failures/50mb-${mode}.json"
             if python benchmarks/agent-investigation/run_host.py \
               "$root/case" "$root/prepared.json" \
               --mode "$mode" --model "$BENCH_MODEL" --seed 1 --timeout-seconds 900 \
@@ -195,15 +215,43 @@ jobs:
           PY
                 then
                   failed=$((failed+1))
-                  printf '{"mode":"%s","stage":"quality"}\n' "$mode" > "$root/results/failures/50mb-${mode}.json"
+                  printf '{"mode":"%s","stage":"quality"}\n' "$mode" > "$failure"
                 fi
               else
                 failed=$((failed+1))
-                printf '{"mode":"%s","stage":"score"}\n' "$mode" > "$root/results/failures/50mb-${mode}.json"
+                printf '{"mode":"%s","stage":"score"}\n' "$mode" > "$failure"
               fi
             else
               failed=$((failed+1))
-              printf '{"mode":"%s","stage":"host"}\n' "$mode" > "$root/results/failures/50mb-${mode}.json"
+              python - "$mode" "$transcript" "$failure" <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          mode, transcript_value, failure_value = sys.argv[1:]
+          transcript = Path(transcript_value)
+          reason = 'host_error'
+          error_type = ''
+          message = ''
+          if transcript.is_file():
+              with transcript.open(encoding='utf-8', errors='replace') as handle:
+                  for raw in handle:
+                      try:
+                          event = json.loads(raw)
+                      except ValueError:
+                          continue
+                      if event.get('type') != 'host_error':
+                          continue
+                      reason = str(event.get('failure_reason') or reason)
+                      error_type = str(event.get('error') or '')
+                      message = str(event.get('message') or '')
+          payload = {'mode': mode, 'stage': 'host', 'reason': reason}
+          if error_type:
+              payload['error'] = error_type
+          if message:
+              payload['message'] = message[:2000]
+          Path(failure_value).write_text(json.dumps(payload, ensure_ascii=False) + '\n', encoding='utf-8')
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
               tail -n 12 "$transcript" || true
             fi
           done
