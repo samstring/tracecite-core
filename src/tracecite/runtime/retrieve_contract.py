@@ -1,11 +1,13 @@
 """Public adaptive retrieve contract over the canonical Agent API.
 
 The low-level Agent API remains deterministic and target-specific.  This public
-wrapper adds two product semantics without changing upper-layer request types:
+wrapper adds product semantics without changing upper-layer request types:
 
 1. pointer novelty and line-coverage novelty stay distinct for RangeTarget;
-2. evidence transport defaults to adaptive DIRECT -> BOUNDED -> INVESTIGATE
-   routing so small sources do not pay the full Evidence Intelligence overhead.
+2. evidence transport defaults to adaptive DIRECT -> BOUNDED -> INVESTIGATE;
+3. truncated searches preserve a tiny high-signal navigation side channel so a
+   late panic/fatal/critical record cannot disappear merely because the normal
+   first-N evidence transport budget filled earlier in the source.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from .evidence_routing import (
     decide_route,
     refine_route_after_result,
 )
+from .evidence_selection import select_signal_hints
 from .investigation import InvestigationStore
 
 
@@ -140,9 +143,6 @@ def _direct_source(
     )
     coverage = result.get("coverage") or {}
     if isinstance(coverage, Mapping) and bool(coverage.get("truncated")):
-        # DIRECT preflight is deliberately conservative, but if rendering still
-        # exceeds the budget expose a monotonic downgrade instead of pretending
-        # the complete source was delivered.
         decision = RoutingDecision(
             route=EvidenceRoute.BOUNDED,
             reasons=(*decision.reasons, "direct_render_exceeded_budget"),
@@ -162,11 +162,7 @@ def _investigate_source(
     decision: RoutingDecision,
     policy: EvidenceRoutingPolicy,
 ) -> RetrievalResult:
-    """Use bounded descriptive survey for a large/deep local source.
-
-    This is still mechanical Evidence Intelligence: no root-cause inference is
-    performed.  Semantic hypotheses remain the upper Agent's responsibility.
-    """
+    """Use bounded descriptive survey for a large/deep local source."""
 
     assert isinstance(request.target, SourceTarget)
     target = request.target
@@ -208,16 +204,8 @@ def _bounded_query(
     else:
         evidence_cap = policy.bounded_max_evidence
         line_cap = policy.bounded_max_line_chars
-    max_evidence = (
-        evidence_cap
-        if target.max_evidence is None
-        else min(target.max_evidence, evidence_cap)
-    )
-    max_line_chars = (
-        line_cap
-        if target.max_line_chars is None
-        else min(target.max_line_chars, line_cap)
-    )
+    max_evidence = evidence_cap if target.max_evidence is None else min(target.max_evidence, evidence_cap)
+    max_line_chars = line_cap if target.max_line_chars is None else min(target.max_line_chars, line_cap)
     return EvidenceRequest(
         QueryTarget(
             target.source,
@@ -237,6 +225,97 @@ def _bounded_query(
         test_id=request.test_id,
         cache=request.cache,
         providers=request.providers,
+    )
+
+
+def _matched_records_path(result: Mapping[str, object]) -> Path | None:
+    for item in result.get("artifacts") or []:
+        if not isinstance(item, Mapping) or item.get("role") != "matched_records":
+            continue
+        value = str(item.get("path") or "").strip()
+        if value:
+            return Path(value)
+    return None
+
+
+def _attach_signal_hints(
+    result: RetrievalResult,
+    request: EvidenceRequest,
+    policy: EvidenceRoutingPolicy,
+) -> RetrievalResult:
+    """Attach bounded high-signal navigation hints to a truncated search.
+
+    Hints deliberately stay out of ``evidence`` / ``new_evidence``.  They are
+    line-addressable candidates discovered from the complete matched-record
+    artifact; the upper Agent must call RangeTarget/get before citing them or
+    counting them as covered Evidence.
+    """
+
+    if not isinstance(request.target, QueryTarget):
+        return result
+    canonical = dict(result.canonical_result)
+    coverage = dict(canonical.get("coverage") or {})
+    if not bool(coverage.get("evidence_truncated")):
+        return result
+    records_path = _matched_records_path(canonical)
+    if records_path is None:
+        return result
+    try:
+        hints = select_signal_hints(
+            records_path,
+            limit=policy.signal_hint_limit,
+            signature_cap=policy.signal_signature_cap,
+        )
+    except (OSError, ValueError):
+        return result
+    if not hints:
+        return result
+
+    inline_ranges: list[tuple[int, int]] = []
+    for item in canonical.get("evidence") or []:
+        if not isinstance(item, Mapping):
+            continue
+        start = item.get("start_line")
+        end = item.get("end_line")
+        if not isinstance(start, int) or isinstance(start, bool):
+            continue
+        if not isinstance(end, int) or isinstance(end, bool):
+            end = start
+        inline_ranges.append((start, max(start, end)))
+
+    source_name = Path(request.target.source).name
+    retained = []
+    for hint in hints:
+        line = int(hint["line"])
+        if any(start <= line <= end for start, end in inline_ranges):
+            continue
+        retained.append(
+            {
+                "ref": f"{source_name}:{line}",
+                "line": line,
+                "end_line": int(hint.get("end_line") or line),
+                "severity": int(hint["severity"]),
+                "count": int(hint["count"]),
+                "label": str(hint["label"]),
+            }
+        )
+    if not retained:
+        return result
+
+    data = dict(canonical.get("data") or {})
+    data["signal_hints"] = retained
+    data["signal_hint_note"] = "Truncated-search high-signal candidates; call get on the referenced line before citing."
+    canonical["data"] = data
+    coverage["signal_hints_returned"] = len(retained)
+    canonical["coverage"] = coverage
+    return RetrievalResult(
+        operation=result.operation,
+        status=result.status,
+        canonical_result=canonical,
+        progress=result.progress,
+        new_evidence=result.new_evidence,
+        repeated_evidence=result.repeated_evidence,
+        stop_reason=result.stop_reason,
     )
 
 
@@ -270,12 +349,7 @@ def retrieve(
     *,
     routing_policy: EvidenceRoutingPolicy | None = None,
 ) -> RetrievalResult:
-    """Execute the stable retrieval contract with adaptive transport routing.
-
-    Callers normally provide only ``EvidenceRequest``.  Advanced integrations
-    and benchmarks may override routing with ``EvidenceRoutingPolicy`` without
-    changing the request schema or adding platform-specific APIs.
-    """
+    """Execute the stable retrieval contract with adaptive transport routing."""
 
     if not isinstance(request, EvidenceRequest):
         raise TypeError("retrieve requires EvidenceRequest")
@@ -295,6 +369,7 @@ def retrieve(
     if isinstance(request.target, QueryTarget) and decision.route != EvidenceRoute.DIRECT:
         routed_request = _bounded_query(request, policy, route=decision.route)
     result = _correct_range_novelty(_retrieve(routed_request), routed_request)
+    result = _attach_signal_hints(result, routed_request, policy)
     decision = refine_route_after_result(decision, result.canonical_result, policy=policy)
     return _with_routing(result, decision)
 
