@@ -1,8 +1,8 @@
 name: Adaptive Evidence Routing Smoke
 
-# Targeted paired model-cost regression for adaptive transport.
-# Small stays DIRECT, a smoke-only medium variant must exercise BOUNDED,
-# and the large Kubernetes outlier must escalate to INVESTIGATE.
+# Paired model-cost regression for adaptive transport using only real incidents.
+# Small cases exist to prove they are not incorrectly escalated. Larger scale
+# coverage lives in the dedicated real-online scale suite.
 on:
   workflow_dispatch:
   push:
@@ -48,7 +48,7 @@ jobs:
         run: |
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is not configured"; exit 1; }
           test -n "$BENCH_MODEL" || { echo "TRACECITE_BENCH_MODEL is not configured"; exit 1; }
-      - name: Run paired small and large cases
+      - name: Run paired real small and large cases
         shell: bash
         run: |
           set -euo pipefail
@@ -58,113 +58,26 @@ jobs:
             /tmp/adaptive-shell \
             /tmp/adaptive-shell-results
 
-          python -m tracecite.root_cause_suite run \
-            --repo-root "$GITHUB_WORKSPACE" \
-            --work-dir /tmp/adaptive-tracecite \
-            --output-dir /tmp/adaptive-tracecite-results \
-            --mode tracecite \
-            --model "$BENCH_MODEL" \
-            --host "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_canonical_host.py" \
-            --timeout-seconds 180 \
-            --case-id pulumi-14231 \
-            --case-id kubernetes-140848
-
-          python -m tracecite.root_cause_suite run \
-            --repo-root "$GITHUB_WORKSPACE" \
-            --work-dir /tmp/adaptive-shell \
-            --output-dir /tmp/adaptive-shell-results \
-            --mode free_shell \
-            --model "$BENCH_MODEL" \
-            --host "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_canonical_host.py" \
-            --timeout-seconds 180 \
-            --case-id pulumi-14231 \
-            --case-id kubernetes-140848
-      - name: Prepare smoke-only medium BOUNDED variant
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf /tmp/adaptive-medium /tmp/adaptive-medium-results
-          python -m tracecite.root_cause_suite materialize \
-            --repo-root "$GITHUB_WORKSPACE" \
-            --work-dir /tmp/adaptive-medium \
-            --case-id doublecmd-2264
-
-          python - <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-
-          root = Path('/tmp/adaptive-medium')
-          index = json.loads((root / 'suite-index.json').read_text(encoding='utf-8'))
-          row = index['cases'][0]
-          manifest_path = Path(row['prepared_manifest'])
-          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-          source = Path(manifest['inputs'][0]['path'])
-          raw = source.read_bytes()
-
-          target_bytes = 128 * 1024
-          filler = (
-              b'2026-08-28T00:00:00Z INFO healthcheck component=agent-smoke '
-              b'status=healthy request=none\n'
-          )
-          if len(raw) < target_bytes:
-              count = ((target_bytes - len(raw)) + len(filler) - 1) // len(filler)
-              raw = raw + (b'\n' if raw and not raw.endswith(b'\n') else b'') + filler * count
-              source.write_bytes(raw)
-
-          digest = hashlib.sha256(raw).hexdigest()
-          manifest['inputs'][0]['bytes'] = len(raw)
-          manifest['inputs'][0]['sha256'] = digest
-          manifest_path.write_text(
-              json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
-              encoding='utf-8',
-          )
-          meta = {
-              'case_dir': row['case_dir'],
-              'prepared_manifest': str(manifest_path),
-              'source_path': str(source),
-              'source_bytes': len(raw),
-              'sha256': digest,
-          }
-          (root / 'medium-meta.json').write_text(
-              json.dumps(meta, indent=2, sort_keys=True) + '\n',
-              encoding='utf-8',
-          )
-          print(json.dumps(meta, indent=2, sort_keys=True))
-          if not (128 * 1024 <= len(raw) < 1024 * 1024):
-              raise SystemExit(f'medium fixture size is outside expected bounds: {len(raw)}')
-          PY
-      - name: Run paired medium BOUNDED case
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/adaptive-medium-results/runs /tmp/adaptive-medium-results/scores
-          CASE_DIR="$(python -c "import json; print(json.load(open('/tmp/adaptive-medium/medium-meta.json'))['case_dir'])")"
-          MANIFEST="$(python -c "import json; print(json.load(open('/tmp/adaptive-medium/medium-meta.json'))['prepared_manifest'])")"
-
           for mode in tracecite free_shell; do
-            transcript="/tmp/adaptive-medium-results/runs/doublecmd-2264-medium-${mode}.jsonl"
-            set +e
-            python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/run_host.py" \
-              "$CASE_DIR" "$MANIFEST" \
+            if [ "$mode" = tracecite ]; then
+              work=/tmp/adaptive-tracecite
+              out=/tmp/adaptive-tracecite-results
+            else
+              work=/tmp/adaptive-shell
+              out=/tmp/adaptive-shell-results
+            fi
+            python -m tracecite.root_cause_suite run \
+              --repo-root "$GITHUB_WORKSPACE" \
+              --work-dir "$work" \
+              --output-dir "$out" \
               --mode "$mode" \
               --model "$BENCH_MODEL" \
-              --seed 1 \
+              --host "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_canonical_host.py" \
               --timeout-seconds 180 \
-              --output "$transcript" \
-              --pass-env OPENAI_API_KEY \
-              --pass-env OPENAI_BASE_URL \
-              --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
-              -- \
-              python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_canonical_host.py"
-            rc=$?
-            set -e
-            echo "$rc" > "/tmp/adaptive-medium-results/${mode}-returncode.txt"
-            python -m tracecite.root_cause_benchmarking score \
-              "$CASE_DIR" "$transcript" \
-              > "/tmp/adaptive-medium-results/scores/doublecmd-2264-medium-${mode}.json"
+              --case-id pulumi-14231 \
+              --case-id kubernetes-140848
           done
-      - name: Verify paired adaptive gates and print costs
+      - name: Verify adaptive gates and print costs
         if: always()
         shell: bash
         run: |
@@ -174,8 +87,6 @@ jobs:
 
           trace_root = Path('/tmp/adaptive-tracecite-results')
           shell_root = Path('/tmp/adaptive-shell-results')
-          medium_root = Path('/tmp/adaptive-medium-results')
-          medium_meta = json.loads(Path('/tmp/adaptive-medium/medium-meta.json').read_text())
 
           def read_json(path):
               return json.loads(Path(path).read_text(encoding='utf-8'))
@@ -242,28 +153,18 @@ jobs:
           large_trace = score_or_failure(trace_root, 'kubernetes-140848', 'tracecite')
           small_shell = score_or_failure(shell_root, 'pulumi-14231', 'free_shell')
           large_shell = score_or_failure(shell_root, 'kubernetes-140848', 'free_shell')
-          medium_trace = {'kind': 'score', **read_json(medium_root / 'scores' / 'doublecmd-2264-medium-tracecite.json')}
-          medium_shell = {'kind': 'score', **read_json(medium_root / 'scores' / 'doublecmd-2264-medium-free_shell.json')}
-
           small_routes = routing_rows(trace_root / 'runs' / 'pulumi-14231-tracecite.jsonl')
-          medium_routes = routing_rows(medium_root / 'runs' / 'doublecmd-2264-medium-tracecite.jsonl')
           large_routes = routing_rows(trace_root / 'runs' / 'kubernetes-140848-tracecite.jsonl')
 
           summary = {
-              'small': {
+              'small_direct_guard': {
                   'source': 'pulumi-14231',
+                  'purpose': 'prove a real small incident is not incorrectly escalated',
                   'tracecite': compact_score(small_trace),
                   'free_shell_rg': compact_score(small_shell),
                   'routes': small_routes,
               },
-              'medium': {
-                  'source': 'doublecmd-2264 + smoke-only healthy padding',
-                  'source_bytes': medium_meta['source_bytes'],
-                  'tracecite': compact_score(medium_trace),
-                  'free_shell_rg': compact_score(medium_shell),
-                  'routes': medium_routes,
-              },
-              'large': {
+              'large_real_incident': {
                   'source': 'kubernetes-140848',
                   'tracecite': compact_score(large_trace),
                   'free_shell_rg': compact_score(large_shell),
@@ -276,11 +177,7 @@ jobs:
           )
           print(json.dumps(summary, indent=2, sort_keys=True))
 
-          for label, payload in (
-              ('small', small_trace),
-              ('medium', medium_trace),
-              ('large', large_trace),
-          ):
+          for label, payload in (('small', small_trace), ('large', large_trace)):
               if payload.get('kind') != 'score':
                   raise SystemExit(f'{label} TraceCite did not produce a score: {payload}')
               quality = payload.get('quality') or {}
@@ -293,12 +190,11 @@ jobs:
 
           if not any(row.get('mode') == 'direct' for row in small_routes):
               raise SystemExit(f'small case did not exercise DIRECT: {small_routes}')
-          if not any(
-              row.get('mode') == 'bounded'
-              and 'direct_output_exceeds_budget' in (row.get('reasons') or [])
-              for row in medium_routes
+          if any(
+              row.get('mode') == 'investigate' or row.get('next_mode') == 'investigate'
+              for row in small_routes
           ):
-              raise SystemExit(f'medium case did not exercise BOUNDED from context risk: {medium_routes}')
+              raise SystemExit(f'small case was incorrectly escalated: {small_routes}')
           if not any(
               row.get('mode') == 'investigate' or row.get('next_mode') == 'investigate'
               for row in large_routes
@@ -318,7 +214,4 @@ jobs:
             /tmp/adaptive-shell/suite-index.json
             /tmp/adaptive-shell/snapshots
             /tmp/adaptive-shell-results
-            /tmp/adaptive-medium/suite-index.json
-            /tmp/adaptive-medium/medium-meta.json
-            /tmp/adaptive-medium-results
           if-no-files-found: warn
