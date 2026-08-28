@@ -236,4 +236,4 @@ jobs:
             /tmp/tb-first3/tier-manifest.json
           if-no-files-found: error
 
-# Temporary branch/path push trigger. Restore manual-only after the first-three validation run.
+# Trigger the registered workflow once; restore manual-only after this validation run.
