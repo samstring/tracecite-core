@@ -1,5 +1,6 @@
 name: Real-World 10 Agent Benchmark
 
+# Trigger live ten-case benchmark after workflow registration.
 on:
   workflow_dispatch:
   push:
