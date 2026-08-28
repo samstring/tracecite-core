@@ -26,6 +26,10 @@ _CITATION_PATTERNS = (
     re.compile(r"\bline\s+(?P<line>\d+)\b", re.IGNORECASE),
     re.compile(r"\b[\w.\-/]+:(?P<line>\d+)\b"),
 )
+# ``cat -n`` and ``nl`` render line-addressable evidence as ``N<TAB>text``.
+# This pattern is intentionally tool-output-only: applying it to the final
+# answer would turn ordinary numbered lists into fabricated citations.
+_TOOL_NUMBERED_LINE_PATTERN = re.compile(r"(?m)^\s*(?P<line>\d+)\t")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -177,11 +181,23 @@ def _line_refs(text: str) -> set[int]:
     return result
 
 
+def _tool_line_refs(text: str) -> set[int]:
+    result = _line_refs(text)
+    for match in _TOOL_NUMBERED_LINE_PATTERN.finditer(text):
+        try:
+            line = int(match.group("line"))
+        except (TypeError, ValueError):
+            continue
+        if line > 0:
+            result.add(line)
+    return result
+
+
 def _citation_quality(answer: str, tool_outputs: list[str]) -> dict[str, Any]:
     answer_refs = _line_refs(answer)
     visible_refs: set[int] = set()
     for output in tool_outputs:
-        visible_refs.update(_line_refs(output))
+        visible_refs.update(_tool_line_refs(output))
     valid = answer_refs & visible_refs
     invalid = answer_refs - visible_refs
     accuracy = len(valid) / len(answer_refs) if answer_refs else 0.0
