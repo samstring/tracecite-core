@@ -27,7 +27,7 @@
       "merged_at": "2025-04-29T01:03:51Z",
       "merge_commit_sha": "f7d7633f548b99275743002ee25475b31ea3cf91",
       "fix_title": "Fix `late` variable non-assignment when WASM is enabled",
-      "truth_text": "Fix late variable non-assignment when WASM is enabled. This appears to be a regression from issue 165006."
+      "truth_text": "Assign the late WASM variable on the WASM-enabled build path; this fixes the late variable non-assignment regression associated with issue 165006."
     },
     "flutter-190799": {
       "repo": "flutter/flutter",
@@ -45,7 +45,7 @@
       "merged_at": "2025-06-03T09:16:13Z",
       "merge_commit_sha": "72878a1e9786482a045c32969d14f7ad581726a9",
       "fix_title": "[confmap] fix panic when assigning nil maps",
-      "truth_text": "Do not panic on assigning nil maps to non-nil maps."
+      "truth_text": "Handle nil maps when assigning into non-nil maps to prevent a nil-map panic."
     },
     "otel-contrib-24908": {
       "repo": "open-telemetry/opentelemetry-collector-contrib",
@@ -63,7 +63,7 @@
       "merged_at": "2022-11-24T13:21:48Z",
       "merge_commit_sha": "e4f1a43894160670a7974f83a5cdbe809942501a",
       "fix_title": "[receiver/prometheus] fix panic on shutdown",
-      "truth_text": "Prometheus receiver: fix panic on Shutdown by guarding the shutdown path."
+      "truth_text": "Prometheus receiver: guard Shutdown to fix the panic on the shutdown path."
     },
     "envoy-43513": {
       "repo": "envoyproxy/envoy",
@@ -72,7 +72,7 @@
       "merged_at": "2026-02-25T19:25:34Z",
       "merge_commit_sha": "2d83b4f5a298f3b24be802c5e246e4d7cb329abd",
       "fix_title": "peak_ewma: fix segfault, ring buffer overflow, and alpha calculation",
-      "truth_text": "The Peak EWMA constructor called createTimer on an Event::Dispatcher from worker threads, violating dispatcher thread safety and causing isThreadSafe assertion failures or segfaults. The fix removes timer-based aggregation and performs aggregation inline in chooseHost, avoiding the dispatcher timer."
+      "truth_text": "The Peak EWMA constructor called createTimer on an Event::Dispatcher from worker threads, violating dispatcher thread safety and causing isThreadSafe assertion failures or segfaults. The fix removes the timer dependency and uses inline aggregation in chooseHost."
     },
     "envoy-7154": {
       "repo": "envoyproxy/envoy",
@@ -81,7 +81,7 @@
       "merged_at": "2019-06-07T03:40:47Z",
       "merge_commit_sha": "9d47062517cf9d728d0c09246ebdcb1111449c6a",
       "fix_title": "fix regression in router that can cause a crash on response timeout",
-      "truth_text": "Retry hedging changed response-timeout logic so the upstream request was only reset before headers. A timeout after headers but before end_stream could decode body or trailers through a null pointer. The fix restores resetting the upstream request on response timeout."
+      "truth_text": "Retry hedging changed response-timeout logic so the upstream request was only reset before headers. A timeout after headers but before end_stream could decode body or trailers through a null pointer. The fix resets the upstream request on response timeout even after headers."
     },
     "containerd-8742": {
       "repo": "containerd/containerd",
@@ -90,7 +90,7 @@
       "merged_at": "2023-07-10T15:12:05Z",
       "merge_commit_sha": "97f2e3bc031113ecc3726954f159ca5770e89317",
       "fix_title": "Resolve docker.NewResolver race condition",
-      "truth_text": "Resolve docker.NewResolver race condition. The race detector showed a concurrent map read in remotes/docker.NewResolver; the change makes resolver map access safe."
+      "truth_text": "The race detector showed concurrent map access in docker.NewResolver. The merged patch clones/copies the headers map before mutation to avoid the resolver race."
     },
     "containerd-10062": {
       "repo": "containerd/containerd",
@@ -99,7 +99,7 @@
       "merged_at": "2024-04-25T09:10:53Z",
       "merge_commit_sha": "0426e3c2eb39b246f783cb16d0980ed9e0e69563",
       "fix_title": "cri: introspectRuntimeFeatures: fix nil panic",
-      "truth_text": "CRI introspectRuntimeFeatures: fix nil panic by guarding nil options before marshaling runtime feature options."
+      "truth_text": "CRI introspectRuntimeFeatures: guard options when they are nil and skip marshaling nil options to fix the nil panic."
     },
     "containerd-4795": {
       "repo": "containerd/containerd",
@@ -108,7 +108,7 @@
       "merged_at": "2020-12-16T13:35:34Z",
       "merge_commit_sha": "318e34b9831d0c08bf7052eacb19014983249bcc",
       "fix_title": "docker: avoid concurrent map access panic",
-      "truth_text": "Docker resolver/push path: avoid concurrent map access panic by removing unsafe shared concurrent map access."
+      "truth_text": "The merged patch copies request headers into a new map before use to avoid concurrent map access panic."
     },
     "kubernetes-39480": {
       "repo": "kubernetes/kubernetes",
@@ -117,7 +117,7 @@
       "merged_at": "2017-01-06T16:44:18Z",
       "merge_commit_sha": "402abd23ef8b7958055465835a131a70398cee19",
       "fix_title": "kubelet: fix nil deref in volume type check",
-      "truth_text": "For VolumeSpec either Volume or PersistentVolume is set, not both, so the old volume type check could nil-dereference PersistentVolumes. PersistentVolumes are not memory-backed; the fix limits the check to local/temporal volumes and avoids dereferencing a missing Volume."
+      "truth_text": "For VolumeSpec either Volume or PersistentVolume is set, not both, which caused a nil dereference on PVs. Since PVs are not memory-backed, only local/temporal volumes should be considered."
     },
     "kubernetes-86676": {
       "repo": "kubernetes/kubernetes",
@@ -162,7 +162,7 @@
       "merged_at": "2026-08-18T09:19:18Z",
       "merge_commit_sha": "98c983239715d0d81b8acf3560d47aba2a6d1649",
       "fix_title": "rules: fix nil logger panic in the default group loader",
-      "truth_text": "NewManager defaulted Logger only after constructing FileLoader, so the loader captured a nil logger. Multi-document warning code later dereferenced it and panicked. Move logger defaulting before FileLoader construction so everything captures the non-nil no-op logger."
+      "truth_text": "NewManager defaulted Logger only after constructing FileLoader, so the loader captured a nil logger. Multi-document warning code later dereferenced it and panicked. Move the default logger before FileLoader construction so everything captures a non-nil logger."
     }
   }
 }
