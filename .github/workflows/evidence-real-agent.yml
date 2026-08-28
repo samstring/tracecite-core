@@ -1,5 +1,6 @@
 name: Evidence Real Agent Pilot
 
+# Push trigger is intentionally scoped to this experiment workflow for live benchmark smoke runs.
 on:
   workflow_dispatch:
   push:
