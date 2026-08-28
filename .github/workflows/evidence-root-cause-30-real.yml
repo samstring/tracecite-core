@@ -1,0 +1,106 @@
+name: Root Cause 30 Real GitHub
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/evidence-root-cause-30-real.yml
+      - src/tracecite/root_cause_suite.py
+      - src/tracecite/root_cause_benchmarking.py
+      - benchmarks/agent-investigation/gmi_canonical_host.py
+      - benchmarks/agent-investigation/run_host.py
+      - tests/test_root_cause_suite.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evidence-root-cause-30-real
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1800"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install TraceCite
+        run: python -m pip install -e ".[dev]"
+
+      - name: Validate configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is not configured"; exit 1; }
+          test -n "$BENCH_MODEL" || { echo "TRACECITE_BENCH_MODEL is not configured"; exit 1; }
+          echo "Provider base URL: $OPENAI_BASE_URL"
+          echo "Benchmark model: $BENCH_MODEL"
+
+      - name: Validate 30-case suite contract
+        run: python -m tracecite.root_cause_suite validate --repo-root "$GITHUB_WORKSPACE"
+
+      - name: Run TraceCite candidate first on all 30 cases
+        shell: bash
+        run: |
+          set -o pipefail
+          rm -rf /tmp/tracecite-root-cause-30 /tmp/tracecite-root-cause-30-results
+          python -m tracecite.root_cause_suite run \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --work-dir /tmp/tracecite-root-cause-30 \
+            --output-dir /tmp/tracecite-root-cause-30-results \
+            --mode tracecite \
+            --model "$BENCH_MODEL" \
+            --host "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_canonical_host.py" \
+            --timeout-seconds 600 \
+            | tee /tmp/tracecite-root-cause-30-results/runner-summary.json
+
+      - name: Print candidate summary
+        if: always()
+        shell: bash
+        run: |
+          cat /tmp/tracecite-root-cause-30-results/batch-summary.json 2>/dev/null || true
+          find /tmp/tracecite-root-cause-30-results/failures -type f -maxdepth 1 -print -exec cat {} \; 2>/dev/null || true
+
+      - name: Upload 30-case evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: root-cause-30-real-tracecite
+          path: |
+            /tmp/tracecite-root-cause-30/suite-index.json
+            /tmp/tracecite-root-cause-30/snapshots
+            /tmp/tracecite-root-cause-30-results
+          if-no-files-found: warn
+
+      - name: Candidate quality gate
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('/tmp/tracecite-root-cause-30-results/batch-summary.json')
+          if not path.is_file():
+              raise SystemExit('candidate produced no batch summary')
+          summary = json.loads(path.read_text())
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          candidate_failures = int(summary.get('quality_failed', 0)) + int(summary.get('host_failed', 0))
+          infra = int(summary.get('infra_inconclusive', 0))
+          completed = int(summary.get('completed', 0))
+          if candidate_failures:
+              raise SystemExit(f'candidate failures: {candidate_failures}')
+          if completed == 0 and infra:
+              raise SystemExit(f'provider/infra inconclusive: {infra}')
+          PY
