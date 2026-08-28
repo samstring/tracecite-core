@@ -1,6 +1,6 @@
 name: Adaptive Evidence Routing Smoke
 
-# Targeted model-cost regression for adaptive transport; intentionally only 3 cases.
+# Targeted model-cost regression for adaptive transport; validates late critical signal hints.
 on:
   workflow_dispatch:
   push:
