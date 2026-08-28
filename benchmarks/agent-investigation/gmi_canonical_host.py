@@ -12,7 +12,7 @@ from typing import Any, Mapping, Sequence
 import gmi_host as base
 import openai_host as common
 from tracecite.integrations import cli as trace_cli
-from tracecite.integrations.agent_projection import project
+from tracecite.integrations.agent_projection import DEFAULT_AGENT_MAX_OUTPUT_CHARS, project
 from tracecite.runtime import (
     EvidenceRequest,
     InvestigationStore,
@@ -245,28 +245,10 @@ class CanonicalRuntime(base.BenchmarkToolRuntime):
         payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
         view = project(payload, profile="agent")
         if view.get("operation") == "search":
-            view = trace_cli._compact_search_result(view, max_output_chars=None)
-        elif view.get("operation") == "expand":
-            coverage = view.get("coverage") or {}
-            evidence = view.get("evidence") or []
-            if isinstance(coverage, Mapping) and isinstance(evidence, list) and evidence:
-                first = evidence[0]
-                if isinstance(first, Mapping):
-                    source_name = Path(str(first.get("source_path") or "source")).name
-                    start = coverage.get("context_start_line")
-                    end = coverage.get("context_end_line")
-                    if (
-                        isinstance(start, int)
-                        and not isinstance(start, bool)
-                        and isinstance(end, int)
-                        and not isinstance(end, bool)
-                        and end >= start
-                    ):
-                        data = dict(view.get("data") or {})
-                        data["visible_line_refs"] = [
-                            f"{source_name}:{line}" for line in range(start, end + 1)
-                        ]
-                        view["data"] = data
+            view = trace_cli._compact_search_result(
+                view,
+                max_output_chars=DEFAULT_AGENT_MAX_OUTPUT_CHARS,
+            )
         rendered = json.dumps(view, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return f"{prefix}\n{rendered}" if prefix else rendered
 
