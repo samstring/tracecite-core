@@ -193,7 +193,10 @@ def test_range_context_growth_is_not_suppressed_by_prior_search_pointer(tmp_path
     assert expanded.progress.delta.new_lines == 3
     assert expanded.stop_reason is None
     assert expanded.new_evidence
-    assert "two\nthree\nfour" in expanded.to_dict()["data"]["text"]
+    text = expanded.to_dict()["data"]["text"]
+    assert "2: two" in text
+    assert "3: three" in text
+    assert "4: four" in text
 
     repeated = retrieve(
         EvidenceRequest(
