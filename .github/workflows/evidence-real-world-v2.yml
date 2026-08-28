@@ -1,4 +1,4 @@
-name: Real-World Inspect-First Batch
+name: Real-World Complete-Inspection Smoke
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ permissions:
 jobs:
   batch:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
@@ -32,106 +32,67 @@ jobs:
         run: |
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is not configured"; exit 1; }
           test -n "$BENCH_MODEL" || { echo "TRACECITE_BENCH_MODEL is not configured"; exit 1; }
-          echo "Provider base URL: $OPENAI_BASE_URL"
-          echo "Benchmark model: $BENCH_MODEL"
-      - name: Prepare remaining cases
+      - name: Prepare targeted cases
         shell: bash
         run: |
           set -euo pipefail
-          cases=(
-            doublecmd-2616
-            doublecmd-2777
-            doublecmd-2772
-            doublecmd-2815
-            doublecmd-2731
-            doublecmd-2264
-          )
-          rm -rf /tmp/tracecite-rw-v2
+          cases=(doublecmd-2616 doublecmd-2731 doublecmd-2264 doublecmd-2772)
+          rm -rf /tmp/tracecite-rw-gate
           for case_id in "${cases[@]}"; do
             case_dir="benchmarks/agent-investigation/cases/${case_id}"
             python -m tracecite.benchmarking validate "$case_dir"
-            python -m tracecite.benchmarking prepare "$case_dir" --work-dir /tmp/tracecite-rw-v2
+            python -m tracecite.benchmarking prepare "$case_dir" --work-dir /tmp/tracecite-rw-gate
           done
-      - name: Run remaining resilient inspect-first batch
+      - name: Run targeted TraceCite smoke
         shell: bash
         run: |
           set -uo pipefail
-          mkdir -p /tmp/tracecite-rw-v2-runs /tmp/tracecite-rw-v2-scores /tmp/tracecite-rw-v2-failures
-          runs=(
-            "doublecmd-2616:tracecite"
-            "doublecmd-2777:tracecite"
-            "doublecmd-2772:free_shell"
-            "doublecmd-2772:tracecite"
-            "doublecmd-2815:free_shell"
-            "doublecmd-2815:tracecite"
-            "doublecmd-2731:free_shell"
-            "doublecmd-2731:tracecite"
-            "doublecmd-2264:free_shell"
-            "doublecmd-2264:tracecite"
-          )
-          seed=1
+          mkdir -p /tmp/tracecite-rw-gate-runs /tmp/tracecite-rw-gate-scores /tmp/tracecite-rw-gate-failures
+          cases=(doublecmd-2616 doublecmd-2731 doublecmd-2264 doublecmd-2772)
           failed=0
           completed=0
-          for item in "${runs[@]}"; do
-            case_id="${item%%:*}"
-            mode="${item##*:}"
+          for case_id in "${cases[@]}"; do
             case_dir="benchmarks/agent-investigation/cases/${case_id}"
-            manifest="/tmp/tracecite-rw-v2/${case_id}/prepared.json"
-            transcript="/tmp/tracecite-rw-v2-runs/${case_id}-${mode}-${seed}.jsonl"
-            score="/tmp/tracecite-rw-v2-scores/${case_id}-${mode}-${seed}.json"
-            echo "== ${case_id} / ${mode} =="
-            if [ "$mode" = "tracecite" ]; then
-              host="$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_raw_host_v2.py"
-            else
-              host="$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_host.py"
-            fi
+            manifest="/tmp/tracecite-rw-gate/${case_id}/prepared.json"
+            transcript="/tmp/tracecite-rw-gate-runs/${case_id}-tracecite-1.jsonl"
+            score="/tmp/tracecite-rw-gate-scores/${case_id}-tracecite-1.json"
+            echo "== ${case_id} / tracecite =="
             if python benchmarks/agent-investigation/run_host.py \
               "$case_dir" "$manifest" \
-              --mode "$mode" \
+              --mode tracecite \
               --model "$BENCH_MODEL" \
-              --seed "$seed" \
+              --seed 1 \
               --timeout-seconds 600 \
               --output "$transcript" \
               --pass-env OPENAI_API_KEY \
               --pass-env OPENAI_BASE_URL \
               --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
-              -- python "$host"; then
+              -- python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_raw_host_v2.py"; then
               if python -m tracecite.benchmarking score "$case_dir" "$transcript" > "$score"; then
                 cat "$score"
                 completed=$((completed + 1))
               else
                 failed=$((failed + 1))
-                printf '{"case_id":"%s","mode":"%s","stage":"score"}\n' "$case_id" "$mode" \
-                  > "/tmp/tracecite-rw-v2-failures/${case_id}-${mode}-${seed}.json"
-                echo "FAILED scoring ${case_id}/${mode}; continuing"
+                echo '{"stage":"score"}' > "/tmp/tracecite-rw-gate-failures/${case_id}.json"
               fi
             else
-              rc=$?
               failed=$((failed + 1))
-              printf '{"case_id":"%s","mode":"%s","stage":"host","returncode":%d}\n' "$case_id" "$mode" "$rc" \
-                > "/tmp/tracecite-rw-v2-failures/${case_id}-${mode}-${seed}.json"
-              echo "FAILED host ${case_id}/${mode} rc=${rc}; continuing"
-              tail -n 3 "$transcript" || true
+              echo '{"stage":"host"}' > "/tmp/tracecite-rw-gate-failures/${case_id}.json"
+              tail -n 4 "$transcript" || true
             fi
           done
-          if compgen -G '/tmp/tracecite-rw-v2-scores/*.json' > /dev/null; then
-            python benchmarks/agent-investigation/aggregate_scores.py \
-              /tmp/tracecite-rw-v2-scores/*.json \
-              --output /tmp/tracecite-rw-v2-runs/aggregate.json || true
-            cat /tmp/tracecite-rw-v2-runs/aggregate.json 2>/dev/null || true
-          fi
-          printf '{"completed":%d,"failed":%d,"requested":%d}\n' "$completed" "$failed" "${#runs[@]}" \
-            > /tmp/tracecite-rw-v2-runs/batch-summary.json
-          cat /tmp/tracecite-rw-v2-runs/batch-summary.json
-      - name: Upload batch results
+          printf '{"completed":%d,"failed":%d,"requested":4}\n' "$completed" "$failed" \
+            > /tmp/tracecite-rw-gate-runs/batch-summary.json
+          cat /tmp/tracecite-rw-gate-runs/batch-summary.json
+      - name: Upload targeted results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: evidence-real-world-v2-remaining
+          name: evidence-real-world-complete-inspection-smoke
           path: |
-            /tmp/tracecite-rw-v2-runs
-            /tmp/tracecite-rw-v2-scores
-            /tmp/tracecite-rw-v2-failures
+            /tmp/tracecite-rw-gate-runs
+            /tmp/tracecite-rw-gate-scores
+            /tmp/tracecite-rw-gate-failures
           if-no-files-found: warn
 
-# Temporary push trigger while validating inspect-first behavior; restore manual-only after the batch.
+# Temporary push trigger during benchmark iteration; restore manual-only after validation.
