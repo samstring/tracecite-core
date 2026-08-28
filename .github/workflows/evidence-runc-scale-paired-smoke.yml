@@ -1,0 +1,132 @@
+name: Runc Scale Paired Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347/**
+      - .github/workflows/evidence-runc-scale-paired-smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  paired:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [free_shell, tracecite]
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1800"
+      TRACECITE_BENCH_MAX_ROUNDS: "12"
+      TRACECITE_BENCH_NO_GROWTH_ROUNDS: "2"
+      CASE_DIR: benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install TraceCite
+        run: python -m pip install -e ".[dev]"
+      - name: Install and verify ripgrep
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ripgrep
+          fi
+          rg --version
+      - name: Prepare immutable public evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/runc-scale-prepared /tmp/runc-paired-result
+          mkdir -p /tmp/runc-paired-result
+          python -m tracecite.benchmarking prepare "$CASE_DIR" \
+            --work-dir /tmp/runc-scale-prepared \
+            > /tmp/runc-paired-result/prepare.json
+          PREPARED="$(find /tmp/runc-scale-prepared -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          echo "PREPARED=$PREPARED" >> "$GITHUB_ENV"
+      - name: Run same-agent-loop tool A/B arm
+        shell: bash
+        run: |
+          set -euo pipefail
+          TRANSCRIPT="/tmp/runc-paired-result/transcript.jsonl"
+          set +e
+          python benchmarks/agent-investigation/run_host.py \
+            "$CASE_DIR" "$PREPARED" \
+            --mode "${{ matrix.mode }}" \
+            --model "$BENCH_MODEL" \
+            --seed 1 \
+            --timeout-seconds 900 \
+            --output "$TRANSCRIPT" \
+            --pass-env OPENAI_API_KEY \
+            --pass-env OPENAI_BASE_URL \
+            --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
+            --pass-env TRACECITE_BENCH_MAX_ROUNDS \
+            --pass-env TRACECITE_BENCH_NO_GROWTH_ROUNDS \
+            -- python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_canonical_host.py" \
+            > /tmp/runc-paired-result/run-result.json
+          RUN_RC=$?
+          set -e
+          echo "$RUN_RC" > /tmp/runc-paired-result/run-rc.txt
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('/tmp/runc-paired-result')
+          try:
+              run = json.loads((root / 'run-result.json').read_text())
+          except Exception:
+              run = {}
+          if run.get('status') in {'ok', 'incomplete'}:
+              import subprocess, sys
+              subprocess.run([
+                  sys.executable, '-m', 'tracecite.root_cause_benchmarking', 'score',
+                  'benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347',
+                  str(root / 'transcript.jsonl'),
+              ], stdout=(root / 'score.json').open('w'), check=False)
+          score = None
+          if (root / 'score.json').is_file():
+              try:
+                  score = json.loads((root / 'score.json').read_text())
+              except Exception:
+                  pass
+          failure_reason = None
+          if (root / 'transcript.jsonl').is_file():
+              for line in (root / 'transcript.jsonl').read_text(errors='replace').splitlines():
+                  try:
+                      event = json.loads(line)
+                  except Exception:
+                      continue
+                  if event.get('type') == 'host_error':
+                      failure_reason = event.get('failure_reason') or event.get('error')
+          outcome = {
+              'schema_version': 1,
+              'case_id': 'kubernetes-140039-runc-5347-scale',
+              'mode': '${{ matrix.mode }}',
+              'model': '${{ env.BENCH_MODEL }}',
+              'run_status': run.get('status'),
+              'host_failure_reason': failure_reason,
+              'run': run,
+              'score': score,
+          }
+          (root / 'outcome.json').write_text(json.dumps(outcome, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(outcome, indent=2, sort_keys=True))
+          PY
+      - name: Upload paired arm
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runc-scale-paired-${{ matrix.mode }}
+          path: /tmp/runc-paired-result
+          if-no-files-found: error
