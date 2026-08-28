@@ -133,3 +133,5 @@ jobs:
             /tmp/tracecite-rw-v2-scores
             /tmp/tracecite-rw-v2-failures
           if-no-files-found: warn
+
+# Temporary push trigger while validating inspect-first behavior; restore manual-only after the batch.
