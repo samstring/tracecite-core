@@ -1,0 +1,371 @@
+name: Runnable 16 Paired A/B
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/evidence-runnable-16-paired.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evidence-runnable-16-paired
+  cancel-in-progress: false
+
+jobs:
+  paired:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        case:
+          # 12 ordinary runnable cases. kubernetes-140848 is intentionally omitted
+          # here because the same incident is represented below by its stronger scale fixture.
+          - id: doublecmd-2264
+            dir: benchmarks/agent-investigation/cases/doublecmd-2264
+            scorer: legacy
+          - id: doublecmd-2616
+            dir: benchmarks/agent-investigation/cases/doublecmd-2616
+            scorer: legacy
+          - id: doublecmd-2731
+            dir: benchmarks/agent-investigation/cases/doublecmd-2731
+            scorer: legacy
+          - id: doublecmd-2772
+            dir: benchmarks/agent-investigation/cases/doublecmd-2772
+            scorer: legacy
+          - id: doublecmd-2777
+            dir: benchmarks/agent-investigation/cases/doublecmd-2777
+            scorer: legacy
+          - id: doublecmd-2809
+            dir: benchmarks/agent-investigation/cases/doublecmd-2809
+            scorer: legacy
+          - id: doublecmd-2815
+            dir: benchmarks/agent-investigation/cases/doublecmd-2815
+            scorer: legacy
+          - id: doublecmd-3061
+            dir: benchmarks/agent-investigation/cases/doublecmd-3061
+            scorer: legacy
+          - id: flutter-179398
+            dir: benchmarks/agent-investigation/cases/flutter-179398
+            scorer: legacy
+          - id: mobile-payment-runtime-evidence
+            dir: benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence
+            scorer: legacy
+          - id: prometheus-18018
+            dir: benchmarks/agent-investigation/cases/prometheus-18018
+            scorer: legacy
+          - id: pulumi-20529
+            dir: benchmarks/agent-investigation/cases/pulumi-20529
+            scorer: legacy
+          # Four unique scale incidents.
+          - id: kubernetes-140039-runc-5347-scale
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347
+            scorer: root
+          - id: kubernetes-140268-scale
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140268
+            scorer: root
+          - id: kubernetes-140628-scale
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140628
+            scorer: root
+          - id: kubernetes-140848-scale
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140848
+            scorer: root
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1800"
+      TRACECITE_BENCH_MAX_ROUNDS: "12"
+      TRACECITE_BENCH_NO_GROWTH_ROUNDS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install TraceCite
+        run: python -m pip install -e ".[dev]"
+      - name: Install and verify ripgrep
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ripgrep
+          fi
+          rg --version
+      - name: Prepare immutable evidence once for the pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="/tmp/runnable-16-${{ matrix.case.id }}"
+          PREP="$ROOT/prepared"
+          RESULT="$ROOT/result"
+          rm -rf "$ROOT"
+          mkdir -p "$PREP" "$RESULT"
+          python -m tracecite.benchmarking validate "${{ matrix.case.dir }}" > "$RESULT/validate.json"
+          python -m tracecite.benchmarking prepare "${{ matrix.case.dir }}" \
+            --work-dir "$PREP" > "$RESULT/prepare.json"
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          echo "PAIR_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "PAIR_RESULT=$RESULT" >> "$GITHUB_ENV"
+          echo "PREPARED=$PREPARED" >> "$GITHUB_ENV"
+      - name: Run same-model same-loop free_shell then TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          for MODE in free_shell tracecite; do
+            ARM="$PAIR_RESULT/$MODE"
+            mkdir -p "$ARM"
+            TRANSCRIPT="$ARM/transcript.jsonl"
+            set +e
+            python benchmarks/agent-investigation/run_host.py \
+              "${{ matrix.case.dir }}" "$PREPARED" \
+              --mode "$MODE" \
+              --model "$BENCH_MODEL" \
+              --seed 1 \
+              --timeout-seconds 900 \
+              --output "$TRANSCRIPT" \
+              --pass-env OPENAI_API_KEY \
+              --pass-env OPENAI_BASE_URL \
+              --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
+              --pass-env TRACECITE_BENCH_MAX_ROUNDS \
+              --pass-env TRACECITE_BENCH_NO_GROWTH_ROUNDS \
+              -- python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_canonical_host.py" \
+              > "$ARM/run-result.json"
+            RUN_RC=$?
+            set -e
+            echo "$RUN_RC" > "$ARM/run-rc.txt"
+
+            STATUS="$(python - "$ARM/run-result.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          try:
+              value = json.loads(Path(sys.argv[1]).read_text())
+          except Exception:
+              value = {}
+          print(str(value.get('status') or 'host_error'))
+          PY
+          )"
+            echo "$STATUS" > "$ARM/status.txt"
+
+            if [[ "$STATUS" == "ok" || "$STATUS" == "incomplete" ]]; then
+              set +e
+              if [[ "${{ matrix.case.scorer }}" == "root" ]]; then
+                python -m tracecite.root_cause_benchmarking score \
+                  "${{ matrix.case.dir }}" "$TRANSCRIPT" > "$ARM/score.json"
+              else
+                python -m tracecite.benchmarking score \
+                  "${{ matrix.case.dir }}" "$TRANSCRIPT" > "$ARM/score.json"
+              fi
+              SCORE_RC=$?
+              set -e
+              echo "$SCORE_RC" > "$ARM/score-rc.txt"
+            fi
+
+            CASE_ID="${{ matrix.case.id }}" MODE="$MODE" SCORER="${{ matrix.case.scorer }}" \
+            ARM_DIR="$ARM" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          arm = Path(os.environ['ARM_DIR'])
+          def load(name):
+              path = arm / name
+              if not path.is_file():
+                  return None
+              try:
+                  return json.loads(path.read_text())
+              except Exception:
+                  return None
+
+          run = load('run-result.json') or {}
+          score = load('score.json')
+          transcript = arm / 'transcript.jsonl'
+          failure_reason = None
+          attempted = []
+          if transcript.is_file():
+              for line in transcript.read_text(errors='replace').splitlines():
+                  try:
+                      event = json.loads(line)
+                  except Exception:
+                      continue
+                  if event.get('type') == 'host_error':
+                      failure_reason = event.get('failure_reason') or event.get('error')
+                  if event.get('type') == 'request_context':
+                      value = event.get('serialized_chars')
+                      if isinstance(value, int) and value >= 0:
+                          attempted.append(value)
+
+          quality = (score or {}).get('quality') or {}
+          context = dict((score or {}).get('context_cost') or {})
+          if attempted:
+              context.setdefault('cumulative_attempted_context_chars', sum(attempted))
+              context.setdefault('peak_attempted_context_chars', max(attempted))
+          scorer = os.environ['SCORER']
+          if scorer == 'root':
+              primary_quality_name = 'dimension_recall'
+              primary_quality = quality.get('dimension_recall')
+          else:
+              primary_quality_name = 'concept_recall'
+              primary_quality = quality.get('concept_recall')
+
+          payload = {
+              'schema_version': 1,
+              'case_id': os.environ['CASE_ID'],
+              'mode': os.environ['MODE'],
+              'scorer': scorer,
+              'model': os.environ.get('BENCH_MODEL'),
+              'run_status': run.get('status'),
+              'host_failure_reason': failure_reason,
+              'passed': (score or {}).get('passed') if score else None,
+              'primary_quality_name': primary_quality_name,
+              'primary_quality': primary_quality,
+              'quality': quality if score else None,
+              'context_cost': context if score else None,
+              'run': run,
+          }
+          (arm / 'outcome.json').write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+          done
+      - name: Upload paired case result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runnable-16-paired-${{ matrix.case.id }}
+          path: /tmp/runnable-16-${{ matrix.case.id }}/result
+          if-no-files-found: warn
+
+  aggregate:
+    needs: paired
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: runnable-16-paired-*
+          path: /tmp/runnable-16-all
+      - name: Aggregate all 16 A/B pairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/runnable-16-summary
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          records = []
+          for path in sorted(Path('/tmp/runnable-16-all').rglob('outcome.json')):
+              try:
+                  records.append(json.loads(path.read_text()))
+              except Exception:
+                  continue
+
+          pairs = {}
+          for row in records:
+              pairs.setdefault(row.get('case_id'), {})[row.get('mode')] = row
+
+          def number(value):
+              return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+          def reduction(shell, trace):
+              shell = number(shell)
+              trace = number(trace)
+              if shell is None or trace is None or shell == 0:
+                  return None
+              return round(1.0 - trace / shell, 6)
+
+          def ratio(shell, trace):
+              shell = number(shell)
+              trace = number(trace)
+              if shell is None or trace is None or trace == 0:
+                  return None
+              return round(shell / trace, 4)
+
+          comparisons = []
+          for case_id in sorted(pairs):
+              pair = pairs[case_id]
+              shell = pair.get('free_shell') or {}
+              trace = pair.get('tracecite') or {}
+              sc = shell.get('context_cost') or {}
+              tc = trace.get('context_cost') or {}
+              comparisons.append({
+                  'case_id': case_id,
+                  'scorer': shell.get('scorer') or trace.get('scorer'),
+                  'free_shell_status': shell.get('run_status'),
+                  'tracecite_status': trace.get('run_status'),
+                  'free_shell_failure_reason': shell.get('host_failure_reason'),
+                  'tracecite_failure_reason': trace.get('host_failure_reason'),
+                  'free_shell_passed': shell.get('passed'),
+                  'tracecite_passed': trace.get('passed'),
+                  'free_shell_primary_quality': shell.get('primary_quality'),
+                  'tracecite_primary_quality': trace.get('primary_quality'),
+                  'primary_quality_name': shell.get('primary_quality_name') or trace.get('primary_quality_name'),
+                  'free_shell_input_tokens': sc.get('reported_input_tokens'),
+                  'tracecite_input_tokens': tc.get('reported_input_tokens'),
+                  'input_token_reduction': reduction(sc.get('reported_input_tokens'), tc.get('reported_input_tokens')),
+                  'shell_over_tracecite_input_ratio': ratio(sc.get('reported_input_tokens'), tc.get('reported_input_tokens')),
+                  'free_shell_tool_output_chars': sc.get('tool_output_chars'),
+                  'tracecite_tool_output_chars': tc.get('tool_output_chars'),
+                  'tool_output_reduction': reduction(sc.get('tool_output_chars'), tc.get('tool_output_chars')),
+                  'shell_over_tracecite_tool_output_ratio': ratio(sc.get('tool_output_chars'), tc.get('tool_output_chars')),
+                  'free_shell_cumulative_context_chars': sc.get('cumulative_attempted_context_chars'),
+                  'tracecite_cumulative_context_chars': tc.get('cumulative_attempted_context_chars'),
+                  'cumulative_context_reduction': reduction(sc.get('cumulative_attempted_context_chars'), tc.get('cumulative_attempted_context_chars')),
+                  'free_shell_peak_context_chars': sc.get('peak_attempted_context_chars'),
+                  'tracecite_peak_context_chars': tc.get('peak_attempted_context_chars'),
+                  'peak_context_reduction': reduction(sc.get('peak_attempted_context_chars'), tc.get('peak_attempted_context_chars')),
+              })
+
+          valid_pairs = [row for row in comparisons if row['free_shell_status'] in {'ok', 'incomplete'} and row['tracecite_status'] in {'ok', 'incomplete'}]
+          token_pairs = [row for row in valid_pairs if number(row['free_shell_input_tokens']) is not None and number(row['tracecite_input_tokens']) is not None]
+          shell_tokens = sum(row['free_shell_input_tokens'] for row in token_pairs)
+          trace_tokens = sum(row['tracecite_input_tokens'] for row in token_pairs)
+          shell_tool = sum(row['free_shell_tool_output_chars'] or 0 for row in valid_pairs)
+          trace_tool = sum(row['tracecite_tool_output_chars'] or 0 for row in valid_pairs)
+
+          payload = {
+              'schema_version': 1,
+              'comparison': '16 unique runnable incidents; same model + same canonical agent loop + seed; free_shell vs tracecite tool surface only',
+              'expected_cases': 16,
+              'expected_arms': 32,
+              'observed_outcomes': len(records),
+              'observed_cases': len(pairs),
+              'valid_paired_cases': len(valid_pairs),
+              'provider_or_host_failures': [
+                  {
+                      'case_id': row['case_id'],
+                      'free_shell': row['free_shell_failure_reason'],
+                      'tracecite': row['tracecite_failure_reason'],
+                  }
+                  for row in comparisons
+                  if row['free_shell_status'] not in {'ok', 'incomplete'} or row['tracecite_status'] not in {'ok', 'incomplete'}
+              ],
+              'aggregate_valid_pairs': {
+                  'token_pairs': len(token_pairs),
+                  'free_shell_reported_input_tokens': shell_tokens,
+                  'tracecite_reported_input_tokens': trace_tokens,
+                  'input_token_reduction': reduction(shell_tokens, trace_tokens),
+                  'shell_over_tracecite_input_ratio': ratio(shell_tokens, trace_tokens),
+                  'free_shell_tool_output_chars': shell_tool,
+                  'tracecite_tool_output_chars': trace_tool,
+                  'tool_output_reduction': reduction(shell_tool, trace_tool),
+                  'shell_over_tracecite_tool_output_ratio': ratio(shell_tool, trace_tool),
+              },
+              'comparisons': comparisons,
+              'records': records,
+          }
+          out = Path('/tmp/runnable-16-summary/summary.json')
+          out.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runnable-16-paired-summary
+          path: /tmp/runnable-16-summary/summary.json
