@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from tracecite.root_cause_suite import (
+    DEFAULT_THRESHOLDS,
     SUITE_ID,
     aggregate_results,
     suite_cases,
@@ -25,6 +26,11 @@ def test_suite_has_30_unique_real_cases_and_fixed_cohorts() -> None:
     assert sum(case["source"]["kind"] == "github_issue" for case in cases) == 18
 
 
+def test_default_thresholds_require_supported_root_cause_dimensions() -> None:
+    assert DEFAULT_THRESHOLDS["dimension_recall"] == 0.75
+    assert DEFAULT_THRESHOLDS["supported_dimension_recall"] == 0.75
+
+
 def test_github_cases_pin_issue_and_fix_identity() -> None:
     github_cases = [case for case in suite_cases() if case["source"]["kind"] == "github_issue"]
     assert github_cases
@@ -43,12 +49,15 @@ def test_github_cases_pin_issue_and_fix_identity() -> None:
         }
 
 
-def test_validate_suite_checks_existing_case_sources_without_network() -> None:
+def test_validate_suite_checks_existing_case_sources_and_truth_lock_without_network() -> None:
     result = validate_suite(_repo_root())
     assert result["status"] == "ok"
     assert result["suite_id"] == SUITE_ID
     assert result["cases"] == 30
     assert result["cohorts"] == {"reporter_hypothesis": 4, "strict": 26}
+    assert result["truth_lock"]["github_cases"] == 18
+    assert result["truth_lock"]["merged_fix_truth"] == 18
+    assert result["truth_lock"]["fix_alignment_grounded"] == 18
 
 
 def test_aggregate_results_separates_strict_and_reporter_hypothesis(tmp_path: Path) -> None:
@@ -62,7 +71,11 @@ def test_aggregate_results_separates_strict_and_reporter_hypothesis(tmp_path: Pa
                 "case_id": "doublecmd-2264",
                 "mode": "tracecite",
                 "passed": True,
-                "quality": {"dimension_recall": 1.0, "citation": {"accuracy": 1.0}},
+                "quality": {
+                    "dimension_recall": 1.0,
+                    "supported_dimension_recall": 0.75,
+                    "citation": {"accuracy": 1.0},
+                },
                 "context_cost": {
                     "reported_input_tokens": 100,
                     "reported_output_tokens": 10,
@@ -80,7 +93,11 @@ def test_aggregate_results_separates_strict_and_reporter_hypothesis(tmp_path: Pa
                 "case_id": "prometheus-19432",
                 "mode": "tracecite",
                 "passed": False,
-                "quality": {"dimension_recall": 0.5, "citation": {"accuracy": 0.5}},
+                "quality": {
+                    "dimension_recall": 0.5,
+                    "supported_dimension_recall": 0.25,
+                    "citation": {"accuracy": 0.5},
+                },
                 "context_cost": {
                     "reported_input_tokens": 200,
                     "reported_output_tokens": 20,
@@ -108,6 +125,11 @@ def test_aggregate_results_separates_strict_and_reporter_hypothesis(tmp_path: Pa
     assert result["score_passed"] == 1
     assert result["failure_reasons"] == {"provider_rate_limited": 1}
     assert result["cohorts"]["strict"]["scored"] == 1
+    assert result["cohorts"]["strict"]["mean_supported_dimension_recall"] == 0.75
     assert result["cohorts"]["reporter_hypothesis"]["scored"] == 1
+    assert result["cohorts"]["reporter_hypothesis"]["mean_supported_dimension_recall"] == 0.25
+    assert result["mean_dimension_recall"] == 0.75
+    assert result["mean_supported_dimension_recall"] == 0.5
+    assert result["mean_citation_accuracy"] == 0.75
     assert result["reported_input_tokens"] == 300
     assert result["peak_attempted_context_chars"] == 900
