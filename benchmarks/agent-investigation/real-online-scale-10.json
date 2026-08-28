@@ -70,6 +70,16 @@
       "evidence_kind": "original_public_ci_log"
     },
     {
+      "id": "kubernetes-140822",
+      "purpose": "scale_root_cause",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/140822",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140826",
+      "fix_kind": "pull_request",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-kubernetes-unit/2078550802254794752",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-unit/2078550802254794752/build-log.txt",
+      "evidence_kind": "original_public_ci_log"
+    },
+    {
       "id": "kubernetes-140924",
       "purpose": "scale_root_cause",
       "source_issue": "https://github.com/kubernetes/kubernetes/issues/140924",
