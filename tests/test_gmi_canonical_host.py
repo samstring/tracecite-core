@@ -84,20 +84,37 @@ def test_canonical_host_preserves_visible_evidence_and_clamps_radius(tmp_path: P
         "assert 'no_new_evidence' in second.lower()\n"
         "assert 'radius_clamped_from=10 radius=8' in clamped\n"
         "assert 'INFO start' in clamped and 'INFO end' in clamped\n"
+        "assert 'runtime.log:1' in clamped and 'runtime.log:3' in clamped\n"
         "print('ok')\n",
     )
     assert output.strip() == "ok"
 
 
-def test_stop_policy_forces_final_only_after_two_no_growth_rounds(tmp_path: Path) -> None:
+def test_no_growth_detection_requires_explicit_stop_not_false_fields(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "productive = {'status':'ok','data':{'progress':{'frontier_exhausted':False,'scope_exhausted':False}}}\n"
+        "no_match = {'status':'no_match','data':{'progress':{'frontier_exhausted':False}}}\n"
+        "duplicate = {'status':'no_new_evidence','data':{}}\n"
+        "exhausted = {'status':'ok','data':{'stop_reason':{'kind':'frontier_exhausted'}}}\n"
+        "assert host._tool_output_no_growth(json.dumps(productive)) is False\n"
+        "assert host._tool_output_no_growth(json.dumps(no_match)) is False\n"
+        "assert host._tool_output_no_growth(json.dumps(duplicate)) is True\n"
+        "assert host._tool_output_no_growth(json.dumps(exhausted)) is True\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
+def test_stop_policy_forces_final_only_after_two_explicit_no_growth_rounds(tmp_path: Path) -> None:
     output = _run_host_script(
         tmp_path,
         "messages = [\n"
         " {'role':'system','content':'s'}, {'role':'user','content':'u'},\n"
         " {'role':'assistant','content':'','tool_calls':[{'id':'1'}]},\n"
-        " {'role':'tool','content':'{\\\"status\\\":\\\"no_match\\\"}'},\n"
+        " {'role':'tool','content':'{\\\"status\\\":\\\"no_new_evidence\\\",\\\"data\\\":{} }'},\n"
         " {'role':'assistant','content':'','tool_calls':[{'id':'2'}]},\n"
-        " {'role':'tool','content':'{\\\"status\\\":\\\"no_new_evidence\\\"}'},\n"
+        " {'role':'tool','content':'{\\\"status\\\":\\\"no_new_evidence\\\",\\\"data\\\":{} }'},\n"
         "]\n"
         "request, event = host._apply_stop_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
         "assert event is not None and event['reason'] == 'consecutive_no_growth'\n"
@@ -115,7 +132,7 @@ def test_stop_policy_max_round_is_a_safety_cap(tmp_path: Path) -> None:
         "messages = [{'role':'system','content':'s'},{'role':'user','content':'u'}]\n"
         "for i in range(12):\n"
         "    messages.append({'role':'assistant','content':'','tool_calls':[{'id':str(i)}]})\n"
-        "    messages.append({'role':'tool','content':'{\\\"status\\\":\\\"ok\\\"}'})\n"
+        "    messages.append({'role':'tool','content':'{\\\"status\\\":\\\"ok\\\",\\\"data\\\":{}}'})\n"
         "request, event = host._apply_stop_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
         "assert event is not None and event['reason'] == 'max_rounds'\n"
         "assert 'tools' not in request\n"
