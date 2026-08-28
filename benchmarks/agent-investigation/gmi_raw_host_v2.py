@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -9,6 +11,25 @@ import openai_host as common
 
 
 _ORIGINAL_TOOLS_FOR_MODE = common._tools_for_mode
+_ORIGINAL_POST_CHAT = base._post_chat
+_COVERAGE_RE = re.compile(
+    r"@COV\s+evidence_available=(\d+)\s+evidence_returned=(\d+)\s+"
+    r"evidence_truncated=(True|False)"
+)
+
+
+def _post_chat_with_transient_retry(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Retry provider overloads, not semantic/model failures or billing failures."""
+    for attempt in range(3):
+        try:
+            return _ORIGINAL_POST_CHAT(payload)
+        except RuntimeError as exc:
+            message = str(exc)
+            transient = any(f"HTTP {code}" in message for code in (429, 500, 502, 503, 504))
+            if not transient or attempt >= 2:
+                raise
+            time.sleep(2 ** attempt)
+    raise AssertionError("unreachable")
 
 
 class InspectFirstRuntime(base.BenchmarkToolRuntime):
@@ -22,6 +43,7 @@ class InspectFirstRuntime(base.BenchmarkToolRuntime):
     def __init__(self, *, mode: str, input_root: Path, scratch: Path, context_id: str) -> None:
         super().__init__(mode=mode, input_root=input_root, scratch=scratch, context_id=context_id)
         self._inspected_files: set[str] = set()
+        self._fully_inspected: dict[str, tuple[int, int]] = {}
 
     def _tracecite_inspect(self, args: Mapping[str, Any]) -> str:
         file_name = str(args.get("file") or "")
@@ -30,10 +52,31 @@ class InspectFirstRuntime(base.BenchmarkToolRuntime):
         if file_name in self._inspected_files:
             return (
                 "ALREADY INSPECTED: this source has already been returned with line-addressable "
-                "Coverage. Use tracecite_search only for a new, specific hypothesis or citation."
+                "Coverage. Reason from the existing evidence instead of inspecting it again."
             )
+        output = super()._tracecite_search({"file": file_name, "query": ".*", "regex": True})
         self._inspected_files.add(file_name)
-        return self._tracecite_search({"file": file_name, "query": ".*", "regex": True})
+        match = _COVERAGE_RE.search(output)
+        if match is not None:
+            available = int(match.group(1))
+            returned = int(match.group(2))
+            truncated = match.group(3) == "True"
+            if available == returned and not truncated:
+                self._fully_inspected[file_name] = (available, returned)
+        return output
+
+    def _tracecite_search(self, args: Mapping[str, Any]) -> str:
+        file_name = str(args.get("file") or "")
+        complete = self._fully_inspected.get(file_name)
+        if complete is not None:
+            available, returned = complete
+            return (
+                "NO_NEW_EVIDENCE: this source was fully inspected already "
+                f"({returned}/{available} evidence records returned; evidence_truncated=False). "
+                "A keyword search cannot reveal evidence that was not already delivered. "
+                "Use the existing #L references and reason from them; inspect another source only if one exists."
+            )
+        return super()._tracecite_search(args)
 
     def call(self, name: str, args: Mapping[str, Any]) -> str:
         if name == "tracecite_inspect" and self.mode in {"tracecite", "tracecite_context"}:
@@ -50,10 +93,10 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
         common._function_tool(
             "tracecite_inspect",
             (
-                "Inspect one raw evidence source before doing keyword searches. Use this first for a "
-                "source you have not inspected. It returns line-addressable TraceCite evidence plus "
-                "Coverage with no benchmark character cap. If Coverage shows the relevant source is "
-                "fully represented, reason from it instead of issuing synonym searches."
+                "Inspect one raw evidence source before keyword search. Use this first. It returns "
+                "line-addressable TraceCite evidence and Coverage with no benchmark character cap. "
+                "When Coverage says evidence_available equals evidence_returned and "
+                "evidence_truncated=False, the source is complete: reason from those lines and do not search it."
             ),
             {"file": file_property},
             ["file"],
@@ -61,10 +104,10 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
         common._function_tool(
             "tracecite_search",
             (
-                "Run a targeted TraceCite search only after inspection, when reasoning creates a new "
-                "specific hypothesis or you need a precise citation. query is a literal substring unless "
-                "regex=true; space-separated synonyms are not OR terms. Do not repeat broad searches for "
-                "evidence already returned by tracecite_inspect."
+                "Target a source only when its prior inspection was partial/truncated or when it has not "
+                "been fully inspected. If inspection already returned the entire source, TraceCite will "
+                "deterministically return NO_NEW_EVIDENCE instead of repeating evidence. query is literal "
+                "unless regex=true; space-separated synonyms are not OR terms."
             ),
             {
                 "file": file_property,
@@ -77,8 +120,9 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
 
 
 # Keep the provider/protocol loop identical to gmi_host.py. Only the Agent-facing
-# raw evidence tool surface changes for this experiment.
+# raw evidence tool surface and transport retry policy change for this experiment.
 base.BenchmarkToolRuntime = InspectFirstRuntime
+base._post_chat = _post_chat_with_transient_retry
 common._tools_for_mode = _tools_for_mode
 
 
