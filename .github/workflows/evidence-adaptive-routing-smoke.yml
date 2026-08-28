@@ -1,0 +1,107 @@
+name: Adaptive Evidence Routing Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/evidence-adaptive-routing-smoke.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evidence-adaptive-routing-smoke
+  cancel-in-progress: true
+
+jobs:
+  adaptive-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1800"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install TraceCite
+        run: python -m pip install -e ".[dev]"
+      - name: Validate configuration
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is not configured"; exit 1; }
+          test -n "$BENCH_MODEL" || { echo "TRACECITE_BENCH_MODEL is not configured"; exit 1; }
+      - name: Run adaptive TraceCite regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/adaptive-routing /tmp/adaptive-routing-results
+          python -m tracecite.root_cause_suite run \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --work-dir /tmp/adaptive-routing \
+            --output-dir /tmp/adaptive-routing-results \
+            --mode tracecite \
+            --model "$BENCH_MODEL" \
+            --host "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_canonical_host.py" \
+            --timeout-seconds 180 \
+            --case-id doublecmd-2264 \
+            --case-id pulumi-14231 \
+            --case-id kubernetes-140848
+      - name: Print per-case routing and cost
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('/tmp/adaptive-routing-results')
+          print((root / 'batch-summary.json').read_text())
+          for path in sorted((root / 'scores').glob('*.json')):
+              score = json.loads(path.read_text())
+              cost = score.get('context_cost') or {}
+              print(json.dumps({
+                  'case_id': score.get('case_id'),
+                  'passed': score.get('passed'),
+                  'dimension_recall': (score.get('quality') or {}).get('dimension_recall'),
+                  'citation_accuracy': ((score.get('quality') or {}).get('citation') or {}).get('accuracy'),
+                  'input_tokens': cost.get('reported_input_tokens'),
+                  'tool_output_chars': cost.get('tool_output_chars'),
+                  'model_calls': cost.get('model_calls'),
+                  'tool_calls': cost.get('tool_calls'),
+                  'peak_attempted_context_chars': cost.get('peak_attempted_context_chars'),
+              }, sort_keys=True))
+          for path in sorted((root / 'runs').glob('*.jsonl')):
+              routes = []
+              for line in path.read_text(encoding='utf-8').splitlines():
+                  try:
+                      event = json.loads(line)
+                  except json.JSONDecodeError:
+                      continue
+                  if event.get('type') != 'tool':
+                      continue
+                  output = event.get('output')
+                  if not isinstance(output, str):
+                      continue
+                  try:
+                      payload = json.loads(output)
+                  except json.JSONDecodeError:
+                      continue
+                  routing = ((payload.get('data') or {}).get('routing') or {})
+                  if routing:
+                      routes.append({'mode': routing.get('mode'), 'next_mode': routing.get('next_mode'), 'reasons': routing.get('reasons')})
+              print(json.dumps({'transcript': path.name, 'routes': routes}, sort_keys=True))
+          PY
+      - name: Upload adaptive smoke
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adaptive-evidence-routing-smoke
+          path: |
+            /tmp/adaptive-routing/suite-index.json
+            /tmp/adaptive-routing/snapshots
+            /tmp/adaptive-routing-results
+          if-no-files-found: warn
