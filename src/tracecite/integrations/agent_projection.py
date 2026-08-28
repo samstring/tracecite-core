@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
+import re
+from pathlib import Path
 from typing import Any, Callable, Mapping, Union
 
 DEFAULT_AGENT_MAX_OUTPUT_CHARS = 12_000
@@ -11,6 +13,7 @@ DEFAULT_FILTER_MAX_LINE_CHARS = 1024
 DEFAULT_AGENT_MAX_EVIDENCE = 30
 Projection = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 ProjectionProfile = Union[str, Projection]
+_LINE_PREFIX_RE = re.compile(r"^(?P<line>\d+):\s?(?P<text>.*)$")
 
 
 def encoded_json(payload: Any) -> str:
@@ -128,23 +131,154 @@ def dedupe_evidence_labels(
             previous = current
 
 
+def _compact_progress(progress: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep only progress fields that can change the Agent's next action."""
+
+    compact: dict[str, Any] = {}
+    for key in ("coverage_status", "readiness"):
+        value = progress.get(key)
+        if value not in (None, "", "unknown"):
+            compact[key] = value
+
+    for key in (
+        "frontier_exhausted",
+        "source_complete",
+        "scope_exhausted",
+        "retrieval_complete",
+        "ready_for_reasoning",
+    ):
+        if progress.get(key) is True:
+            compact[key] = True
+
+    for key in ("actionable_gaps", "consecutive_no_growth"):
+        value = progress.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            compact[key] = value
+
+    delta = progress.get("delta")
+    if isinstance(delta, Mapping):
+        delta_view = {
+            key: value
+            for key, value in delta.items()
+            if key == "grew" or bool(value)
+        }
+        if delta_view:
+            compact["delta"] = delta_view
+
+    requirements = progress.get("requirements")
+    if isinstance(requirements, Mapping) and int(requirements.get("total") or 0) > 0:
+        compact["requirements"] = dict(requirements)
+
+    stop = progress.get("stop")
+    if isinstance(stop, Mapping):
+        recommended = bool(stop.get("recommended"))
+        reason = str(stop.get("reason") or "")
+        if recommended or (reason and reason != "evidence_grew"):
+            compact["stop"] = dict(stop)
+    return compact
+
+
+def _compact_routing(routing: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose route semantics without repeating router accounting every turn."""
+
+    return {
+        key: copy.deepcopy(routing[key])
+        for key in ("mode", "next_mode", "reasons")
+        if key in routing and routing[key] not in (None, "", [], ())
+    }
+
+
+def _qualify_expand_text(result: dict[str, Any]) -> None:
+    """Make expand lines self-citing without a redundant visible-line-ref list."""
+
+    if result.get("operation") != "expand":
+        return
+    data = dict(result.get("data") or {})
+    text = data.get("text")
+    if not isinstance(text, str) or not text:
+        return
+    evidence = result.get("evidence") or []
+    source_name = ""
+    if isinstance(evidence, list):
+        first = next((item for item in evidence if isinstance(item, Mapping)), None)
+        if isinstance(first, Mapping):
+            source_name = Path(str(first.get("source_path") or "")).name
+    if not source_name:
+        return
+
+    qualified: list[str] = []
+    changed = False
+    for line in text.splitlines():
+        match = _LINE_PREFIX_RE.match(line)
+        if match is None:
+            qualified.append(line)
+            continue
+        qualified.append(f"{source_name}:{match.group('line')} {match.group('text')}")
+        changed = True
+    if changed:
+        data["text"] = "\n".join(qualified) + ("\n" if text.endswith("\n") else "")
+        data.pop("visible_line_refs", None)
+        result["data"] = data
+
+
 def lightweight_result(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Drop empty investigation envelope fields from agent transport."""
+    """Drop recoverable bookkeeping from the Agent transport view.
+
+    Canonical results, InvestigationState and evidence artifacts keep the full
+    accounting. The Agent only needs evidence, provenance, actionable progress
+    and stop/routing semantics on every turn; repeating cache/budget/revision
+    bookkeeping grows conversation context without improving reasoning.
+    """
 
     result = copy.deepcopy(dict(payload))
-    for key in ("hypotheses", "verification"):
+    for key in (
+        "hypotheses",
+        "verification",
+        "artifacts",
+        "missing_evidence",
+        "next_queries",
+        "warnings",
+    ):
         if not result.get(key):
             result.pop(key, None)
-    artifacts = result.get("artifacts") or []
-    if not artifacts:
-        result.pop("artifacts", None)
+
+    # The linked InvestigationState remains canonical/recoverable outside the
+    # model turn. IDs/revision/path do not help the Agent interpret evidence.
+    result.pop("investigation", None)
+
     data = dict(result.get("data") or {})
-    for key in ("run_id", "manifest_path", "manifest_sha256", "input_lineage"):
+    for key in (
+        "run_id",
+        "manifest_path",
+        "manifest_sha256",
+        "input_lineage",
+        "budget",
+        "cache",
+    ):
         data.pop(key, None)
+
+    progress = data.get("progress")
+    if isinstance(progress, Mapping):
+        compact_progress = _compact_progress(progress)
+        if compact_progress:
+            data["progress"] = compact_progress
+        else:
+            data.pop("progress", None)
+
+    routing = data.get("routing")
+    if isinstance(routing, Mapping):
+        compact_routing = _compact_routing(routing)
+        if compact_routing:
+            data["routing"] = compact_routing
+        else:
+            data.pop("routing", None)
+
     if data:
         result["data"] = data
     else:
         result.pop("data", None)
+
+    _qualify_expand_text(result)
     return result
 
 
