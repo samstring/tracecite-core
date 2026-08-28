@@ -80,6 +80,16 @@
       "evidence_kind": "original_public_ci_log"
     },
     {
+      "id": "kubernetes-141402",
+      "purpose": "scale_root_cause",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/141402",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/141440",
+      "fix_kind": "pull_request",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-kubernetes-kind-cloud-provider-loadbalancer/2086677576276774912",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-kind-cloud-provider-loadbalancer/2086677576276774912/build-log.txt",
+      "evidence_kind": "original_public_ci_log"
+    },
+    {
       "id": "kubernetes-140924",
       "purpose": "scale_root_cause",
       "source_issue": "https://github.com/kubernetes/kubernetes/issues/140924",
