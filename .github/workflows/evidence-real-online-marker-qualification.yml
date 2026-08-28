@@ -1,0 +1,43 @@
+name: Real Online Evidence Marker Qualification
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - benchmarks/agent-investigation/real-online-scale-10.json
+      - benchmarks/agent-investigation/qualify_selected_evidence_markers.py
+      - .github/workflows/evidence-real-online-marker-qualification.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evidence-real-online-marker-qualification
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Qualify selected evidence markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/real-online-marker-qualification
+          python benchmarks/agent-investigation/qualify_selected_evidence_markers.py \
+            --manifest benchmarks/agent-investigation/real-online-scale-10.json \
+            --output /tmp/real-online-marker-qualification/report.json
+      - name: Upload marker qualification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-online-evidence-marker-qualification
+          path: /tmp/real-online-marker-qualification/report.json
+          if-no-files-found: warn
