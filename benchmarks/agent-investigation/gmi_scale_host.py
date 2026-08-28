@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -12,6 +13,11 @@ from typing import Any, Mapping, Sequence
 
 import gmi_host as base
 import openai_host as common
+from tracecite.integrations import cli as trace_cli
+from tracecite.integrations.context_engine import ContextEngine
+from tracecite.integrations.evidence_ledger import EvidenceLedger
+from tracecite.runtime.evidence_progress import EvidenceProgressTracker, EvidenceReadiness
+from tracecite.runtime.tools import search as tracecite_search
 
 
 _ORIGINAL_TOOLS_FOR_MODE = common._tools_for_mode
@@ -43,6 +49,10 @@ _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _HEX_RE = re.compile(r"\b[0-9a-f]{8,}\b", re.IGNORECASE)
 _NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?\d+(?![A-Za-z])")
 _SPACE_RE = re.compile(r"\s+")
+_CONTEXT_WINDOW_RE = re.compile(
+    r"context window exceeds limit|context length exceeded|maximum context length|context_length_exceeded",
+    re.IGNORECASE,
+)
 
 _CONTEXT_RADIUS = 4
 _MAX_SIGNAL_SIGNATURES = 256
@@ -67,6 +77,16 @@ def _post_chat_with_transient_retry(payload: Mapping[str, Any]) -> dict[str, Any
     raise AssertionError("unreachable")
 
 
+def _host_failure_reason(exc: BaseException) -> str:
+    """Return a stable benchmark failure reason without hiding the raw error."""
+
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return "tool_timeout"
+    if _CONTEXT_WINDOW_RE.search(str(exc)):
+        return "context_window_exceeded"
+    return "host_error"
+
+
 def _signal_severity(text: str) -> int:
     for severity, pattern in _SIGNAL_PATTERNS:
         if pattern.search(text):
@@ -88,6 +108,33 @@ def _render_line(line_number: int, text: str) -> str:
     if len(clean) > _MAX_RENDERED_LINE_CHARS:
         clean = clean[: _MAX_RENDERED_LINE_CHARS - 1] + "…"
     return f"#L{line_number}\t{clean}"
+
+
+def _line_ranges(line_numbers: Sequence[int] | set[int]) -> tuple[tuple[int, int], ...]:
+    ordered = sorted(set(int(item) for item in line_numbers))
+    if not ordered:
+        return ()
+    ranges: list[tuple[int, int]] = []
+    start = previous = ordered[0]
+    for current in ordered[1:]:
+        if current == previous + 1:
+            previous = current
+            continue
+        ranges.append((start, previous))
+        start = previous = current
+    ranges.append((start, previous))
+    return tuple(ranges)
+
+
+def _progress_line(progress: EvidenceReadiness) -> str:
+    delta = progress.delta
+    return (
+        "@PROGRESS "
+        f"new_evidence={delta.new_evidence} new_lines={delta.new_lines} "
+        f"seen_evidence={progress.seen_evidence} seen_lines={progress.seen_lines} "
+        f"source_complete={progress.source_complete} "
+        f"no_growth={progress.consecutive_no_growth} stop={progress.stop_reason}"
+    )
 
 
 def _survey_overview(raw_output: str) -> dict[str, Any]:
@@ -151,6 +198,10 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
         self._searched_queries: dict[str, set[str]] = {}
         self._line_indexes: dict[str, list[tuple[int, int]]] = {}
         self._line_counts: dict[str, int] = {}
+        self._progress_by_file: dict[str, EvidenceProgressTracker] = {}
+
+    def _progress(self, file_name: str) -> EvidenceProgressTracker:
+        return self._progress_by_file.setdefault(file_name, EvidenceProgressTracker())
 
     def _run(self, command: Sequence[str], *, timeout: int = 300) -> str:
         completed = subprocess.run(
@@ -221,7 +272,7 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
                     if existing is not None:
                         existing["count"] += 1
                         existing["severity"] = max(existing["severity"], severity)
-                    elif len(clusters) < _MAX_SIGNAL_SIGNATURES:
+                    else:
                         cluster = {
                             "signature": signature,
                             "severity": severity,
@@ -230,10 +281,24 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
                             "rows": [*before, (line_number, text)],
                             "remaining_after": _CONTEXT_RADIUS,
                         }
-                        clusters[signature] = cluster
-                        active.append(cluster)
-                    else:
-                        omitted_signatures += 1
+                        if len(clusters) < _MAX_SIGNAL_SIGNATURES:
+                            clusters[signature] = cluster
+                            active.append(cluster)
+                        else:
+                            victim_signature, victim = min(
+                                clusters.items(),
+                                key=lambda item: (
+                                    int(item[1]["severity"]),
+                                    -int(item[1]["count"]),
+                                    -int(item[1]["line"]),
+                                ),
+                            )
+                            if severity > int(victim["severity"]):
+                                del clusters[victim_signature]
+                                active = [item for item in active if item is not victim]
+                                clusters[signature] = cluster
+                                active.append(cluster)
+                            omitted_signatures += 1
 
                 before.append((line_number, text))
                 byte_offset += len(raw)
@@ -257,11 +322,16 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
         if not file_name:
             raise ValueError("file must be non-empty")
         path = common._safe_input(self.input_root, file_name)
+        tracker = self._progress(file_name)
         if file_name in self._inspected_files:
-            return (
-                "ALREADY_INSPECTED: this source already has a bounded structural and incident-signal "
-                "inspection in context. Use tracecite_get for known #L references or tracecite_search "
-                "only for a genuinely new semantic hypothesis."
+            progress = tracker.observe(source=file_name, source_complete=True)
+            return "\n".join(
+                [
+                    "@TCI 1 inspect status=no_new_evidence outcome=bounded",
+                    f"@SRC file={file_name} bytes={path.stat().st_size}",
+                    _progress_line(progress),
+                    "@STOP reason=NO_NEW_EVIDENCE source_scan_complete=True",
+                ]
             )
 
         survey = _survey_overview(self._survey(path))
@@ -292,6 +362,7 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
         output_truncated = False
 
         for rank, cluster in enumerate(clusters, 1):
+            block_rows: list[tuple[int, str]] = []
             block_lines = [
                 (
                     f"@SIGNAL rank={rank} severity={cluster['severity']} count={cluster['count']} "
@@ -301,15 +372,22 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
             for line_number, text in cluster["rows"]:
                 if line_number in seen_rows:
                     continue
-                seen_rows.add(line_number)
+                block_rows.append((line_number, text))
                 block_lines.append(_render_line(line_number, text))
             block = "\n".join(block_lines)
             if rendered_chars + len(block) + 1 > _MAX_INSPECT_CHARS:
                 output_truncated = True
                 break
+            seen_rows.update(line_number for line_number, _text in block_rows)
             sections.append(block)
             rendered_chars += len(block) + 1
 
+        progress = tracker.observe(
+            source=file_name,
+            line_ranges=_line_ranges(seen_rows),
+            source_complete=True,
+        )
+        sections.append(_progress_line(progress))
         sections.append(
             "@STOP inspection_output_truncated=" + str(output_truncated)
             + " source_scan_complete=True"
@@ -352,6 +430,19 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
         total_lines = self._line_counts[file_name]
         start = max(1, line - radius)
         end = min(total_lines, line + radius)
+        tracker = self._progress(file_name)
+        if tracker.range_is_covered(file_name, start, end):
+            progress = tracker.observe(source=file_name)
+            return "\n".join(
+                [
+                    "@TCG 1 get status=no_new_evidence",
+                    f"@SRC file={file_name}",
+                    f"@COV requested_line={line} start_line={start} end_line={end} total_lines={total_lines}",
+                    _progress_line(progress),
+                    "@STOP reason=NO_NEW_EVIDENCE requested_range_already_covered=True",
+                ]
+            )
+
         anchors = self._line_indexes[file_name]
         anchor_line, anchor_offset = anchors[0] if anchors else (1, 0)
         for candidate_line, candidate_offset in anchors:
@@ -372,11 +463,13 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
                         _render_line(current, raw.decode("utf-8", errors="replace"))
                     )
                 current += 1
+        progress = tracker.observe(source=file_name, line_ranges=((start, end),))
         return "\n".join(
             [
                 "@TCG 1 get status=ok",
                 f"@SRC file={file_name}",
                 f"@COV requested_line={line} start_line={start} end_line={end} total_lines={total_lines}",
+                _progress_line(progress),
                 *rendered,
             ]
         )
@@ -394,40 +487,78 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
                 "USE_GET: numeric/line-reference queries are not semantic search. "
                 "Call tracecite_get with the known line number and a small radius."
             )
+        tracker = self._progress(file_name)
         normalized_query = query.casefold()
         seen = self._searched_queries.setdefault(file_name, set())
         if normalized_query in seen:
-            return (
-                "NO_NEW_EVIDENCE: this exact semantic query was already searched. "
-                "Reason from the existing result, use tracecite_get for known #L context, "
-                "or search only if you have a different concrete hypothesis."
+            progress = tracker.observe(source=file_name)
+            return "\n".join(
+                [
+                    "@TCF 1 search status=no_new_evidence outcome=bounded",
+                    f"@SRC file={file_name}",
+                    _progress_line(progress),
+                    "@STOP reason=NO_NEW_EVIDENCE exact_query_already_searched=True",
+                ]
             )
         seen.add(normalized_query)
 
-        ledger = self.scratch / "ledger"
-        ledger.mkdir(parents=True, exist_ok=True)
-        command = [
-            sys.executable,
-            "-m",
-            "tracecite.integrations.stateful_cli",
-            "search",
-            str(path),
+        payload = tracecite_search(
+            path,
             query,
-            "--no-snapshot",
-            "--compact",
-            "--ledger-dir",
-            str(ledger),
-            "--agent-profile",
-            "frame",
-            "--lightweight",
+            regex=bool(args.get("regex")),
+            snapshot=False,
+            segmenter="auto",
+            max_evidence=None,
+            max_line_chars=None,
+            cache=True,
+        )
+        if not isinstance(payload, Mapping):
+            payload = payload.to_dict()
+        canonical = copy.deepcopy(dict(payload))
+
+        ledger_dir = self.scratch / "ledger"
+        ledger_dir.mkdir(parents=True, exist_ok=True)
+        result_id = EvidenceLedger(ledger_dir).store(canonical)
+        data = dict(canonical.get("data") or {})
+        data["result_id"] = result_id
+        canonical["data"] = data
+
+        evidence_ids = [
+            str(item.get("uri") or "")
+            for item in canonical.get("evidence") or []
+            if isinstance(item, Mapping) and str(item.get("uri") or "")
         ]
-        if bool(args.get("regex")):
-            command.append("--regex")
+        progress = tracker.observe(source=file_name, evidence_ids=evidence_ids)
+        if evidence_ids and progress.delta.new_evidence == 0:
+            return "\n".join(
+                [
+                    "@TCF 1 search status=no_new_evidence outcome=bounded",
+                    f"@R {result_id}",
+                    f"@SRC file={file_name}",
+                    _progress_line(progress),
+                    "@STOP reason=NO_NEW_EVIDENCE search_returned_only_seen_evidence=True",
+                ]
+            )
+
+        baseline = trace_cli._compact_search_result(canonical, max_output_chars=None)
+        baseline = trace_cli.lightweight_result(baseline)
+        baseline_frame = trace_cli.render_frame(baseline)
+        selected_frame = baseline_frame
+
         if self.mode == "tracecite_context":
             if not self.context_id:
                 raise RuntimeError("tracecite_context requires context_id")
-            command.extend(["--context-id", self.context_id])
-        return self._run(command, timeout=600)
+            projected = ContextEngine(ledger_dir, self.context_id).project_search(
+                canonical,
+                result_id=result_id,
+            )
+            delta = trace_cli._compact_search_result(projected, max_output_chars=None)
+            delta = trace_cli.lightweight_result(delta)
+            delta_frame = trace_cli.render_frame(delta)
+            if len(delta_frame) < len(baseline_frame):
+                selected_frame = delta_frame
+
+        return selected_frame + "\n" + _progress_line(progress)
 
     def call(self, name: str, args: Mapping[str, Any]) -> str:
         if self.mode in {"tracecite", "tracecite_context"}:
@@ -459,7 +590,8 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
             "tracecite_get",
             (
                 "Recover a small exact line window around a #L reference already discovered by inspect or "
-                "search. Use this instead of searching for line numbers. radius must be 0-8."
+                "search. Fully covered ranges return NO_NEW_EVIDENCE without rereading the source. "
+                "Use this instead of searching for line numbers. radius must be 0-8."
             ),
             {
                 "file": file_property,
@@ -472,8 +604,9 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
             "tracecite_search",
             (
                 "Targeted semantic search only after inspect and only for a genuinely new concrete hypothesis, "
-                "identifier, component, operation, or fault signature not already covered. Do not search line "
-                "numbers and do not repeat an exact query; use tracecite_get for #L context."
+                "identifier, component, operation, or fault signature not already covered. Exact duplicate "
+                "queries and searches that return only previously seen evidence stop with NO_NEW_EVIDENCE. "
+                "Do not search line numbers; use tracecite_get for #L context."
             ),
             {
                 "file": file_property,
@@ -495,13 +628,22 @@ if __name__ == "__main__":
         raise SystemExit(base.run())
     except Exception as exc:
         transcript_value = os.environ.get("TRACECITE_BENCH_TRANSCRIPT", "").strip()
+        failure_reason = _host_failure_reason(exc)
         if transcript_value:
             try:
                 common._append_event(
                     Path(transcript_value),
-                    {"type": "host_error", "error": type(exc).__name__, "message": str(exc)},
+                    {
+                        "type": "host_error",
+                        "error": type(exc).__name__,
+                        "failure_reason": failure_reason,
+                        "message": str(exc),
+                    },
                 )
             except Exception:
                 pass
-        print(f"benchmark host failed: {type(exc).__name__}: {exc}", file=os.sys.stderr)
+        print(
+            f"benchmark host failed: reason={failure_reason} {type(exc).__name__}: {exc}",
+            file=os.sys.stderr,
+        )
         raise
