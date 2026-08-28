@@ -1,0 +1,234 @@
+name: Real Online Scale 10 Preflight
+
+# Deterministic, no-model qualification for the real online benchmark set.
+# It downloads the original public incident evidence, records actual size/SHA,
+# verifies issue/fix provenance, and rejects synthetic or out-of-ceiling inputs.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - benchmarks/agent-investigation/real-online-scale-10.json
+      - .github/workflows/evidence-real-online-scale-preflight.yml
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and qualify real incident evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/real-online-scale-10
+          mkdir -p /tmp/real-online-scale-10/evidence
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          manifest_path = Path('benchmarks/agent-investigation/real-online-scale-10.json')
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          root = Path('/tmp/real-online-scale-10')
+          evidence_dir = root / 'evidence'
+          token = os.environ.get('GH_TOKEN', '')
+          rows = []
+          global_errors = []
+
+          cases = manifest.get('cases') or []
+          policy = manifest.get('policy') or {}
+          if len(cases) != 10:
+              global_errors.append(f'expected exactly 10 cases, got {len(cases)}')
+          if policy.get('synthetic_evidence_allowed') is not False:
+              global_errors.append('synthetic evidence must be explicitly forbidden')
+          if policy.get('padding_allowed') is not False:
+              global_errors.append('padding must be explicitly forbidden')
+
+          ids = [str(case.get('id') or '') for case in cases]
+          if len(set(ids)) != len(ids):
+              global_errors.append('case ids must be unique')
+
+          allowed_evidence_hosts = (
+              'https://storage.googleapis.com/',
+              'https://gist.githubusercontent.com/',
+          )
+
+          def run_json(url):
+              cmd = [
+                  'curl', '--location', '--fail', '--silent', '--show-error',
+                  '--retry', '4', '--retry-delay', '2',
+                  '-H', 'Accept: application/vnd.github+json',
+                  '-H', 'X-GitHub-Api-Version: 2022-11-28',
+              ]
+              if token:
+                  cmd += ['-H', f'Authorization: Bearer {token}']
+              cmd.append(url)
+              payload = subprocess.check_output(cmd, text=True)
+              return json.loads(payload)
+
+          def verify_issue(url):
+              match = re.fullmatch(r'https://github\.com/([^/]+)/([^/]+)/issues/(\d+)', url)
+              if not match:
+                  raise ValueError(f'unsupported source_issue URL: {url}')
+              owner, repo, number = match.groups()
+              data = run_json(f'https://api.github.com/repos/{owner}/{repo}/issues/{number}')
+              if data.get('pull_request'):
+                  raise ValueError(f'source_issue resolves to a pull request: {url}')
+              return {'state': data.get('state'), 'title': data.get('title')}
+
+          def verify_fix(url, kind):
+              if kind == 'pull_request':
+                  match = re.fullmatch(r'https://github\.com/([^/]+)/([^/]+)/pull/(\d+)', url)
+                  if not match:
+                      raise ValueError(f'unsupported pull request URL: {url}')
+                  owner, repo, number = match.groups()
+                  data = run_json(f'https://api.github.com/repos/{owner}/{repo}/pulls/{number}')
+                  if not data.get('merged_at') or not data.get('merge_commit_sha'):
+                      raise ValueError(f'fix pull request is not merged: {url}')
+                  return {
+                      'merged_at': data.get('merged_at'),
+                      'merge_commit_sha': data.get('merge_commit_sha'),
+                      'title': data.get('title'),
+                  }
+              if kind == 'commit':
+                  match = re.fullmatch(r'https://github\.com/([^/]+)/([^/]+)/commit/([0-9a-fA-F]{7,40})', url)
+                  if not match:
+                      raise ValueError(f'unsupported commit URL: {url}')
+                  owner, repo, sha = match.groups()
+                  data = run_json(f'https://api.github.com/repos/{owner}/{repo}/commits/{sha}')
+                  return {
+                      'commit_sha': data.get('sha'),
+                      'message': ((data.get('commit') or {}).get('message') or '').splitlines()[0],
+                  }
+              raise ValueError(f'unsupported fix_kind: {kind}')
+
+          def classify_size(size):
+              mib = 1024 * 1024
+              if size < mib:
+                  return 'small'
+              if size <= 10 * mib:
+                  return 'medium_1_10m'
+              if size <= 50 * mib:
+                  return 'large_10_50m'
+              return 'over_50m'
+
+          for case in cases:
+              case_id = str(case.get('id') or '')
+              row = {
+                  'id': case_id,
+                  'purpose': case.get('purpose'),
+                  'source_issue': case.get('source_issue'),
+                  'fix_reference': case.get('fix_reference'),
+                  'evidence_view': case.get('evidence_view'),
+                  'evidence_url': case.get('evidence_url'),
+                  'evidence_kind': case.get('evidence_kind'),
+                  'errors': [],
+              }
+              evidence_url = str(case.get('evidence_url') or '')
+              if not evidence_url.startswith(allowed_evidence_hosts):
+                  row['errors'].append(f'evidence URL is not on an allowed original-public host: {evidence_url}')
+
+              try:
+                  row['issue'] = verify_issue(str(case.get('source_issue') or ''))
+              except Exception as exc:
+                  row['errors'].append(f'issue verification failed: {exc}')
+
+              try:
+                  row['fix'] = verify_fix(
+                      str(case.get('fix_reference') or ''),
+                      str(case.get('fix_kind') or ''),
+                  )
+              except Exception as exc:
+                  row['errors'].append(f'fix verification failed: {exc}')
+
+              target = evidence_dir / f'{case_id}.log'
+              try:
+                  subprocess.run([
+                      'curl', '--location', '--fail', '--silent', '--show-error',
+                      '--retry', '5', '--retry-delay', '2',
+                      '--connect-timeout', '20', '--max-time', '360',
+                      '--output', str(target), evidence_url,
+                  ], check=True)
+                  raw = target.read_bytes()
+                  digest = hashlib.sha256(raw).hexdigest()
+                  size = len(raw)
+                  bucket = classify_size(size)
+                  row.update({
+                      'bytes': size,
+                      'mib': round(size / (1024 * 1024), 3),
+                      'sha256': digest,
+                      'size_bucket': bucket,
+                  })
+                  expected_sha = case.get('expected_sha256')
+                  if expected_sha and digest != expected_sha:
+                      row['errors'].append(
+                          f'expected sha256 {expected_sha}, downloaded {digest}'
+                      )
+                  if bucket == 'over_50m':
+                      row['errors'].append(
+                          f'evidence exceeds 50 MiB model benchmark ceiling: {size} bytes'
+                      )
+                  if size == 0:
+                      row['errors'].append('evidence download is empty')
+              except Exception as exc:
+                  row['errors'].append(f'evidence download failed: {exc}')
+
+              rows.append(row)
+
+          buckets = {}
+          for row in rows:
+              bucket = row.get('size_bucket', 'unavailable')
+              buckets[bucket] = buckets.get(bucket, 0) + 1
+
+          report = {
+              'schema_version': 1,
+              'manifest': str(manifest_path),
+              'case_count': len(rows),
+              'bucket_counts': buckets,
+              'global_errors': global_errors,
+              'error_count': len(global_errors) + sum(len(row['errors']) for row in rows),
+              'cases': rows,
+          }
+          (root / 'preflight.json').write_text(
+              json.dumps(report, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload qualification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-online-scale-10-preflight
+          path: /tmp/real-online-scale-10/preflight.json
+          if-no-files-found: error
+
+      - name: Enforce qualification gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('/tmp/real-online-scale-10/preflight.json').read_text())
+          if report['error_count']:
+              for error in report.get('global_errors') or []:
+                  print(f'GLOBAL: {error}')
+              for row in report.get('cases') or []:
+                  for error in row.get('errors') or []:
+                      print(f"{row['id']}: {error}")
+              raise SystemExit(f"real-online qualification failed with {report['error_count']} error(s)")
+          print('qualified bucket counts:', report['bucket_counts'])
+          PY
