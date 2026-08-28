@@ -1,0 +1,98 @@
+name: Evidence Scale Preflight
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - ".github/workflows/evidence-scale-preflight.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  tracebench-inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download TraceBench archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tracebench
+          curl -L --retry 5 --retry-delay 2 \
+            -o /tmp/tracebench/HDFS_v3_TraceBench.zip \
+            'https://zenodo.org/records/8196385/files/HDFS_v3_TraceBench.zip?download=1'
+          echo 'c69999ff28933d2b163170d26c2faf64  /tmp/tracebench/HDFS_v3_TraceBench.zip' | md5sum -c -
+          ls -lh /tmp/tracebench/HDFS_v3_TraceBench.zip
+      - name: Inventory archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -l /tmp/tracebench/HDFS_v3_TraceBench.zip > /tmp/tracebench/archive-list.txt
+          head -n 120 /tmp/tracebench/archive-list.txt
+          tail -n 20 /tmp/tracebench/archive-list.txt
+      - name: Extract TraceBench
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tracebench/extracted
+          unzip -q /tmp/tracebench/HDFS_v3_TraceBench.zip -d /tmp/tracebench/extracted
+          du -sh /tmp/tracebench/extracted
+          find /tmp/tracebench/extracted -maxdepth 3 -type f -printf '%s\t%p\n' | sort -nr > /tmp/tracebench/file-sizes.tsv
+          head -n 80 /tmp/tracebench/file-sizes.tsv
+      - name: Inspect truth metadata and trace schemas
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '=== candidate truth/metadata files ==='
+            find /tmp/tracebench/extracted -type f \( -iname '*failure*' -o -iname '*taskid*' -o -iname '*eventid*' -o -iname '*label*' \) -print
+            echo
+            echo '=== text/csv/json heads ==='
+            while IFS= read -r f; do
+              case "$f" in
+                *.csv|*.json|*.txt|*.log)
+                  echo "--- $f"
+                  head -n 5 "$f" || true
+                  ;;
+              esac
+            done < <(find /tmp/tracebench/extracted -type f \( -iname '*failure*' -o -iname '*taskid*' -o -iname '*eventid*' -o -iname '*label*' \) | head -n 20)
+          } | tee /tmp/tracebench/truth-preview.txt
+      - name: Write machine-readable inventory
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('/tmp/tracebench/extracted')
+          files = []
+          for p in root.rglob('*'):
+              if p.is_file():
+                  files.append({'path': str(p.relative_to(root)), 'bytes': p.stat().st_size})
+          files.sort(key=lambda x: (-x['bytes'], x['path']))
+          payload = {
+              'dataset': 'Loghub HDFS_v3 TraceBench',
+              'archive_md5': 'c69999ff28933d2b163170d26c2faf64',
+              'archive_url': 'https://zenodo.org/records/8196385/files/HDFS_v3_TraceBench.zip?download=1',
+              'file_count': len(files),
+              'total_extracted_bytes': sum(x['bytes'] for x in files),
+              'largest_files': files[:100],
+          }
+          Path('/tmp/tracebench/inventory.json').write_text(json.dumps(payload, indent=2), encoding='utf-8')
+          print(json.dumps(payload, indent=2)[:12000])
+          PY
+      - name: Upload inventory only
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracebench-scale-preflight
+          path: |
+            /tmp/tracebench/archive-list.txt
+            /tmp/tracebench/file-sizes.tsv
+            /tmp/tracebench/truth-preview.txt
+            /tmp/tracebench/inventory.json
+          if-no-files-found: error
+
+# Temporary push trigger for one model-free dataset inventory run; restore manual-only after validation.
