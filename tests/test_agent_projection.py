@@ -69,6 +69,58 @@ def test_lightweight_keeps_warnings_and_missing_evidence() -> None:
     assert "verification" not in slim
 
 
+def test_lightweight_drops_runtime_bookkeeping_but_keeps_actionable_progress() -> None:
+    payload = {
+        "operation": "expand",
+        "status": "ok",
+        "investigation": {"id": "inv-1", "revision": 9, "path": "/tmp/state.json"},
+        "data": {
+            "budget": {"usage": {"executions": 9}, "remaining": {"executions": None}},
+            "cache": {"status": "bypass"},
+            "progress": {
+                "coverage_status": "partial",
+                "readiness": "unknown",
+                "seen_evidence": 100,
+                "seen_lines": 80,
+                "frontier_exhausted": False,
+                "delta": {"grew": True, "new_evidence": 1, "new_lines": 7, "new_entities": 0},
+                "stop": {"recommended": False, "reason": "evidence_grew"},
+            },
+            "routing": {
+                "mode": "investigate",
+                "reasons": ["exploration_depth"],
+                "previous_executions": 8,
+                "source_count": 1,
+                "max_match_records": 345,
+            },
+            "text": "7: failure\n",
+        },
+        "evidence": [
+            {
+                "source_path": "/tmp/runtime.log",
+                "start_line": 7,
+                "end_line": 7,
+                "uri": "evidence://sha256/abc#L7",
+            }
+        ],
+    }
+
+    slim = lightweight_result(payload)
+
+    assert "investigation" not in slim
+    assert "budget" not in slim["data"]
+    assert "cache" not in slim["data"]
+    assert slim["data"]["progress"] == {
+        "coverage_status": "partial",
+        "delta": {"grew": True, "new_evidence": 1, "new_lines": 7},
+    }
+    assert slim["data"]["routing"] == {
+        "mode": "investigate",
+        "reasons": ["exploration_depth"],
+    }
+    assert slim["data"]["text"] == "runtime.log:7 failure\n"
+
+
 def test_apply_survey_brief_strips_template_text() -> None:
     payload = {
         "operation": "survey",
