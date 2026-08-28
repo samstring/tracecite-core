@@ -14,7 +14,7 @@ depth grows.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -37,6 +37,11 @@ class EvidenceRoutingPolicy:
     model host's live context budget.  When supplied, DIRECT uses only a small
     fraction of that remaining budget.  Otherwise ``fallback_direct_chars`` is
     a conservative evidence-output budget, not a source-size product limit.
+
+    Investigation transport is deliberately tighter than ordinary bounded
+    search because deep/high-cardinality exploration repeats every visible
+    result in subsequent model turns. Canonical evidence remains recoverable;
+    only the Agent projection is narrowed.
     """
 
     mode: str = "adaptive"
@@ -44,8 +49,10 @@ class EvidenceRoutingPolicy:
     direct_context_fraction: float = 0.12
     fallback_direct_chars: int = 32_768
     max_direct_chars: int = 96_000
-    bounded_max_evidence: int = 64
+    bounded_max_evidence: int = 30
     bounded_max_line_chars: int = 1_024
+    investigate_max_evidence: int = 20
+    investigate_max_line_chars: int = 768
     bounded_match_records: int = 64
     investigate_match_records: int = 256
     investigate_after_executions: int = 4
@@ -71,6 +78,8 @@ class EvidenceRoutingPolicy:
             "max_direct_chars",
             "bounded_max_evidence",
             "bounded_max_line_chars",
+            "investigate_max_evidence",
+            "investigate_max_line_chars",
             "bounded_match_records",
             "investigate_match_records",
             "investigate_after_executions",
@@ -82,6 +91,10 @@ class EvidenceRoutingPolicy:
                 raise ValueError(f"{name} must be a positive integer")
         if self.max_direct_chars < self.fallback_direct_chars:
             raise ValueError("max_direct_chars must be >= fallback_direct_chars")
+        if self.investigate_max_evidence > self.bounded_max_evidence:
+            raise ValueError("investigate_max_evidence must be <= bounded_max_evidence")
+        if self.investigate_max_line_chars > self.bounded_max_line_chars:
+            raise ValueError("investigate_max_line_chars must be <= bounded_max_line_chars")
         if self.investigate_match_records < self.bounded_match_records:
             raise ValueError("investigate_match_records must be >= bounded_match_records")
         if not (0.0 <= float(self.repeated_evidence_ratio) <= 1.0):
