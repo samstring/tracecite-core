@@ -183,7 +183,7 @@ class _Provider:
                     source="demo-source",
                     label="timeout",
                     evidence_uri="evidence://demo/record-1",
-                    entities=(EntityRef(kind="request", id="7", namespace="demo"),),
+                    entities=(EntityRef(kind="request", value="7", namespace="demo"),),
                 ),
             ),
             coverage={"complete": True},
