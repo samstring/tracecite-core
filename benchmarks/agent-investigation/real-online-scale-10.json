@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "case_count": 10,
+    "synthetic_evidence_allowed": false,
+    "padding_allowed": false,
+    "selection_rule": "Every case must be a real public incident with public reporter/runtime evidence and a verified merged fix. Size buckets are assigned from downloaded bytes, never manufactured.",
+    "size_buckets_bytes": {
+      "small": {"max_exclusive": 1048576},
+      "medium_1_10m": {"min_inclusive": 1048576, "max_inclusive": 10485760},
+      "large": {"min_exclusive": 10485760, "max_inclusive": 52428800}
+    },
+    "small_case_purpose": "DIRECT anti-over-escalation guard only"
+  },
+  "cases": [
+    {
+      "id": "flutter-179398",
+      "purpose": "direct_guard",
+      "source_issue": "https://github.com/flutter/flutter/issues/179398",
+      "fix_reference": "https://github.com/flutter/flutter/commit/e09862d718f1c2b111434c2f8787f8b5e8524bfc",
+      "fix_kind": "commit",
+      "evidence_view": "https://gist.github.com/jonmountjoy/44d2ef560a5c82161ce4a0bbc061e898",
+      "evidence_url": "https://gist.githubusercontent.com/jonmountjoy/44d2ef560a5c82161ce4a0bbc061e898/raw/",
+      "evidence_kind": "original_public_crash_report"
+    },
+    {
+      "id": "kubernetes-136357",
+      "purpose": "scale_root_cause",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/136357",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/136358",
+      "fix_kind": "pull_request",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/post-kubernetes-push-e2e-jessie-dnsutils-test-images/2011957377254821888",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/post-kubernetes-push-e2e-jessie-dnsutils-test-images/2011957377254821888/build-log.txt",
+      "evidence_kind": "original_public_ci_log"
+    },
+    {
+      "id": "kubernetes-136094",
+      "purpose": "scale_root_cause",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/136094",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/136096",
+      "fix_kind": "pull_request",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-cri-proxy-serial/2001550251227353088",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-cri-proxy-serial/2001550251227353088/build-log.txt",
+      "evidence_kind": "original_public_ci_log"
+    },
+    {
+      "id": "kubernetes-136696",
+      "purpose": "scale_root_cause",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/136696",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/136905",
+      "fix_kind": "pull_request",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/pr-logs/pull/136088/pull-kubernetes-kind-dra-all/2018389374084845568",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/pr-logs/pull/136088/pull-kubernetes-kind-dra-all/2018389374084845568/build-log.txt",
+      "evidence_kind": "original_public_ci_log"
+    },
+    {
+      "id": "kubernetes-137367",
+      "purpose": "scale_root_cause",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/137367",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/137371",
+      "fix_kind": "pull_request",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-kubernetes-integration-master/2028733497484513280",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-integration-master/2028733497484513280/build-log.txt",
+      "evidence_kind": "original_public_ci_log"
+    },
+    {
+      "id": "kubernetes-137803",
+      "purpose": "scale_root_cause",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/137803",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/137804",
+      "fix_kind": "pull_request",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-kubernetes-integration-race-master/2033626976870207488",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-integration-race-master/2033626976870207488/build-log.txt",
+      "evidence_kind": "original_public_ci_log"
+    },
+    {
+      "id": "kubernetes-137842",
+      "purpose": "scale_root_cause",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/137842",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/137958",
+      "fix_kind": "pull_request",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-dra-integration/2040008947779244032",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-dra-integration/2040008947779244032/build-log.txt",
+      "evidence_kind": "original_public_ci_log"
+    },
+    {
+      "id": "kubernetes-137886",
+      "purpose": "scale_root_cause",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/137886",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/137889",
+      "fix_kind": "pull_request",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-kubernetes-e2e-kind-alpha-beta-features/2034425674755739648",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-e2e-kind-alpha-beta-features/2034425674755739648/build-log.txt",
+      "evidence_kind": "original_public_ci_log"
+    },
+    {
+      "id": "kubernetes-139417",
+      "purpose": "scale_root_cause",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/139417",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/139602",
+      "fix_kind": "pull_request",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/pr-logs/pull/139129/pull-kubernetes-integration/2061373559082586112",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/pr-logs/pull/139129/pull-kubernetes-integration/2061373559082586112/build-log.txt",
+      "evidence_kind": "original_public_ci_log"
+    },
+    {
+      "id": "kubernetes-140848",
+      "purpose": "scale_root_cause",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/140848",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140853",
+      "fix_kind": "pull_request",
+      "evidence_view": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-kubelet-containerd-resource-managers/2079792906901655552/artifacts/n2d-standard-32-cos-125-19216-532-25-913c732d/kubelet.log",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-kubelet-containerd-resource-managers/2079792906901655552/artifacts/n2d-standard-32-cos-125-19216-532-25-913c732d/kubelet.log",
+      "evidence_kind": "original_public_kubelet_log",
+      "expected_sha256": "6217dc9fd7bb8b44f08920909318d2cf87c920049a267c4fd08d1dca4de5d762"
+    }
+  ]
+}
