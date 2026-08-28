@@ -32,6 +32,21 @@ _CONTEXT_WINDOW_RE = re.compile(
 _HTTP_5XX_RE = re.compile(r"HTTP\s+5\d\d", re.IGNORECASE)
 _MAX_GET_RADIUS = 8
 _REQUEST_INDEX = 0
+_DEFAULT_MAX_ROUNDS = 12
+_DEFAULT_NO_GROWTH_ROUNDS = 2
+_FINAL_ONLY_PROMPT = (
+    "Evidence acquisition has stopped because the configured mechanical exploration limit was reached. "
+    "Do not call more tools. Produce the best supported final root-cause answer from evidence already visible, "
+    "cite precise source lines, and state unknown/partial where the evidence is insufficient."
+)
+_NO_GROWTH_MARKERS = (
+    '"status":"no_new_evidence"',
+    '"status":"no_match"',
+    "status=no_new_evidence",
+    "status=no_match",
+    "source_exhausted",
+    "frontier_exhausted",
+)
 
 
 def _sha256(path: Path) -> str:
@@ -74,14 +89,103 @@ def _request_context_event(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be >= 1")
+    return value
+
+
+def _tool_output_no_growth(output: Any) -> bool:
+    if isinstance(output, str):
+        text = output.casefold()
+    else:
+        text = json.dumps(output, ensure_ascii=False, sort_keys=True, separators=(",", ":")).casefold()
+    return any(marker in text for marker in _NO_GROWTH_MARKERS)
+
+
+def _trailing_no_growth_rounds(messages: Sequence[Mapping[str, Any]]) -> int:
+    index = len(messages) - 1
+    rounds = 0
+    while index >= 0:
+        tool_outputs: list[Any] = []
+        while index >= 0 and str(messages[index].get("role") or "") == "tool":
+            tool_outputs.append(messages[index].get("content") or "")
+            index -= 1
+        if not tool_outputs:
+            break
+        if index < 0 or str(messages[index].get("role") or "") != "assistant":
+            break
+        assistant = messages[index]
+        index -= 1
+        if not assistant.get("tool_calls"):
+            break
+        if not all(_tool_output_no_growth(output) for output in tool_outputs):
+            break
+        rounds += 1
+    return rounds
+
+
+def _apply_stop_policy(payload: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    request = dict(payload)
+    raw_messages = payload.get("messages") or []
+    if not isinstance(raw_messages, list) or not payload.get("tools"):
+        return request, None
+    messages = [dict(item) for item in raw_messages if isinstance(item, Mapping)]
+    if len(messages) != len(raw_messages):
+        return request, None
+
+    max_rounds = _positive_int_env("TRACECITE_BENCH_MAX_ROUNDS", _DEFAULT_MAX_ROUNDS)
+    no_growth_limit = _positive_int_env(
+        "TRACECITE_BENCH_NO_GROWTH_ROUNDS", _DEFAULT_NO_GROWTH_ROUNDS
+    )
+    assistant_rounds = sum(1 for item in messages if item.get("role") == "assistant")
+    no_growth_rounds = _trailing_no_growth_rounds(messages)
+
+    reason: str | None = None
+    if no_growth_rounds >= no_growth_limit:
+        reason = "consecutive_no_growth"
+    elif assistant_rounds >= max_rounds:
+        reason = "max_rounds"
+    if reason is None:
+        return request, None
+
+    last = messages[-1] if messages else {}
+    last_content = str(last.get("content") or "") if last.get("role") == "user" else ""
+    if "Evidence acquisition has stopped" not in last_content and "previous assistant response hit" not in last_content:
+        messages.append({"role": "user", "content": _FINAL_ONLY_PROMPT})
+    request["messages"] = messages
+    request.pop("tools", None)
+    request.pop("tool_choice", None)
+    return request, {
+        "type": "protocol",
+        "event": "force_final_only",
+        "reason": reason,
+        "assistant_rounds": assistant_rounds,
+        "trailing_no_growth_rounds": no_growth_rounds,
+        "max_rounds": max_rounds,
+        "no_growth_limit": no_growth_limit,
+    }
+
+
 def _post_chat_measured(payload: Mapping[str, Any]) -> dict[str, Any]:
     transcript_value = os.environ.get("TRACECITE_BENCH_TRANSCRIPT", "").strip()
+    request_payload, stop_event = _apply_stop_policy(payload)
     if transcript_value:
-        common._append_event(Path(transcript_value), _request_context_event(payload))
+        transcript = Path(transcript_value)
+        if stop_event is not None:
+            common._append_event(transcript, stop_event)
+        common._append_event(transcript, _request_context_event(request_payload))
 
     for attempt in range(3):
         try:
-            return _ORIGINAL_POST_CHAT(payload)
+            return _ORIGINAL_POST_CHAT(request_payload)
         except RuntimeError as exc:
             message = str(exc)
             transient = any(f"HTTP {code}" in message for code in (429, 500, 502, 503, 504))
@@ -120,8 +224,11 @@ class CanonicalRuntime(base.BenchmarkToolRuntime):
 
     def _render(self, result: Any, *, prefix: str = "") -> str:
         payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
-        frame = trace_cli.render_frame(project(payload, profile="agent"))
-        return f"{prefix}\n{frame}" if prefix else frame
+        view = project(payload, profile="agent")
+        if view.get("operation") == "search":
+            view = trace_cli._compact_search_result(view, max_output_chars=None)
+        rendered = json.dumps(view, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return f"{prefix}\n{rendered}" if prefix else rendered
 
     def _tracecite_inspect(self, args: Mapping[str, Any]) -> str:
         file_name = str(args.get("file") or "")

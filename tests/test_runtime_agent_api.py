@@ -167,6 +167,44 @@ def test_retrieve_range_hard_stops_only_for_same_immutable_version(tmp_path) -> 
     assert changed.status != "no_new_evidence"
 
 
+def test_range_context_growth_is_not_suppressed_by_prior_search_pointer(tmp_path) -> None:
+    source = tmp_path / "runtime.log"
+    source.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+    digest = _sha256(source)
+    state_path = tmp_path / "investigation.json"
+    InvestigationStore(state_path).create("search then recover exact context")
+
+    broad = retrieve(
+        EvidenceRequest(
+            QueryTarget(source, ".*", regex=True, snapshot=False),
+            investigation_path=state_path,
+        )
+    )
+    assert broad.status == "ok"
+    assert broad.new_evidence
+
+    expanded = retrieve(
+        EvidenceRequest(
+            RangeTarget(source, 3, before=1, after=1, expected_sha256=digest),
+            investigation_path=state_path,
+        )
+    )
+    assert expanded.status == "ok"
+    assert expanded.progress.delta.new_lines == 3
+    assert expanded.stop_reason is None
+    assert expanded.new_evidence
+    assert "two\nthree\nfour" in expanded.to_dict()["data"]["text"]
+
+    repeated = retrieve(
+        EvidenceRequest(
+            RangeTarget(source, 3, before=1, after=1, expected_sha256=digest),
+            investigation_path=state_path,
+        )
+    )
+    assert repeated.status == "no_new_evidence"
+    assert repeated.progress.delta.new_lines == 0
+
+
 class _Provider:
     name = "demo"
 

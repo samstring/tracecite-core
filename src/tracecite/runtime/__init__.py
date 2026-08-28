@@ -133,8 +133,8 @@ from .agent_api import (
     RetrieveTarget,
     SourceTarget,
     investigate,
-    retrieve,
 )
+from .retrieve_contract import retrieve
 
 __all__ = [
     "CAPABILITY_KINDS",

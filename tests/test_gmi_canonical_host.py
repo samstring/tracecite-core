@@ -64,7 +64,7 @@ def test_request_context_records_attempted_payload_before_provider_usage(tmp_pat
     assert event["type"] == "request_context"
 
 
-def test_canonical_host_suppresses_duplicate_search_and_clamps_radius(tmp_path: Path) -> None:
+def test_canonical_host_preserves_visible_evidence_and_clamps_radius(tmp_path: Path) -> None:
     input_root = tmp_path / "inputs"
     scratch = tmp_path / "scratch"
     input_root.mkdir()
@@ -80,9 +80,45 @@ def test_canonical_host_suppresses_duplicate_search_and_clamps_radius(tmp_path: 
         "first = runtime._tracecite_search({'file':'runtime.log','query':'checksum','regex':False})\n"
         "second = runtime._tracecite_search({'file':'runtime.log','query':'checksum','regex':False})\n"
         "clamped = runtime._tracecite_get({'file':'runtime.log','line':2,'radius':10})\n"
-        "assert first.strip()\n"
+        "assert 'checksum failed request=7' in first\n"
         "assert 'no_new_evidence' in second.lower()\n"
         "assert 'radius_clamped_from=10 radius=8' in clamped\n"
+        "assert 'INFO start' in clamped and 'INFO end' in clamped\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
+def test_stop_policy_forces_final_only_after_two_no_growth_rounds(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "messages = [\n"
+        " {'role':'system','content':'s'}, {'role':'user','content':'u'},\n"
+        " {'role':'assistant','content':'','tool_calls':[{'id':'1'}]},\n"
+        " {'role':'tool','content':'{\\\"status\\\":\\\"no_match\\\"}'},\n"
+        " {'role':'assistant','content':'','tool_calls':[{'id':'2'}]},\n"
+        " {'role':'tool','content':'{\\\"status\\\":\\\"no_new_evidence\\\"}'},\n"
+        "]\n"
+        "request, event = host._apply_stop_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
+        "assert event is not None and event['reason'] == 'consecutive_no_growth'\n"
+        "assert 'tools' not in request and 'tool_choice' not in request\n"
+        "assert request['messages'][-1]['role'] == 'user'\n"
+        "assert 'Evidence acquisition has stopped' in request['messages'][-1]['content']\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
+def test_stop_policy_max_round_is_a_safety_cap(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "messages = [{'role':'system','content':'s'},{'role':'user','content':'u'}]\n"
+        "for i in range(12):\n"
+        "    messages.append({'role':'assistant','content':'','tool_calls':[{'id':str(i)}]})\n"
+        "    messages.append({'role':'tool','content':'{\\\"status\\\":\\\"ok\\\"}'})\n"
+        "request, event = host._apply_stop_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
+        "assert event is not None and event['reason'] == 'max_rounds'\n"
+        "assert 'tools' not in request\n"
         "print('ok')\n",
     )
     assert output.strip() == "ok"
