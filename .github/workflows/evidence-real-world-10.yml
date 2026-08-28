@@ -1,0 +1,113 @@
+name: Real-World 10 Agent Benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - ".github/workflows/evidence-real-world-10.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  real-world-10:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1800"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install TraceCite
+        run: python -m pip install -e ".[dev]"
+      - name: Validate benchmark configuration
+        shell: bash
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is not configured"; exit 1; }
+          test -n "$BENCH_MODEL" || { echo "TRACECITE_BENCH_MODEL is not configured"; exit 1; }
+          echo "Provider base URL: $OPENAI_BASE_URL"
+          echo "Benchmark model: $BENCH_MODEL"
+      - name: Validate and prepare ten pinned real-world cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          cases=(
+            prometheus-18018
+            pulumi-20529
+            doublecmd-3061
+            doublecmd-2616
+            doublecmd-2777
+            doublecmd-2809
+            doublecmd-2772
+            doublecmd-2815
+            doublecmd-2731
+            doublecmd-2264
+          )
+          rm -rf /tmp/tracecite-real-world-10
+          for case_id in "${cases[@]}"; do
+            case_dir="benchmarks/agent-investigation/cases/${case_id}"
+            echo "== prepare ${case_id} =="
+            python -m tracecite.benchmarking validate "$case_dir"
+            python -m tracecite.benchmarking prepare "$case_dir" --work-dir /tmp/tracecite-real-world-10
+          done
+      - name: Run free-shell versus TraceCite across ten cases
+        id: real_model
+        shell: bash
+        run: |
+          set -euo pipefail
+          cases=(
+            prometheus-18018
+            pulumi-20529
+            doublecmd-3061
+            doublecmd-2616
+            doublecmd-2777
+            doublecmd-2809
+            doublecmd-2772
+            doublecmd-2815
+            doublecmd-2731
+            doublecmd-2264
+          )
+          mkdir -p /tmp/tracecite-rw-runs /tmp/tracecite-rw-scores
+          seed=1
+          for case_id in "${cases[@]}"; do
+            case_dir="benchmarks/agent-investigation/cases/${case_id}"
+            manifest="/tmp/tracecite-real-world-10/${case_id}/prepared.json"
+            for mode in free_shell tracecite; do
+              echo "== ${case_id} / ${mode} =="
+              transcript="/tmp/tracecite-rw-runs/${case_id}-${mode}-${seed}.jsonl"
+              score="/tmp/tracecite-rw-scores/${case_id}-${mode}-${seed}.json"
+              python benchmarks/agent-investigation/run_host.py \
+                "$case_dir" "$manifest" \
+                --mode "$mode" \
+                --model "$BENCH_MODEL" \
+                --seed "$seed" \
+                --timeout-seconds 600 \
+                --output "$transcript" \
+                --pass-env OPENAI_API_KEY \
+                --pass-env OPENAI_BASE_URL \
+                --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
+                -- python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_host.py"
+              python -m tracecite.benchmarking score "$case_dir" "$transcript" > "$score"
+              cat "$score"
+            done
+          done
+          python benchmarks/agent-investigation/aggregate_scores.py \
+            /tmp/tracecite-rw-scores/*.json \
+            --output /tmp/tracecite-rw-runs/aggregate.json
+          cat /tmp/tracecite-rw-runs/aggregate.json
+      - name: Upload real-world benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-real-world-10
+          path: |
+            /tmp/tracecite-rw-runs
+            /tmp/tracecite-rw-scores
+          if-no-files-found: warn
