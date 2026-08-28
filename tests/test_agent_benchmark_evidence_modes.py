@@ -7,6 +7,7 @@ from pathlib import Path
 
 BENCH_DIR = Path(__file__).resolve().parents[1] / "benchmarks" / "agent-investigation"
 RUNNER = BENCH_DIR / "run_host.py"
+GMI_HOST = BENCH_DIR / "gmi_host.py"
 RAW_HOST_V2 = BENCH_DIR / "gmi_raw_host_v2.py"
 SCALE_HOST = BENCH_DIR / "gmi_scale_host.py"
 
@@ -17,6 +18,18 @@ def _load_runner():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _load_gmi_host():
+    sys.path.insert(0, str(BENCH_DIR))
+    try:
+        spec = importlib.util.spec_from_file_location("tracecite_benchmark_gmi_host", GMI_HOST)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(BENCH_DIR))
 
 
 def _load_raw_host_v2():
@@ -100,7 +113,7 @@ def test_complete_coverage_marker_is_detected() -> None:
         _restore_raw_host_globals(module)
 
 
-def test_scale_host_uses_survey_then_targeted_search_tools(tmp_path: Path) -> None:
+def test_scale_host_uses_inspect_get_then_search_tools(tmp_path: Path) -> None:
     module = _load_scale_host()
     try:
         evidence = tmp_path / "evidence.log"
@@ -112,7 +125,91 @@ def test_scale_host_uses_survey_then_targeted_search_tools(tmp_path: Path) -> No
             context_id="",
         )
         names = [item["name"] for item in module._tools_for_mode("tracecite", runtime.files)]
-        assert names == ["tracecite_survey", "tracecite_search"]
+        assert names == ["tracecite_inspect", "tracecite_get", "tracecite_search"]
+    finally:
+        _restore_scale_host_globals(module)
+
+
+def test_scale_inspect_surfaces_generic_incident_window_and_line_refs(tmp_path: Path) -> None:
+    module = _load_scale_host()
+    try:
+        evidence = tmp_path / "evidence.log"
+        evidence.write_text(
+            "normal start\n"
+            "request begins\n"
+            "worker IOException: checksum mismatch while reading payload\n"
+            "reporting affected resource\n"
+            "retry from replica\n"
+            "normal end\n",
+            encoding="utf-8",
+        )
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        runtime = module.ScaleRuntime(
+            mode="tracecite",
+            input_root=tmp_path,
+            scratch=scratch,
+            context_id="",
+        )
+        runtime._survey = lambda path: '{"status":"ok","coverage":{"lines_scanned":6},"data":{"levels":[{"level":"ERROR","count":1}],"top_templates":[]}}'
+
+        output = runtime._tracecite_inspect({"file": "evidence.log"})
+
+        assert output.startswith("@TCI 1 inspect status=ok")
+        assert "incident_signal_lines=1" in output
+        assert "#L3\tworker IOException: checksum mismatch while reading payload" in output
+        assert "#L4\treporting affected resource" in output
+        assert "source_scan_complete=True" in output
+    finally:
+        _restore_scale_host_globals(module)
+
+
+def test_scale_get_recovers_known_line_window(tmp_path: Path) -> None:
+    module = _load_scale_host()
+    try:
+        evidence = tmp_path / "evidence.log"
+        evidence.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        runtime = module.ScaleRuntime(
+            mode="tracecite",
+            input_root=tmp_path,
+            scratch=scratch,
+            context_id="",
+        )
+        runtime._inspected_files.add("evidence.log")
+
+        output = runtime._tracecite_get({"file": "evidence.log", "line": 3, "radius": 1})
+
+        assert "#L2\ttwo" in output
+        assert "#L3\tthree" in output
+        assert "#L4\tfour" in output
+        assert "#L1\tone" not in output
+    finally:
+        _restore_scale_host_globals(module)
+
+
+def test_scale_numeric_search_is_routed_to_get(tmp_path: Path) -> None:
+    module = _load_scale_host()
+    try:
+        evidence = tmp_path / "evidence.log"
+        evidence.write_text("one\ntwo\n", encoding="utf-8")
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        runtime = module.ScaleRuntime(
+            mode="tracecite",
+            input_root=tmp_path,
+            scratch=scratch,
+            context_id="",
+        )
+        runtime._inspected_files.add("evidence.log")
+
+        output = runtime._tracecite_search_scale(
+            {"file": "evidence.log", "query": "1404", "regex": False}
+        )
+
+        assert output.startswith("USE_GET:")
+        assert "tracecite_get" in output
     finally:
         _restore_scale_host_globals(module)
 
@@ -130,6 +227,7 @@ def test_scale_search_has_no_benchmark_specific_caps(tmp_path: Path) -> None:
             scratch=scratch,
             context_id="",
         )
+        runtime._inspected_files.add("evidence.log")
         captured: list[str] = []
 
         def fake_run(command, *, timeout=300):
@@ -147,3 +245,25 @@ def test_scale_search_has_no_benchmark_specific_caps(tmp_path: Path) -> None:
         assert "--max-line-chars" not in captured
     finally:
         _restore_scale_host_globals(module)
+
+
+def test_gmi_output_limit_marks_final_as_incomplete() -> None:
+    module = _load_gmi_host()
+    assert module._incomplete_final(
+        visible="partial answer",
+        usage={"output_tokens": 1600},
+        finish_reason=None,
+        max_output_tokens=1600,
+    )
+    assert module._incomplete_final(
+        visible="",
+        usage={"output_tokens": 900},
+        finish_reason="length",
+        max_output_tokens=1600,
+    )
+    assert not module._incomplete_final(
+        visible="complete answer",
+        usage={"output_tokens": 900},
+        finish_reason="stop",
+        max_output_tokens=1600,
+    )
