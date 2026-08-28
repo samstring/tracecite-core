@@ -7,7 +7,7 @@
     "fix_alignment": {"patterns": ["(?:(?:enforce|fix|validate|couple|disable).{0,180}(?:feature.?gate|PodLevelResources)|dependency.{0,120}(?:gate|validation))"]}
   },
   "evidence_markers": ["failed to merge global and in-flight KubeletConfiguration while setting defaults", "PodLevelResourcesFixDefaulting is enabled", "disabled: [PodLevelResources]"],
-  "unsupported_claims": [{"id": "configz-timeout-is-primary", "patterns": ["(?:(?:root|primary) cause.{0,80}/configz|/configz(?:\\s+timeout)?\\s+(?:is|was).{0,40}(?:the\\s+)?(?:root|primary) cause|/configz.{0,60}caused the kubelet)"]}],
+  "unsupported_claims": [{"id": "configz-timeout-is-primary", "patterns": ["(?:(?:root|primary)[ \\t]+cause[ \\t]+(?:is|was)[ \\t]+(?:the[ \\t]+)?/configz(?:[ \\t]+timeout)?|/configz(?:[ \\t]+timeout)?[ \\t]+(?:is|was)[ \\t]+(?:the[ \\t]+)?(?:root|primary)[ \\t]+cause|/configz[^\\n]{0,60}caused[ \\t]+the[ \\t]+kubelet)"]}],
   "contradictions": [],
   "root_cause_thresholds": {"dimension_recall": 0.75, "supported_dimension_recall": 0.75, "citation_accuracy": 0.5, "evidence_marker_recall": 0.0, "max_unsupported_claim_hits": 0, "max_contradiction_hits": 0},
   "leak_terms": ["PodLevelResourcesFixDefaulting", "failed to merge global and in-flight KubeletConfiguration while setting defaults"]
