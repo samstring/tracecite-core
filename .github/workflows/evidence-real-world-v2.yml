@@ -34,14 +34,11 @@ jobs:
           test -n "$BENCH_MODEL" || { echo "TRACECITE_BENCH_MODEL is not configured"; exit 1; }
           echo "Provider base URL: $OPENAI_BASE_URL"
           echo "Benchmark model: $BENCH_MODEL"
-      - name: Prepare required cases
+      - name: Prepare remaining cases
         shell: bash
         run: |
           set -euo pipefail
           cases=(
-            prometheus-18018
-            pulumi-20529
-            doublecmd-3061
             doublecmd-2616
             doublecmd-2777
             doublecmd-2772
@@ -55,15 +52,12 @@ jobs:
             python -m tracecite.benchmarking validate "$case_dir"
             python -m tracecite.benchmarking prepare "$case_dir" --work-dir /tmp/tracecite-rw-v2
           done
-      - name: Run resilient inspect-first batch
+      - name: Run remaining resilient inspect-first batch
         shell: bash
         run: |
           set -uo pipefail
           mkdir -p /tmp/tracecite-rw-v2-runs /tmp/tracecite-rw-v2-scores /tmp/tracecite-rw-v2-failures
           runs=(
-            "prometheus-18018:tracecite"
-            "pulumi-20529:tracecite"
-            "doublecmd-3061:tracecite"
             "doublecmd-2616:tracecite"
             "doublecmd-2777:tracecite"
             "doublecmd-2772:free_shell"
@@ -91,7 +85,7 @@ jobs:
             else
               host="$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_host.py"
             fi
-            python benchmarks/agent-investigation/run_host.py \
+            if python benchmarks/agent-investigation/run_host.py \
               "$case_dir" "$manifest" \
               --mode "$mode" \
               --model "$BENCH_MODEL" \
@@ -101,24 +95,30 @@ jobs:
               --pass-env OPENAI_API_KEY \
               --pass-env OPENAI_BASE_URL \
               --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
-              -- python "$host"
-            rc=$?
-            if [ "$rc" -eq 0 ]; then
-              python -m tracecite.benchmarking score "$case_dir" "$transcript" > "$score"
-              cat "$score"
-              completed=$((completed + 1))
+              -- python "$host"; then
+              if python -m tracecite.benchmarking score "$case_dir" "$transcript" > "$score"; then
+                cat "$score"
+                completed=$((completed + 1))
+              else
+                failed=$((failed + 1))
+                printf '{"case_id":"%s","mode":"%s","stage":"score"}\n' "$case_id" "$mode" \
+                  > "/tmp/tracecite-rw-v2-failures/${case_id}-${mode}-${seed}.json"
+                echo "FAILED scoring ${case_id}/${mode}; continuing"
+              fi
             else
+              rc=$?
               failed=$((failed + 1))
-              printf '{"case_id":"%s","mode":"%s","returncode":%d}\n' "$case_id" "$mode" "$rc" \
+              printf '{"case_id":"%s","mode":"%s","stage":"host","returncode":%d}\n' "$case_id" "$mode" "$rc" \
                 > "/tmp/tracecite-rw-v2-failures/${case_id}-${mode}-${seed}.json"
-              echo "FAILED ${case_id}/${mode} rc=${rc}; continuing"
+              echo "FAILED host ${case_id}/${mode} rc=${rc}; continuing"
+              tail -n 3 "$transcript" || true
             fi
           done
           if compgen -G '/tmp/tracecite-rw-v2-scores/*.json' > /dev/null; then
             python benchmarks/agent-investigation/aggregate_scores.py \
               /tmp/tracecite-rw-v2-scores/*.json \
-              --output /tmp/tracecite-rw-v2-runs/aggregate.json
-            cat /tmp/tracecite-rw-v2-runs/aggregate.json
+              --output /tmp/tracecite-rw-v2-runs/aggregate.json || true
+            cat /tmp/tracecite-rw-v2-runs/aggregate.json 2>/dev/null || true
           fi
           printf '{"completed":%d,"failed":%d,"requested":%d}\n' "$completed" "$failed" "${#runs[@]}" \
             > /tmp/tracecite-rw-v2-runs/batch-summary.json
@@ -127,7 +127,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: evidence-real-world-v2
+          name: evidence-real-world-v2-remaining
           path: |
             /tmp/tracecite-rw-v2-runs
             /tmp/tracecite-rw-v2-scores
