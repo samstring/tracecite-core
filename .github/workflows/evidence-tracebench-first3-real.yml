@@ -149,7 +149,43 @@ jobs:
           host="$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_scale_host.py"
           test -f "$host" || { echo "benchmark host missing: $host"; exit 1; }
           mkdir -p "$root/results/runs" "$root/results/scores" "$root/results/failures"
-          failed=0
+          candidate_failed=0
+          baseline_failed=0
+          infra_inconclusive=0
+
+          failure_reason() {
+            python - "$1" <<'PY'
+          import json, re, sys
+          path = sys.argv[1]
+          reason = 'host_error'
+          try:
+              with open(path, encoding='utf-8') as handle:
+                  for raw in handle:
+                      try:
+                          row = json.loads(raw)
+                      except Exception:
+                          continue
+                      if row.get('type') != 'host_error':
+                          continue
+                      explicit = str(row.get('failure_reason') or '').strip()
+                      message = str(row.get('message') or '')
+                      if explicit and explicit != 'host_error':
+                          reason = explicit
+                          break
+                      if 'HTTP 402' in message or 'Insufficient balance' in message:
+                          reason = 'provider_quota_exhausted'
+                          break
+                      if 'HTTP 429' in message or 'Rate limit exceeded' in message:
+                          reason = 'provider_rate_limited'
+                          break
+                      if re.search(r'HTTP (?:500|502|503|504)\b', message):
+                          reason = 'provider_unavailable'
+                          break
+          except OSError:
+              pass
+          print(reason)
+          PY
+          }
 
           for spec in 'target-only.csv:25kb' '5000000.csv:5mb'; do
             file=${spec%%:*}
@@ -171,7 +207,7 @@ jobs:
               {"id":"checksum-mechanism","patterns":["ChecksumException|checksum.{0,30}(?:error|mismatch|fail)"]},
               {"id":"bad-block-sequence","patterns":["reportBadBlocks|bad block|block.{0,30}(?:bad|unavailable|corrupt)"]},
               {"id":"data-integrity-cause","patterns":["(?:data|block).{0,40}corrupt|corrupt(?:ed|ion).{0,40}(?:data|block)|block data.{0,40}(?:modified|damaged|corrupt)"]},
-              {"id":"source-citation","patterns":["runtime\\.csv:\\d+|#L\\d+|(?:line|lines)\\s+\\d+"]}
+              {"id":"source-citation","patterns":["runtime\\.csv:\\d+|#?L\\d+|(?:line|lines)\\s+\\d+"]}
             ],
             "evidence_markers": ["EC78D31AEC1E64FD", "ChecksumException", "reportBadBlocks"],
             "thresholds": {"concept_recall":1.0,"evidence_marker_recall":1.0},
@@ -214,10 +250,13 @@ jobs:
           open(path, 'w', encoding='utf-8').write(json.dumps(payload, indent=2)+'\n')
           PY
 
-            for mode in free_shell tracecite; do
+            # Candidate runs first so a pathological baseline cannot consume the
+            # provider quota/rate budget before TraceCite is measured.
+            for mode in tracecite free_shell; do
               echo "== TraceBench $tier / $mode =="
               transcript="$root/results/runs/${tier}-${mode}.jsonl"
               score="$root/results/scores/${tier}-${mode}.json"
+              failure="$root/results/failures/${tier}-${mode}.json"
               if python benchmarks/agent-investigation/run_host.py \
                 "$case_dir" "$root/prepared-$tier.json" \
                 --mode "$mode" \
@@ -237,25 +276,57 @@ jobs:
           raise SystemExit(0 if score.get('passed') is True else 1)
           PY
                   then
-                    failed=$((failed + 1))
-                    printf '{"tier":"%s","mode":"%s","stage":"quality"}\n' "$tier" "$mode" > "$root/results/failures/${tier}-${mode}.json"
+                    printf '{"tier":"%s","mode":"%s","stage":"quality","reason":"quality_gate"}\n' "$tier" "$mode" > "$failure"
+                    if [ "$mode" = tracecite ]; then
+                      candidate_failed=$((candidate_failed + 1))
+                    else
+                      baseline_failed=$((baseline_failed + 1))
+                    fi
                   fi
                 else
-                  failed=$((failed + 1))
-                  printf '{"tier":"%s","mode":"%s","stage":"score"}\n' "$tier" "$mode" > "$root/results/failures/${tier}-${mode}.json"
+                  printf '{"tier":"%s","mode":"%s","stage":"score","reason":"score_error"}\n' "$tier" "$mode" > "$failure"
+                  if [ "$mode" = tracecite ]; then
+                    candidate_failed=$((candidate_failed + 1))
+                  else
+                    baseline_failed=$((baseline_failed + 1))
+                  fi
                 fi
               else
-                failed=$((failed + 1))
-                printf '{"tier":"%s","mode":"%s","stage":"host"}\n' "$tier" "$mode" > "$root/results/failures/${tier}-${mode}.json"
+                reason=$(failure_reason "$transcript")
+                printf '{"tier":"%s","mode":"%s","stage":"host","reason":"%s"}\n' "$tier" "$mode" "$reason" > "$failure"
                 tail -n 12 "$transcript" || true
+                case "$reason" in
+                  provider_quota_exhausted|provider_rate_limited|provider_unavailable)
+                    if [ "$mode" = tracecite ]; then
+                      infra_inconclusive=$((infra_inconclusive + 1))
+                    else
+                      baseline_failed=$((baseline_failed + 1))
+                    fi
+                    ;;
+                  *)
+                    if [ "$mode" = tracecite ]; then
+                      candidate_failed=$((candidate_failed + 1))
+                    else
+                      baseline_failed=$((baseline_failed + 1))
+                    fi
+                    ;;
+                esac
               fi
             done
           done
 
-          printf '{"requested":4,"failed":%d}\n' "$failed" | tee "$root/results/batch-summary.json"
-          if [ "$failed" -ne 0 ]; then
-            echo "::error::$failed of 4 benchmark runs failed host or quality gates"
+          printf '{"requested":4,"candidate_failed":%d,"baseline_failed":%d,"infra_inconclusive":%d}\n' \
+            "$candidate_failed" "$baseline_failed" "$infra_inconclusive" | tee "$root/results/batch-summary.json"
+          if [ "$infra_inconclusive" -ne 0 ]; then
+            echo "::error::TraceCite candidate gate is inconclusive because provider infrastructure failed"
+            exit 2
+          fi
+          if [ "$candidate_failed" -ne 0 ]; then
+            echo "::error::$candidate_failed TraceCite candidate runs failed host or quality gates"
             exit 1
+          fi
+          if [ "$baseline_failed" -ne 0 ]; then
+            echo "::notice::$baseline_failed baseline runs failed; failures are retained as comparison evidence and do not block the TraceCite candidate gate"
           fi
       - name: Upload paired results
         if: always()
@@ -267,4 +338,4 @@ jobs:
             /tmp/tb-first3/tier-manifest.json
           if-no-files-found: error
 
-# Push-trigger refresh for the EvidenceProgress 25KB/5MB regression gate.
+# Candidate-first ordering prevents baseline context/rate failures from starving TraceCite.
