@@ -8,252 +8,409 @@
 
 - 仓库：`samstring/tracecite-core`
 - 当前工作分支：`experiment/evidence-intelligence`
-- 当前 HEAD：`e8f0e41be3ac9f6c47a811eb65f2e1b82facc616`
-- HEAD commit：`feat(runtime): add explainable evidence progress state`
-- 本阶段工作只在 `experiment/evidence-intelligence` 上继续，不直接修改 `main` / `refactor/agent-v2`。
-- 实验最终是否合并回稳定分支，取决于真实 Agent benchmark 是否能够证明 token、tool/model loop、evidence recall、correctness、citation 与资源开销方面具有明确收益。
+- 基础分支：`refactor/agent-v2`
+- 本阶段只在实验分支继续，不直接修改 `main` / `refactor/agent-v2`。
+- 本次文档刷新前最后一个代码/CI 基线 HEAD：`77dbbdf0426393e5990fde3d7c07807c9429cdc6`（`ci(bench): add candidate-first 100mb evidence gate`）。
+- 该 100MB workflow 已经不再属于当前验收计划；项目决策从 2026-08-28 起把 **50MB 作为本阶段最大必测规模**。
+
+实验最终是否合并回稳定分支，不再取决于继续放大到 100MB / 500MB，而取决于：
+
+1. benchmark 已证明有效的 progress/coverage/novelty 语义能否进入 canonical runtime；
+2. token/context 优势是否在不牺牲 evidence recall、correctness、citation 的前提下成立；
+3. 多领域真实 root-cause case 是否能验证产品价值；
+4. runtime API 是否能够长期稳定，避免 benchmark adapter 与正式产品逻辑分叉。
 
 ## 2. 当前目标
 
-当前阶段不是继续扩大功能面，而是验证 Evidence Intelligence 是否真正能够让 Agent 在大规模 evidence 上：
+TraceCite 的实验方向仍然是：
 
-1. 少重复读取已经覆盖过的 evidence；
-2. 少执行只返回旧 evidence 的重复搜索；
-3. 在 bounded memory 下保留更有价值的异常信号；
-4. 在不丢失关键证据和 citation 的前提下降低 token；
-5. 将 25KB / 5MB 的已验证路径扩展到 50MB、100MB、500MB；
-6. 在第一个失败规模停止扩容，先定位并修复真实瓶颈。
+```text
+Collect
+→ Normalize
+→ Correlate
+→ Explore / Inspect
+→ Group / Reduce
+→ Evidence Progress / Coverage
+→ Cite / Recover
+→ Agent Reasoning
+```
 
-TraceCite 的边界保持不变：Runtime 负责机械证据状态、关联、压缩、coverage 和 retrieval progress，不负责替 Agent 做根因推理。
+重点不是做通用代码搜索，也不是证明单次搜索一定比 `rg` 更快或更小，而是：
+
+> 把真实运行时信号整理成紧凑、相关联、可追溯、可引用、可确定性停止的 Agent Evidence，降低完整 investigation 中的重复工具调用与上下文浪费。
+
+TraceCite Runtime 负责机械证据状态、identity、coverage、novelty、关联、压缩与 retrieval progress；Agent 负责因果推理与最终诊断。
 
 ## 3. 已完成工作
 
 ### 3.1 Evidence Intelligence 主体实验能力
 
-实验分支已经具备 EvidenceProvider、Evidence Graph / correlation、Grouping / Reducer、token-aware EvidencePackage、Context Delta、自动 Entity exploration 等实验能力。
+实验分支已经具备：
 
-这些能力已经覆盖组件级 boundedness、evidence retention、URI recovery、namespace 隔离和结构性 Agent-loop 下沉验证。
+- `EvidenceProvider`；
+- Evidence Graph / correlation；
+- Grouping / Reducer；
+- token-aware `EvidencePackage`；
+- Context Delta；
+- deterministic Entity exploration；
+- bounded `ExplorationPolicy`；
+- canonical Evidence URI / recovery；
+- namespace 隔离；
+- Evidence Progress state / tracker。
 
-### 3.2 Evidence Progress 状态模型
+组件级测试已经覆盖 boundedness、evidence retention、URI recovery、namespace 隔离、结构性 Agent-loop 下沉等能力。
 
-commit `e8f0e41` 已新增 explainable evidence progress state。
+### 3.2 Evidence Progress benchmark 接线
 
-当前已经有用于表达以下概念的 runtime 数据结构 / tracker：
+`benchmarks/agent-investigation/gmi_scale_host.py` 已经把 per-file `EvidenceProgressTracker` 接入 scale benchmark 的 `inspect/get/search` 路径，并验证：
 
-- evidence requirement；
-- evidence gap；
-- evidence delta；
-- readiness；
-- coverage / range 状态；
-- retrieval completion / no-growth 状态。
+- duplicate inspect 返回 bounded `NO_NEW_EVIDENCE`；
+- `get` 按历史 coverage union 判断，而不是只判断 exact tuple；
+- 请求范围被多个历史 range 联合完整覆盖时可 hard-stop；
+- `search` exact duplicate 可 hard-stop；
+- 不同 query 如果 canonical Evidence URI 全部已见，也可返回 `NO_NEW_EVIDENCE`；
+- canonical search result 进入 Evidence Ledger；
+- severity-aware retention 保持容量 bounded，并允许高严重度新信号替换低严重度旧信号；
+- progress line 暴露 evidence growth / coverage / readiness。
 
-注意：**状态模型已经存在，但还没有完整接入 canonical `inspect/get/search` 工具执行路径。**
+### 3.3 failure taxonomy / candidate-first benchmark
 
-### 3.3 当前 HEAD 的基础 CI
+scale host / workflow 已开始区分：
 
-当前 HEAD `e8f0e41` 已验证：
+- `context_window_exceeded`；
+- `tool_timeout`；
+- provider quota / insufficient balance；
+- provider rate limit；
+- provider unavailable；
+- generic host error。
 
-- `Evidence Intelligence Benchmark`：成功，run `33151909192`；
-- `Core CI`：成功，run `33151909183`。
+paired benchmark 已改为 **TraceCite candidate first，baseline 后跑**，避免 free-shell 先消耗 provider quota / rate limit 后污染候选结果。
 
-因此当前继续开发的基线是 green，可以在这个 HEAD 上继续做小步改动。
+判定原则：
 
-### 3.4 大文件 fixture/build
+- TraceCite quality/context/timeout failure：candidate failure；
+- TraceCite provider infra failure：inconclusive；
+- free-shell context/tool/provider failure：保留为 baseline comparison evidence，不阻断已经通过的 TraceCite candidate。
 
-通用 scale-build workflow 已采用较适合大文件的增量生成 / 校验方向，说明大规模 fixture 构建本身已有部分 streaming 基础。
+### 3.4 50MB workflow streaming
 
-但 real-agent 50MB workflow 仍存在整体读文件的路径，尚不能直接认为能够安全扩展到 100MB / 500MB。
+50MB fixture validation / checksum 已改为 streaming 处理，避免不必要的 whole-file `read_text()` / `read_bytes()`。
 
-## 4. 当前未完成事项
+当前 50MB workflow 已能明确记录 host failure reason，而不是只留下 generic stage。
+
+### 3.5 Core / Evidence CI
+
+本轮主要修改后的 Core CI 与 Evidence Intelligence Benchmark 均已重新跑过并保持 green。
+
+50MB candidate-first workflow 对应 commit `535b942b88bbb5e5cbb781b71620d7892d0634f4` 也已成功完成。
+
+## 4. 当前真实模型 / scale benchmark 结果
+
+当前真实模型配置：
+
+```text
+provider: GMI OpenAI-compatible endpoint
+model: MiniMaxAI/MiniMax-M3
+```
+
+MiniMax M3 smoke 已真实完成多轮模型调用并通过，不再出现旧 provider 的 immediate 402 状态。
+
+### 4.1 25KB
+
+TraceCite candidate：PASS。
+
+- required concepts：6/6；
+- evidence markers：3/3；
+- 本轮 M3 candidate-first 结果中，TraceCite reported input / model loops / tool output 均处于可控范围；
+- 小文件结论不能泛化成固定 token 节省率。
+
+### 4.2 5MB
+
+TraceCite candidate：PASS。
+
+- required concepts：6/6；
+- evidence markers：3/3；
+- progress/no-growth 已开始抑制重复 Evidence 回放；
+- 仍观察到模型主动换 query / get 方式继续探索，说明“证据传输去重”已经改善，但“Agent 自己何时停止”仍有优化空间。
+
+### 4.3 50MB
+
+TraceCite candidate：PASS。
+
+- required concepts：6/6；
+- evidence markers：3/3；
+- model-visible tool output：约 `88,545` chars；
+- provider-reported cumulative input tokens：`375,211`；
+- cached input tokens：`335,852`；
+- output tokens：`4,908`；
+- model calls：`17`；
+- tool calls：`34`。
+
+同一 50MB evidence 下，free-shell baseline 在一次约 `5.2M chars` 的工具输出之后，下一轮 provider 请求触发：
+
+```text
+context_window_exceeded
+```
+
+这次失败不是 shell 命令本身超时，而是低选择性的原始证据输出把下一轮模型上下文打爆。
+
+### 4.4 当前可支持的产品价值结论
+
+现有证据支持：
+
+> TraceCite 的主要价值不是“搜索比 rg 快”，而是把大规模 runtime evidence 变成 bounded、provenance-aware、可恢复、可逐步扩展的 Evidence flow，降低 Agent 因重复搜索或一次性倾倒大量原始日志而浪费 context 的风险。
+
+不能宣称：
+
+- TraceCite 每次 search 都比 `rg` 小；
+- TraceCite 固定节省某个百分比 token；
+- free-shell 在所有 case 都会 context overflow；
+- 50MB 单一 HDFS case 已经证明所有真实 debugging 领域都有效。
+
+## 5. Token / context 统计口径
+
+必须区分：
+
+### Provider-reported usage
+
+每次成功模型请求返回的：
+
+- input tokens；
+- output tokens；
+- cached input tokens（如 provider 支持）；
+
+会跨 Agent 轮次累加。
+
+多轮累计 input 会重复包含历史 conversation context，因此它表示“整个 investigation 生命周期累计被模型处理的 input”，不是“原始文件唯一 evidence 的压缩后 token 数”。
+
+### Tool evidence size
+
+另外记录：
+
+- `tool_output_chars`；
+- `unique_tool_output_chars`；
+- `chars / 4` 的 clearly-labelled rough token estimate。
+
+`chars / 4` 不是精确 tokenizer 结果。
+
+如果一个 baseline 在把巨大 tool output 放入下一轮时直接 context overflow，该失败请求可能没有 provider usage，因此不能只比较成功请求的 `reported_input_tokens`。
+
+## 6. Scale 测试范围决策
+
+**从现在开始，本阶段正式 scale gate 截止 50MB。**
+
+不再要求：
+
+```text
+100MB
+500MB
+1GB+
+```
+
+作为 merge / 产品价值判断条件。
+
+原因：
+
+1. 25KB / 5MB / 50MB 已经覆盖从小文件 overhead 到明显大上下文压力的三个不同区间；
+2. 50MB 已经出现 free-shell context overflow、TraceCite 保持 bounded 且质量通过的直接对照；
+3. 继续把同一种 HDFS evidence 放大到更大尺寸，新增产品决策信息有限；
+4. 当前更有价值的工作是 canonical runtime 下沉和多领域真实 root-cause 验证。
+
+已有 100MB workflow 可以保留为可选 stress 工具，但不需要继续运行，其结果也不属于当前验收依据。
+
+## 7. 当前未完成事项
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| EvidenceProgress 数据结构 / tracker | ✅ 已完成 | 已进入 runtime |
-| EvidenceProgress 接入 `inspect/get/search` | ❌ 未完成 | 当前最优先的代码工作之一 |
-| duplicate `get` hard stop | 🟡 部分完成 | benchmark host 只覆盖 exact tuple；缺 coverage-aware 判断 |
-| duplicate `search` hard stop | 🟡 部分完成 | 只覆盖 exact query；缺“不同 query 但只有旧 evidence”的判断 |
-| 统一 `NO_NEW_EVIDENCE` runtime 语义 | 🟡 部分完成 | benchmark host 有局部实现，core runtime 未统一 |
-| 256 signal signature severity-aware retention | ❌ 未完成 | 容量满后高严重度新信号可能被早期低严重度噪声挡住 |
-| 50MB real workflow streaming | ❌ 未完成 | 仍需消除大文件 whole-file read 路径 |
-| 50MB failure 根因闭环 | ⚠️ 未完成 | 已确认失败 run，但尚未拿到可证明的具体失败原因 |
-| 修改后 25KB / 5MB regression | ❌ 未执行 | 必须在核心改动完成后重新跑 |
-| 50MB rerun | ❌ 未执行 | 必须等前置改动与 regression 通过 |
-| 100MB real-agent gate | ❌ 未执行 | 只有 50MB 通过后才能继续 |
-| 500MB real-agent gate | ❌ 未执行 | 只有 100MB 通过后才能继续 |
+| EvidenceProgress 数据结构 / tracker | ✅ 完成 | runtime 已有 |
+| benchmark `inspect/get/search` Progress 接线 | ✅ 基本完成 | scale host 已验证 |
+| coverage-aware duplicate `get` | ✅ benchmark 完成 | 需下沉 canonical runtime |
+| novelty-aware duplicate `search` | ✅ benchmark 完成 | 需下沉 canonical runtime |
+| severity-aware signal retention | ✅ benchmark 完成 | 仍需产品 reducer/sample 路径回归 |
+| failure taxonomy / candidate-first | ✅ 基本完成 | 已在 scale workflow 使用 |
+| 25KB / 5MB / 50MB scale gates | ✅ 完成 | 当前 scale 验收闭环结束 |
+| 100MB / 500MB scale gate | ⛔ 不再要求 | 已从当前计划移除 |
+| canonical runtime Progress wiring | 🟡 未完整完成 | **当前最高优先级** |
+| canonical `NO_NEW_EVIDENCE` 语义 | 🟡 未完整完成 | benchmark 已证明，core 需统一 |
+| `SOURCE_EXHAUSTED` / `FRONTIER_EXHAUSTED` | 🟡 未完整统一 | 需 API contract 收敛 |
+| `investigate()` 用 progress 驱动 exploration stop | 🟡 部分完成 | no-growth/frontier 有基础，但未统一 |
+| `get(radius > 8)` bounded clamp | ❌ 未落地 | 避免模型轻微越界浪费一轮 |
+| benchmark-specific cap audit | ❌ 未完成 | 区分 benchmark cap 与产品 transport bound |
+| baseline whole-file helper 审计 | 🟡 未完整 | 保证公平性，不再以 500MB 为目标 |
+| scanned bytes | 🟡 | runtime 有部分预算概念，报告未统一 |
+| unique evidence growth | 🟡 | tracker 有数据，最终 report 未完整 |
+| repeated evidence ratio | ❌/🟡 | 需要正式指标 |
+| source coverage | 🟡 | tracker 有数据，report 未完整 |
+| wall time comparison | 🟡 | 有执行时间，未统一形成 publishable metric |
+| peak RSS memory | ❌ | 未正式采集 |
+| attempted context load | ❌ | 新增建议指标，解决 overflow 前 usage 缺失问题 |
+| 多领域真实 root-cause suite | ❌ | **产品价值证明的下一主线** |
+| unsupported claim / citation / fix-alignment evaluator | 🟡 | 需要加强 |
+| 实验 API 合并决策 | ❌ | 等 canonical runtime + root-cause evidence |
 
-## 5. 50MB 当前断点
+## 8. 当前最高优先级：把验证过的机制下沉到 canonical runtime
 
-已经存在一次真实 50MB Agent benchmark 失败：
+benchmark adapter 不是最终产品实现。
 
-- Workflow：`TraceBench 50MB Real Agent`
-- Run ID：`33150972050`
-- Workflow 文件：`.github/workflows/evidence-tracebench-50mb-real.yml`
-- Head SHA：`fdf20d590557cc0634743a35da649fbd90e552ca`
-- 结果：`failure`
+重点文件：
 
-**目前只能确认“这个 run 失败了”，不能确认失败根因。**
+```text
+src/tracecite/runtime/evidence_progress.py
+src/tracecite/runtime/tools.py
+src/tracecite/runtime/investigation.py
+```
 
-后续继续开发时，必须先尽可能取得该 run 的 failed step / job log / artifact，然后才能把问题分类为：
+目标：
 
-- TraceCite 实现问题；
-- benchmark host / workflow 问题；
-- 大文件内存 / I/O 问题；
-- 模型/API 调用问题；
-- quota / rate limit；
-- 其他外部环境问题。
+```text
+canonical search
+  -> reconstruct / consult seen Evidence identity
+  -> exact duplicate can stop before repeated work when safe
+  -> result contains only old Evidence
+  -> NO_NEW_EVIDENCE
 
-禁止在没有日志证据的情况下把 50MB failure 归因于某一类原因。
+canonical expand/get-like path
+  -> coverage-aware
+  -> immutable source / expected sha rules respected
+  -> fully covered request
+  -> NO_NEW_EVIDENCE
 
-## 6. 下一阶段严格执行顺序
+canonical investigate
+  -> progress + coverage + no-growth + frontier
+  -> explainable stop reason
+```
 
-### Step 1：关闭 50MB failure 的事实缺口
+### 8.1 不新增第二套持久化 Progress schema
 
-优先取得 run `33150972050` 的：
+优先利用 linked investigation state 已有的 `executions`：
 
-- failed job；
-- failed step；
-- job log；
-- workflow artifact（如果存在）。
+- operation；
+- parameters；
+- evidence URI；
+- source / source_path；
+- SHA256；
+- line range；
+- coverage 等。
 
-如果 GitHub connector 无法返回日志，也要明确记录“无法取得的具体数据”，不要用猜测补全。
+可以从 execution history 机械重建 `EvidenceProgressTracker`，避免再维护一份互相漂移的 progress state 文件。
 
-### Step 2：把 EvidenceProgress 接入 canonical runtime tool path
+### 8.2 mutable path 安全边界
 
-目标：`inspect/get/search` 每次执行后都能更新确定性的 evidence progress。
+对于 expand/get-like hard stop：
 
-需要做到：
+- 只有能证明 source identity 没变时，才能在零文件读取情况下依赖历史 coverage；
+- `expected_sha256` 等 immutable identity 是安全 hard-stop 的重要条件；
+- 对可能变化的普通 path，不能因为历史读取过就武断声明 range 仍然 covered。
 
-- 成功读取后更新 coverage；
-- 新 evidence 更新 delta；
-- 无新增 evidence 更新 no-growth；
-- gaps / readiness 保持可解释；
-- 不把根因判断放入 tracker；
-- 不把 benchmark-only 状态机当成最终 runtime contract。
+## 9. 后续执行顺序
 
-### Step 3：实现 coverage-aware `get` Hard Stop
+从当前状态继续，建议按以下顺序：
 
-不再只判断完全相同的 `(start, end)`。
+### Step 1：canonical runtime progress / coverage / novelty
 
-如果一次新的 `get` 请求范围已经被之前读取范围完整覆盖，且不会带来新的 evidence，则确定性返回：
+先让正式产品 API 获得 benchmark 已验证的行为。
 
-`NO_NEW_EVIDENCE`
+### Step 2：单元测试 + Core CI + Evidence Intelligence Benchmark
 
-必须覆盖测试：
+每个独立语义都补 deterministic test。
 
-- exact duplicate；
-- 小范围被历史大范围完全包含；
-- 多个历史 range 联合覆盖新的 range；
-- 部分 overlap 但仍有未覆盖区间时不能错误 hard stop。
+### Step 3：只在行为可能影响 scale 时回归 25KB / 5MB / 50MB
 
-### Step 4：实现 novelty-aware `search` Hard Stop
+不再继续 100MB+。
 
-不能只判断 query 字符串是否完全相同。
+### Step 4：完善 investigation-cost metrics
 
-即使 query 不同，如果返回的 evidence identity / stable signature 全部已经见过，且没有新增 evidence，也应确定性返回：
+优先加入：
 
-`NO_NEW_EVIDENCE`
+- scanned bytes；
+- unique evidence growth；
+- repeated evidence ratio；
+- source coverage；
+- wall time；
+- peak memory；
+- attempted context load。
 
-必须保证不同搜索表达不会诱导 Agent 反复消费同一批 evidence。
+### Step 5：扩大真实 root-cause case
 
-### Step 5：修复 256 signal signature retention
+优先选择具备：
 
-当前 bounded retention 需要改为 severity-aware。
+```text
+real incident
++
+runtime evidence
++
+maintainer diagnosis
++
+merged PR / fix commit
+```
 
-要求：
+的公开 case。
 
-- 总量仍严格 bounded；
-- 已满 256 时，高 severity / critical 新信号可以替换更低价值信号；
-- 低 severity 新信号不能仅因为“更新”就驱逐高 severity 信号；
-- 同 severity 下使用确定性 tie-break，保证测试可重复；
-- 不允许随着输入规模增长变成 unbounded memory。
+Agent 看不到答案，Evaluator 单独持有 root cause / fix mechanism。
 
-### Step 6：50MB real workflow streaming 化
+评分至少覆盖：
 
-重点清除 real-agent workflow/helper 中对大文件的：
+1. failure localization；
+2. immediate failure mechanism；
+3. upstream contributor；
+4. evidence support；
+5. contradiction / unsupported claims；
+6. citation accuracy；
+7. fix alignment。
 
-- `read_text()` whole-file load；
-- `read_bytes()` whole-file load；
-- 不必要的全量字符串复制；
-- 可用 chunk / stream 完成却一次性加载的 hash / validation / scan。
+目标是增加 Kubernetes / Flutter / Prometheus / Pulumi / Mobile crash / backend runtime 等独立领域，而不是继续重复放大同一 HDFS case。
 
-目标不是只让 50MB 能跑，而是让同一设计能够继续到 100MB / 500MB。
+### Step 6：评估是否合并回 `refactor/agent-v2`
 
-### Step 7：回归顺序
+只有产品 core 语义、真实 root-cause breadth、资源指标都足够后再做 merge decision。
 
-代码完成后按以下顺序执行，**不能跳级**：
-
-1. normal Core CI；
-2. Evidence Intelligence Benchmark；
-3. 25KB real-agent regression；
-4. 5MB real-agent regression；
-5. 50MB real-agent；
-6. 100MB real-agent；
-7. 500MB real-agent。
-
-任何一级首次失败，都停止继续放大规模，先定位该级失败原因并修复。
-
-## 7. 每个规模 gate 的验收标准
-
-不能只用 workflow green 作为“成功”。每个 size gate 至少需要检查：
-
-- root-cause key concepts 能否命中；
-- 关键 evidence 能否命中；
-- citation 能否命中且可恢复；
-- 压缩后没有丢失决定性 evidence；
-- 相比 raw baseline 有有意义的 token reduction；
-- 没有异常大量重复 `get/search`；
-- 内存保持 bounded；
-- wall time 没有因为压缩/索引开销失控。
-
-如果 token 降低是通过丢 evidence 换来的，则视为失败。
-
-## 8. 关键文件
-
-继续工作时优先检查：
+## 10. 关键文件
 
 ```text
 src/tracecite/runtime/evidence_progress.py
 src/tracecite/runtime/tools.py
 src/tracecite/runtime/investigation.py
 benchmarks/agent-investigation/gmi_scale_host.py
+benchmarks/agent-investigation/SCALE_BENCHMARK.md
+benchmarks/agent-investigation/README.md
+.github/workflows/evidence-tracebench-first3-real.yml
 .github/workflows/evidence-tracebench-50mb-real.yml
-.github/workflows/evidence-tracebench-scale-build.yml
-tests/
-benchmarks/agent-investigation/
+tests/test_gmi_scale_evidence_progress.py
+tests/test_agent_benchmark_evidence_modes.py
 ```
 
 相关设计文档：
 
 ```text
 docs/evidence-intelligence-experiment.zh-CN.md
+docs/evidence-intelligence-work-progress-handoff.zh-CN.md
 ```
 
-## 9. 设计约束
-
-继续实现时保持以下原则：
+## 11. 设计约束
 
 1. **Runtime 做机械事实状态，不做根因推理。**
 2. **Evidence identity / coverage / novelty 判断必须确定性。**
 3. **`NO_NEW_EVIDENCE` 必须基于可证明的“没有新增证据”，而不是启发式猜测。**
-4. **所有 bounded 结构在输入规模继续增长时仍必须 bounded。**
+4. **所有 bounded 结构在输入规模增长时仍必须 bounded。**
 5. **省 token 不能破坏 provenance、coverage disclosure 与 evidence recovery。**
-6. **优先修 core/runtime 语义，再让 benchmark host 使用该语义，避免逻辑长期分叉。**
-7. **大规模 benchmark 一次只提高一个规模级别。**
-8. **CI / benchmark 的失败原因必须有日志或指标证据，不做无证据归因。**
+6. **优先修 core/runtime 语义，再让 benchmark host 变薄，避免逻辑长期分叉。**
+7. **baseline 必须真实且足够强，不人为限制到只能输。**
+8. **provider infra failure 与产品 failure 分开。**
+9. **provider cumulative tokens、tool evidence size、quality、context failure 必须一起解释。**
+10. **不再用更大 MB 数量本身作为产品进度。**
 
-## 10. 交接给下一位执行者时的最短启动路径
+## 12. 交接给下一位执行者时的最短启动路径
 
-接手后不要重新从项目历史开始分析，直接从以下位置继续：
+1. 确认分支仍为 `experiment/evidence-intelligence`；
+2. 不要重新从 100MB / 500MB scale 计划开始；正式 scale gate 已在 50MB 结束；
+3. 阅读 `src/tracecite/runtime/evidence_progress.py` 与 `src/tracecite/runtime/tools.py`；
+4. 检查 benchmark ScaleRuntime 与 canonical runtime 的语义差异；
+5. 优先把 coverage-aware get/expand、novelty-aware search、unified stop reason 下沉 core；
+6. 补 deterministic tests；
+7. 跑 Core CI / Evidence Intelligence；
+8. 若行为影响 Agent evidence transport，再回归 25KB / 5MB / 50MB；
+9. 然后转向多领域真实 root-cause benchmark。
 
-1. 确认分支仍为 `experiment/evidence-intelligence`，记录新的 HEAD；
-2. 确认本文档之后是否已有新 commit；
-3. 尝试关闭 `33150972050` 的 failed-step/log 事实缺口；
-4. 检查 `EvidenceProgressTracker` 与 `tools.py` 当前是否仍未接线；
-5. 从 runtime progress wiring 开始做小 commit；
-6. 每完成一个独立能力就补测试；
-7. 完成 Hard Stop、severity retention、streaming 后再重新开始 size gates；
-8. 在 50MB 通过前不要开始 100MB / 500MB 的“成功验证”。
+## 13. 当前一句话状态
 
-## 11. 当前一句话状态
-
-**Evidence Intelligence 的主体实验和 progress state 已建立，当前真正的工作断点是：把 progress 变成 runtime 的实际执行约束，消灭重复证据读取，修复 bounded signal retention，并从已失败的 50MB real-agent gate 开始按证据逐级打通 50MB → 100MB → 500MB。**
+**Evidence Intelligence 已经通过 25KB / 5MB / 50MB 的真实模型规模验证，并在 50MB 上观察到 TraceCite 保持 bounded/正确而 free-shell context overflow；规模扩张到此结束，当前真正的工作断点是把已验证的 Evidence Progress / coverage / novelty / stop semantics 下沉到 canonical runtime，并用更多独立真实 root-cause case 验证产品价值。**
