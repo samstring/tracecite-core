@@ -2,6 +2,11 @@ name: Evidence Real Agent Pilot
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - ".github/workflows/evidence-real-agent.yml"
 
 permissions:
   contents: read
