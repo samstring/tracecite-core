@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "prometheus-18018",
+  "title": "PromQL empty @ range panic",
+  "source_issue": "https://github.com/prometheus/prometheus/issues/18018",
+  "fix_reference": "https://github.com/prometheus/prometheus/pull/18020",
+  "question_file": "../../questions/real-world-runtime.md",
+  "gold_file": "gold.json",
+  "inputs": [{
+    "id": "incident-evidence",
+    "url": "https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/prometheus-18018.txt",
+    "filename": "evidence.txt",
+    "sha256": "f0a7c4002998447b49725d1e40152f85d529fa1061d20df17973671294e563f2",
+    "required": true
+  }],
+  "provenance": {"project":"prometheus/prometheus","issue_state":"closed","public_log":true,"fix_commit":"eaf47798af7bf31821c1b2b3c6eac36513ff676c","notes":"Fixture contains only reporter-visible incident evidence; fix details are evaluator-only."}
+}

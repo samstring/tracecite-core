@@ -1,0 +1,14 @@
+{
+  "schema_version":1,
+  "case_id":"prometheus-18018",
+  "confirmed_by":["https://github.com/prometheus/prometheus/pull/18020","https://github.com/prometheus/prometheus/commit/eaf47798af7bf31821c1b2b3c6eac36513ff676c"],
+  "summary":"The @ modifier selects no data, leaving empty vector/matrix inputs; PromQL range functions such as predict_linear access element zero without guarding empty input, producing an index-out-of-range panic.",
+  "required_concepts":[
+    {"id":"empty-input","patterns":["(empty|no data).{0,100}(range|vector|matrix|input)","@.{0,100}(empty|no data)"]},
+    {"id":"bounds-failure","patterns":["index out of range","out[- ]of[- ]bounds","access.{0,100}\\[0\\].{0,100}(empty|length|check)"]},
+    {"id":"promql-function","patterns":["funcPredictLinear","predict_linear","PromQL.{0,100}range function","functions\\.go:1504"]}
+  ],
+  "evidence_markers":["index out of range [0]","funcPredictLinear","promql/functions.go:1504"],
+  "thresholds":{"concept_recall":0.6667,"evidence_marker_recall":0.6667},
+  "leak_terms":["eaf47798","unchecked empty arrays"]
+}

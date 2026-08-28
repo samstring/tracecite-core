@@ -1,0 +1,11 @@
+{
+  "schema_version":1,
+  "id":"pulumi-20529",
+  "title":"Pulumi provider update timing-dependent assertion",
+  "source_issue":"https://github.com/pulumi/pulumi/issues/20529",
+  "fix_reference":"https://github.com/pulumi/pulumi/pull/21487",
+  "question_file":"../../questions/real-world-runtime.md",
+  "gold_file":"gold.json",
+  "inputs":[{"id":"incident-evidence","url":"https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/pulumi-20529.txt","filename":"evidence.txt","sha256":"c484d9eaffa7e3aeee742ee75777a7c3c0e040b74af2773bd2bdfe00471e7738","required":true}],
+  "provenance":{"project":"pulumi/pulumi","issue_state":"closed","public_log":true,"fix_pr":21487,"fix_commit":"fdc0ddb43fe53a800ecab2e944c78b8d9751a131","notes":"Fix PR confirms a provider registry race; prompt exposes only incident evidence."}
+}

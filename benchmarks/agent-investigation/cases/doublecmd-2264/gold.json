@@ -1,0 +1,11 @@
+{
+  "schema_version":1,"case_id":"doublecmd-2264","confirmed_by":["https://github.com/doublecmd/doublecmd/commit/63b392d46c14b628bb084cc6084691821faca30f"],
+  "summary":"The immediate failure is EFCreateError while saving WFX/SFTP settings to /usr/share/doublecmd/settings/wfx.ini, a root-owned non-writable installation directory. Changing directory permissions makes it work, so remote network connectivity is not the cause.",
+  "required_concepts":[
+    {"id":"permission-path","patterns":["permission","not writable","non[- ]writable","root[- ]owned"]},
+    {"id":"settings-save","patterns":["wfx\\.ini","settings.{0,80}(save|write|create)","EFCreateError"]},
+    {"id":"not-network","patterns":["not.{0,80}(network|remote|server)","different remote servers","local.{0,80}(write|permission)"]}
+  ],
+  "evidence_markers":["EFCreateError","/usr/share/doublecmd/settings/wfx.ini","TWfxPluginFileSourceConnection"],
+  "thresholds":{"concept_recall":0.6667,"evidence_marker_recall":0.6667},"leak_terms":["63b392d46"]
+}

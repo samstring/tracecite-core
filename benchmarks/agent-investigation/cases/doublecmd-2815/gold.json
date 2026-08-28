@@ -1,0 +1,11 @@
+{
+  "schema_version":1,"case_id":"doublecmd-2815","confirmed_by":["https://github.com/doublecmd/doublecmd/commit/151b8faf18e6a53d0cf1f491426d6f63cf7ce140"],
+  "summary":"Evidence localizes the problem to a macOS built-in viewer/F3 regression introduced after revision 12796 and present by 12831/12833. With no crash log, an exact instruction-level cause is not supported and should be stated as unknown.",
+  "required_concepts":[
+    {"id":"viewer-macos","patterns":["F3","viewer.{0,80}macOS","macOS.{0,80}viewer"]},
+    {"id":"regression-window","patterns":["12796.{0,160}(12831|12833)","(12831|12833).{0,160}12796","regression"]},
+    {"id":"uncertainty-boundary","patterns":["insufficient","cannot.{0,80}determine","no.{0,80}crash log","exact.{0,80}(unknown|not supported)"]}
+  ],
+  "evidence_markers":["Revision 12831","Revision 12796","aarch64-Darwin-cocoa"],
+  "thresholds":{"concept_recall":0.6667,"evidence_marker_recall":0.6667},"leak_terms":["151b8faf"]
+}

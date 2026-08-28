@@ -1,0 +1,11 @@
+{
+  "schema_version":1,"case_id":"doublecmd-2809","confirmed_by":["https://github.com/doublecmd/doublecmd/commit/7b41b586d497e39cd4ef049481e71f01c43d662f"],
+  "summary":"The Brief options UI fails while Lazarus resources deserialize an invalid ChildSizing.EnlargeVertical property. Reproducing with a cleared user config points to a shipped form/resource compatibility/value problem rather than corrupted per-user settings.",
+  "required_concepts":[
+    {"id":"invalid-property","patterns":["EnlargeVertical","Invalid value for property"]},
+    {"id":"resource-load","patterns":["EReadError","lresources\\.pp","resource.{0,80}(read|load|deserial)"]},
+    {"id":"not-user-config","patterns":["clear.{0,100}(config|~/.config)","fresh.{0,80}config","not.{0,80}user.{0,80}config"]}
+  ],
+  "evidence_markers":["gbColumns.ChildSizing.EnlargeVertical","lresources.pp","foptions.pas"],
+  "thresholds":{"concept_recall":0.6667,"evidence_marker_recall":0.6667},"leak_terms":["7b41b586"]
+}

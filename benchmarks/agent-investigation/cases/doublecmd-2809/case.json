@@ -1,0 +1,5 @@
+{
+  "schema_version":1,"id":"doublecmd-2809","title":"Brief options form resource read error","source_issue":"https://github.com/doublecmd/doublecmd/issues/2809","fix_reference":"https://github.com/doublecmd/doublecmd/commit/7b41b586d497e39cd4ef049481e71f01c43d662f","question_file":"../../questions/real-world-runtime.md","gold_file":"gold.json",
+  "inputs":[{"id":"incident-evidence","url":"https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/doublecmd-2809.txt","filename":"evidence.txt","sha256":"3b9bb025228928a8179d9cb5e23a0c88bca47d7a1bd652e63bdc72286c95a3df","required":true}],
+  "provenance":{"project":"doublecmd/doublecmd","issue_state":"closed","public_log":true,"fix_commit":"7b41b586d497e39cd4ef049481e71f01c43d662f"}
+}

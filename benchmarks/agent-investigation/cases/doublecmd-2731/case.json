@@ -1,0 +1,5 @@
+{
+  "schema_version":1,"id":"doublecmd-2731","title":"File association icon path edit crash","source_issue":"https://github.com/doublecmd/doublecmd/issues/2731","fix_reference":"https://github.com/doublecmd/doublecmd/commit/32c34dc006813ab33d76dbf6ed281d4a85279727","question_file":"../../questions/real-world-runtime.md","gold_file":"gold.json",
+  "inputs":[{"id":"incident-evidence","url":"https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/doublecmd-2731.txt","filename":"evidence.txt","sha256":"cb02529a588176ebec2eec2f4fc06c86fea897f7df231485a3af5613d1899632","required":true}],
+  "provenance":{"project":"doublecmd/doublecmd","issue_state":"closed","public_log":true,"fix_commit":"32c34dc006813ab33d76dbf6ed281d4a85279727"}
+}

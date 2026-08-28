@@ -1,0 +1,14 @@
+{
+  "schema_version":1,"case_id":"pulumi-20529",
+  "confirmed_by":["https://github.com/pulumi/pulumi/pull/21487"],
+  "summary":"The evidence indicates a timing-dependent concurrency/race in Pulumi engine provider lifecycle handling while a provider update overlaps replacement/removal work. Registry.Update reaches Update without the expected Check/Diff state.",
+  "required_concepts":[
+    {"id":"concurrency-race","patterns":["race","concurr","timing[- ]dependent","parallel"]},
+    {"id":"provider-registry","patterns":["provider.{0,100}(registry|update)","Registry\\.Update"]},
+    {"id":"lifecycle-order","patterns":["Check.{0,80}Diff.{0,80}Update","Update.{0,120}(without|before).{0,80}(Check|Diff)"]},
+    {"id":"overlapping-change","patterns":["provider.{0,120}(replace|remov|resource)","(replace|remov).{0,120}provider"]}
+  ],
+  "evidence_markers":["'Check' and 'Diff' must be called before 'Update'","Registry).Update","timing"],
+  "thresholds":{"concept_recall":0.75,"evidence_marker_recall":0.6667},
+  "leak_terms":["UnconfiguredID","fdc0ddb43"]
+}

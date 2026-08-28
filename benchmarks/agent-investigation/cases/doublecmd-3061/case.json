@@ -1,0 +1,5 @@
+{
+  "schema_version":1,"id":"doublecmd-3061","title":"YAML viewer access violation","source_issue":"https://github.com/doublecmd/doublecmd/issues/3061","fix_reference":"https://github.com/doublecmd/doublecmd/commit/c054b8e49b68b67031bc6ad140469c194d04b87e","question_file":"../../questions/real-world-runtime.md","gold_file":"gold.json",
+  "inputs":[{"id":"incident-evidence","url":"https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/doublecmd-3061.txt","filename":"evidence.txt","sha256":"9b6fb98f159bf3ed8107c22cc0ce0bd0817dc76fe5275711b91cc81c937f4693","required":true}],
+  "provenance":{"project":"doublecmd/doublecmd","issue_state":"closed","public_log":true,"fix_commit":"c054b8e49b68b67031bc6ad140469c194d04b87e"}
+}

@@ -1,0 +1,5 @@
+{
+  "schema_version":1,"id":"doublecmd-2616","title":"ZIP WCX packing access violation","source_issue":"https://github.com/doublecmd/doublecmd/issues/2616","fix_reference":"https://github.com/doublecmd/doublecmd/commit/2688fd84992f21527466eb07f37140366b15e291","question_file":"../../questions/real-world-runtime.md","gold_file":"gold.json",
+  "inputs":[{"id":"incident-evidence","url":"https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/doublecmd-2616.txt","filename":"evidence.txt","sha256":"3461894c7231f89ad3cb06d3435506c8aa280d70ad34bf28471af8b7f7d32c90","required":true}],
+  "provenance":{"project":"doublecmd/doublecmd","issue_state":"closed","public_log":true,"fix_commit":"2688fd84992f21527466eb07f37140366b15e291"}
+}

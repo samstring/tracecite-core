@@ -1,0 +1,11 @@
+{
+  "schema_version":1,"case_id":"doublecmd-2731","confirmed_by":["https://github.com/doublecmd/doublecmd/commit/32c34dc006813ab33d76dbf6ed281d4a85279727"],
+  "summary":"The crash is triggered while editing/parsing the File Associations icon filename/path field when path separators such as ':' or '/' are encountered, implicating UI text/path parsing rather than a filesystem access failure.",
+  "required_concepts":[
+    {"id":"icon-path-field","patterns":["icon.{0,80}(path|file name|filename)","File Associations"]},
+    {"id":"separator-trigger","patterns":["colon","slash","[:/].{0,80}(trigger|crash)","path separator"]},
+    {"id":"edit-parse-not-io","patterns":["edit.{0,100}(parse|text|field)","not.{0,80}filesystem","before.{0,80}filesystem"]}
+  ],
+  "evidence_markers":["C:/Windows/System32/shell32.dll,1","colon","slash"],
+  "thresholds":{"concept_recall":0.6667,"evidence_marker_recall":0.6667},"leak_terms":["32c34dc"]
+}

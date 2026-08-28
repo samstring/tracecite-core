@@ -1,0 +1,5 @@
+{
+  "schema_version":1,"id":"doublecmd-2777","title":"File Associations Qt6 configuration crash","source_issue":"https://github.com/doublecmd/doublecmd/issues/2777","fix_reference":"https://github.com/doublecmd/doublecmd/commit/61a976d182700e18fed9eb900ea007c0eac29358","question_file":"../../questions/real-world-runtime.md","gold_file":"gold.json",
+  "inputs":[{"id":"incident-evidence","url":"https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/doublecmd-2777.txt","filename":"evidence.txt","sha256":"2138fc3b0a5e18a5306eae2bc84bfcbba371648a14f3370871db1812413b90e2","required":true}],
+  "provenance":{"project":"doublecmd/doublecmd","issue_state":"closed","public_log":true,"fix_commit":"61a976d182700e18fed9eb900ea007c0eac29358"}
+}

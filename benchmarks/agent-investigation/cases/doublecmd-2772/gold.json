@@ -1,0 +1,11 @@
+{
+  "schema_version":1,"case_id":"doublecmd-2772","confirmed_by":["https://github.com/doublecmd/doublecmd/commit/f8342e72a1cbfefbbb1f9cc190fdf0c3964dde3a"],
+  "summary":"Startup fails with EConvertError because an invalid format string/default formatting value is consumed during grid/widget initialization. The repeated grids.pas/Qt widget path is the strongest implicated subsystem.",
+  "required_concepts":[
+    {"id":"format-conversion","patterns":["EConvertError","Illegal character in format string","format string"]},
+    {"id":"grid-widget","patterns":["grids\\.pas","grid.{0,80}(widget|initial|format)","qtwidgets\\.pas"]},
+    {"id":"startup-config-format","patterns":["default.{0,80}format","format.{0,100}(setting|value|config)","startup.{0,100}format"]}
+  ],
+  "evidence_markers":["EConvertError","grids.pas","qtwidgets.pas"],
+  "thresholds":{"concept_recall":0.6667,"evidence_marker_recall":0.6667},"leak_terms":["f8342e72"]
+}

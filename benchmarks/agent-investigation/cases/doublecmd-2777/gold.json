@@ -1,0 +1,11 @@
+{
+  "schema_version":1,"case_id":"doublecmd-2777","confirmed_by":["https://github.com/doublecmd/doublecmd/commit/61a976d182700e18fed9eb900ea007c0eac29358"],
+  "summary":"Opening File Associations with persisted extassoc.xml triggers an EAccessViolation in the Qt6 widget path. Removing the association file clears the immediate failure and recreating configuration restores it, strongly tying the crash to loading/rendering persisted file-association UI state.",
+  "required_concepts":[
+    {"id":"config-dependent","patterns":["extassoc\\.xml","persist.{0,80}(association|config)","delet.{0,80}extassoc"]},
+    {"id":"file-associations","patterns":["File Associations","file-association"]},
+    {"id":"qt-access","patterns":["EAccessViolation","Qt6Widgets","Qt 6"]}
+  ],
+  "evidence_markers":["extassoc.xml","libQt6Widgets.so.6","EAccessViolation"],
+  "thresholds":{"concept_recall":0.6667,"evidence_marker_recall":0.6667},"leak_terms":["61a976d182"]
+}

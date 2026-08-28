@@ -1,0 +1,5 @@
+{
+  "schema_version":1,"id":"doublecmd-2772","title":"Startup illegal format string conversion","source_issue":"https://github.com/doublecmd/doublecmd/issues/2772","fix_reference":"https://github.com/doublecmd/doublecmd/commit/f8342e72a1cbfefbbb1f9cc190fdf0c3964dde3a","question_file":"../../questions/real-world-runtime.md","gold_file":"gold.json",
+  "inputs":[{"id":"incident-evidence","url":"https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/doublecmd-2772.txt","filename":"evidence.txt","sha256":"e76f1b9c6fc0622601170a16fa584cbfa715bdc9d16555db80f7e407d682c503","required":true}],
+  "provenance":{"project":"doublecmd/doublecmd","issue_state":"closed","public_log":true,"fix_commit":"f8342e72a1cbfefbbb1f9cc190fdf0c3964dde3a"}
+}

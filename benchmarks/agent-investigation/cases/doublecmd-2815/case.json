@@ -1,0 +1,5 @@
+{
+  "schema_version":1,"id":"doublecmd-2815","title":"macOS F3 viewer regression","source_issue":"https://github.com/doublecmd/doublecmd/issues/2815","fix_reference":"https://github.com/doublecmd/doublecmd/commit/151b8faf18e6a53d0cf1f491426d6f63cf7ce140","question_file":"../../questions/real-world-runtime.md","gold_file":"gold.json",
+  "inputs":[{"id":"incident-evidence","url":"https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/doublecmd-2815.txt","filename":"evidence.txt","sha256":"d6d491ccc0296afb27f749bc11baf6e52798da34cbc09e137053361e8215898d","required":true}],
+  "provenance":{"project":"doublecmd/doublecmd","issue_state":"closed","public_log":true,"fix_commit":"151b8faf18e6a53d0cf1f491426d6f63cf7ce140"}
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version":1,"case_id":"doublecmd-3061","confirmed_by":["https://github.com/doublecmd/doublecmd/commit/c054b8e49b68b67031bc6ad140469c194d04b87e"],
+  "summary":"A reproducible access violation occurs in the YAML syntax highlighter while handling the escaped/backslash-heavy YAML input; the viewer/SynEdit YAML highlighting path is the strongest implicated subsystem.",
+  "required_concepts":[
+    {"id":"access-violation","patterns":["EAccessViolation","access violation"]},
+    {"id":"yaml-highlighter","patterns":["synhighlighteryaml","YAML.{0,80}(highlighter|highlight)"]},
+    {"id":"escape-trigger","patterns":["backslash","escape.{0,80}(line|YAML|text)"]}
+  ],
+  "evidence_markers":["synhighlighteryaml.pas","line 515","EAccessViolation"],
+  "thresholds":{"concept_recall":0.6667,"evidence_marker_recall":0.6667},"leak_terms":["c054b8e49"]
+}

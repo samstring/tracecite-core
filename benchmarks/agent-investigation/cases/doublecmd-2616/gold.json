@@ -1,0 +1,11 @@
+{
+  "schema_version":1,"case_id":"doublecmd-2616","confirmed_by":["https://github.com/doublecmd/doublecmd/commit/2688fd84992f21527466eb07f37140366b15e291"],
+  "summary":"The immediate crash is an access violation concentrated inside the bundled ZIP WCX plugin, reached through Double Commander's WCX archive path. The evidence strongly implicates plugin initialization/lifetime rather than generic file-panel logic.",
+  "required_concepts":[
+    {"id":"access-violation","patterns":["EAccessViolation","access violation"]},
+    {"id":"zip-wcx","patterns":["zip\\.wcx","ZIP.{0,80}WCX","WCX.{0,80}(plugin|archive)"]},
+    {"id":"plugin-side","patterns":["plugin.{0,120}(fault|crash|initial|lifetime|implicated)","inside.{0,80}zip\\.wcx"]}
+  ],
+  "evidence_markers":["zip.wcx","uwcxmodule.pas","uwcxarchivefilesource.pas"],
+  "thresholds":{"concept_recall":0.6667,"evidence_marker_recall":0.6667},"leak_terms":["double plugin initialization","2688fd849"]
+}

@@ -1,0 +1,5 @@
+{
+  "schema_version":1,"id":"doublecmd-2264","title":"SFTP settings save permission crash","source_issue":"https://github.com/doublecmd/doublecmd/issues/2264","fix_reference":"https://github.com/doublecmd/doublecmd/commit/63b392d46c14b628bb084cc6084691821faca30f","question_file":"../../questions/real-world-runtime.md","gold_file":"gold.json",
+  "inputs":[{"id":"incident-evidence","url":"https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/doublecmd-2264.txt","filename":"evidence.txt","sha256":"51b8e40e91ce5d98ec3e850f307089cbe676c0adf4e670356c4011ad1efad6b1","required":true}],
+  "provenance":{"project":"doublecmd/doublecmd","issue_state":"closed","public_log":true,"fix_commit":"63b392d46c14b628bb084cc6084691821faca30f"}
+}
