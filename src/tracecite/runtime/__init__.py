@@ -123,6 +123,14 @@ from .evidence_progress import (
     StopKind,
     StopReason,
 )
+from .evidence_routing import (
+    EvidenceRoute,
+    EvidenceRoutingPolicy,
+    RoutingDecision,
+    decide_route,
+    estimate_line_addressable_chars,
+    refine_route_after_result,
+)
 from .agent_api import (
     CanonicalInvestigationResult,
     EvidenceRequest,
@@ -230,6 +238,12 @@ __all__ = [
     "RequirementStatus",
     "StopKind",
     "StopReason",
+    "EvidenceRoute",
+    "EvidenceRoutingPolicy",
+    "RoutingDecision",
+    "decide_route",
+    "estimate_line_addressable_chars",
+    "refine_route_after_result",
     "CanonicalInvestigationResult",
     "EvidenceRequest",
     "ProviderTarget",
