@@ -26,6 +26,13 @@ inventing a cause. Your final answer must cite concrete evidence IDs or precise 
 locations that support the conclusion. Keep investigating until the evidence is sufficient
 to give a supported final answer.
 """
+_MAX_FINAL_CONTINUATIONS = 2
+_FINAL_CONTINUATION_PROMPT = (
+    "Your previous assistant response hit the provider output limit before a complete final "
+    "answer was visible. Continue from where it stopped and finish the final answer concisely. "
+    "Prioritize the causal conclusion and precise evidence citations; do not repeat sections "
+    "that were already completed. Do not call more tools unless new evidence is actually needed."
+)
 
 
 def _chat_tools(tools: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -97,17 +104,27 @@ def _usage(response: Mapping[str, Any]) -> dict[str, int]:
     return result
 
 
-def _message(response: Mapping[str, Any]) -> dict[str, Any]:
+def _choice(response: Mapping[str, Any]) -> dict[str, Any]:
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices:
         raise RuntimeError("GMI chat completions response has no choices")
     first = choices[0]
     if not isinstance(first, Mapping):
         raise RuntimeError("GMI chat completions choice is not an object")
+    return dict(first)
+
+
+def _message(response: Mapping[str, Any]) -> dict[str, Any]:
+    first = _choice(response)
     message = first.get("message")
     if not isinstance(message, Mapping):
         raise RuntimeError("GMI chat completions choice has no assistant message")
     return dict(message)
+
+
+def _finish_reason(response: Mapping[str, Any]) -> str | None:
+    value = _choice(response).get("finish_reason")
+    return str(value) if isinstance(value, str) and value else None
 
 
 def _visible_text(message: Mapping[str, Any]) -> str:
@@ -147,6 +164,21 @@ def _tool_calls(message: Mapping[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return calls
+
+
+def _incomplete_final(
+    *,
+    visible: str,
+    usage: Mapping[str, int],
+    finish_reason: str | None,
+    max_output_tokens: int,
+) -> bool:
+    if finish_reason in {"length", "max_tokens"}:
+        return True
+    output_tokens = usage.get("output_tokens")
+    if isinstance(output_tokens, int) and output_tokens >= max_output_tokens:
+        return True
+    return not visible and isinstance(output_tokens, int) and output_tokens > 0
 
 
 class BenchmarkToolRuntime(common.ToolRuntime):
@@ -233,6 +265,8 @@ def run() -> int:
         raise ValueError("TRACECITE_BENCH_MAX_OUTPUT_TOKENS must be 128-8192")
 
     final_text = ""
+    final_chunks: list[str] = []
+    final_continuations = 0
     round_index = 0
     while True:
         round_index += 1
@@ -249,13 +283,15 @@ def run() -> int:
         )
         message = _message(response)
         visible = _visible_text(message)
+        usage = _usage(response)
+        finish_reason = _finish_reason(response)
         event: dict[str, Any] = {
             "type": "model",
             "round": round_index,
             "content": visible,
             "provider_response_id": response.get("id"),
+            "finish_reason": finish_reason,
         }
-        usage = _usage(response)
         if usage:
             event["usage"] = usage
         common._append_event(transcript, event)
@@ -267,7 +303,48 @@ def run() -> int:
         conversation.append(assistant_message)
 
         if not calls:
-            final_text = visible
+            incomplete = _incomplete_final(
+                visible=visible,
+                usage=usage,
+                finish_reason=finish_reason,
+                max_output_tokens=max_output_tokens,
+            )
+            if incomplete and final_continuations < _MAX_FINAL_CONTINUATIONS:
+                if visible:
+                    final_chunks.append(visible)
+                final_continuations += 1
+                common._append_event(
+                    transcript,
+                    {
+                        "type": "protocol",
+                        "event": "final_continuation",
+                        "round": round_index,
+                        "attempt": final_continuations,
+                        "finish_reason": finish_reason,
+                        "visible_chars": len(visible),
+                        "output_tokens": usage.get("output_tokens"),
+                    },
+                )
+                conversation.append({"role": "user", "content": _FINAL_CONTINUATION_PROMPT})
+                continue
+
+            if incomplete:
+                common._append_event(
+                    transcript,
+                    {
+                        "type": "protocol",
+                        "event": "final_incomplete_after_retries",
+                        "round": round_index,
+                        "attempts": final_continuations,
+                        "finish_reason": finish_reason,
+                        "visible_chars": len(visible),
+                        "output_tokens": usage.get("output_tokens"),
+                    },
+                )
+            chunks = [*final_chunks]
+            if visible:
+                chunks.append(visible)
+            final_text = "\n\n".join(chunks).strip()
             break
 
         for call in calls:
