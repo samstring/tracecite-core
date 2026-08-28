@@ -70,14 +70,10 @@ jobs:
           if not target_rows:
               raise SystemExit('target task not found')
 
-          normal_files = sorted(
-              p for p in root.glob('NM_*/event.csv') if p.is_file()
-          )
+          normal_files = sorted(p for p in root.glob('NM_*/event.csv') if p.is_file())
           if not normal_files:
               raise SystemExit('no normal event files found')
 
-          # Materialize a deterministic stream of normal rows only once. Keep source
-          # metadata separate; Agent sees only runtime.csv with no scenario names.
           normal_stream = out_root / '_normal_stream.csv'
           provenance = []
           with normal_stream.open('w', encoding='utf-8', newline='') as out:
@@ -95,7 +91,6 @@ jobs:
                           source_rows += 1
                   provenance.append({'source': str(source.relative_to(root)), 'rows': source_rows, 'bytes': source.stat().st_size})
 
-          # Write the target trace by itself first to establish the natural tens-KB tier.
           target_only = out_root / 'target-only.csv'
           with target_only.open('w', encoding='utf-8', newline='') as out:
               writer = csv.writer(out)
@@ -118,7 +113,6 @@ jobs:
               out_path = out_root / f'{target_size}.csv'
               before_budget = max(0, (target_size - target_bytes) // 2)
               inserted = False
-              normal_rows = 0
               with out_path.open('w', encoding='utf-8', newline='') as out:
                   writer = csv.writer(out)
                   writer.writerow(header)
@@ -127,12 +121,10 @@ jobs:
                           writer.writerows(target_rows)
                           inserted = True
                       writer.writerow(row)
-                      normal_rows += 1
                       if inserted and out.tell() >= target_size:
                           break
                   if not inserted:
                       writer.writerows(target_rows)
-                      inserted = True
               tiers.append((str(target_size), out_path.stat().st_size))
 
           def sha256(path: Path) -> str:
@@ -145,7 +137,6 @@ jobs:
           manifests = []
           for name, size in tiers:
               path = target_only if name == 'target-only' else out_root / f'{name}.csv'
-              # Verify target identity and observable fault signatures survived construction.
               text_hits = {'target_task': 0, 'checksum_exception': 0, 'report_bad_blocks': 0}
               with path.open(encoding='utf-8', errors='replace') as fh:
                   for line in fh:
@@ -204,4 +195,4 @@ jobs:
             /tmp/tb-scale/target-preview.txt
           if-no-files-found: error
 
-# Temporary self-scoped push trigger for model-free size-ladder construction; restore manual-only after validation.
+# Trigger once to verify target-only through 500MB bundles; model-free.
