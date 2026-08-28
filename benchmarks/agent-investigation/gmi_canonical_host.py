@@ -39,14 +39,6 @@ _FINAL_ONLY_PROMPT = (
     "Do not call more tools. Produce the best supported final root-cause answer from evidence already visible, "
     "cite precise source lines, and state unknown/partial where the evidence is insufficient."
 )
-_NO_GROWTH_MARKERS = (
-    '"status":"no_new_evidence"',
-    '"status":"no_match"',
-    "status=no_new_evidence",
-    "status=no_match",
-    "source_exhausted",
-    "frontier_exhausted",
-)
 
 
 def _sha256(path: Path) -> str:
@@ -102,12 +94,46 @@ def _positive_int_env(name: str, default: int) -> int:
     return value
 
 
+def _tool_output_payload(output: Any) -> Mapping[str, Any] | None:
+    if isinstance(output, Mapping):
+        return output
+    if not isinstance(output, str):
+        return None
+    text = output.strip()
+    start = text.find("{")
+    if start < 0:
+        return None
+    try:
+        payload = json.loads(text[start:])
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
 def _tool_output_no_growth(output: Any) -> bool:
-    if isinstance(output, str):
-        text = output.casefold()
-    else:
-        text = json.dumps(output, ensure_ascii=False, sort_keys=True, separators=(",", ":")).casefold()
-    return any(marker in text for marker in _NO_GROWTH_MARKERS)
+    """Return true only for an explicit mechanical stop, never substring hints.
+
+    Fields such as ``frontier_exhausted: false`` appear in ordinary progress
+    payloads, so string matching would incorrectly stop productive exploration.
+    A no-match query also does not prove the source/frontier is exhausted.
+    """
+
+    payload = _tool_output_payload(output)
+    if payload is None:
+        return False
+    status = str(payload.get("status") or "").strip().lower()
+    if status == "no_new_evidence":
+        return True
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return False
+    stop = data.get("stop_reason") or {}
+    if not isinstance(stop, Mapping):
+        return False
+    return str(stop.get("kind") or "").strip().lower() in {
+        "source_exhausted",
+        "frontier_exhausted",
+    }
 
 
 def _trailing_no_growth_rounds(messages: Sequence[Mapping[str, Any]]) -> int:
@@ -206,14 +232,7 @@ def _post_chat_measured(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 class CanonicalRuntime(base.BenchmarkToolRuntime):
-    """Thin benchmark adapter over the public canonical Runtime contract.
-
-    The benchmark owns only tool naming and model transport. Evidence novelty,
-    range coverage, source-version safety and deterministic stop semantics are
-    delegated to ``tracecite.runtime.retrieve`` and persisted through one
-    InvestigationState. This prevents the benchmark adapter from becoming a
-    second, smarter implementation of TraceCite.
-    """
+    """Thin benchmark adapter over the public canonical Runtime contract."""
 
     def __init__(self, *, mode: str, input_root: Path, scratch: Path, context_id: str) -> None:
         super().__init__(mode=mode, input_root=input_root, scratch=scratch, context_id=context_id)
@@ -227,6 +246,27 @@ class CanonicalRuntime(base.BenchmarkToolRuntime):
         view = project(payload, profile="agent")
         if view.get("operation") == "search":
             view = trace_cli._compact_search_result(view, max_output_chars=None)
+        elif view.get("operation") == "expand":
+            coverage = view.get("coverage") or {}
+            evidence = view.get("evidence") or []
+            if isinstance(coverage, Mapping) and isinstance(evidence, list) and evidence:
+                first = evidence[0]
+                if isinstance(first, Mapping):
+                    source_name = Path(str(first.get("source_path") or "source")).name
+                    start = coverage.get("context_start_line")
+                    end = coverage.get("context_end_line")
+                    if (
+                        isinstance(start, int)
+                        and not isinstance(start, bool)
+                        and isinstance(end, int)
+                        and not isinstance(end, bool)
+                        and end >= start
+                    ):
+                        data = dict(view.get("data") or {})
+                        data["visible_line_refs"] = [
+                            f"{source_name}:{line}" for line in range(start, end + 1)
+                        ]
+                        view["data"] = data
         rendered = json.dumps(view, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return f"{prefix}\n{rendered}" if prefix else rendered
 
@@ -339,7 +379,7 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
         common._function_tool(
             "tracecite_get",
             (
-                "Recover exact context around a known line through the canonical Runtime. radius is bounded to 0-8; "
+                "Recover exact line-addressable context around a known line through the canonical Runtime. radius is bounded to 0-8; "
                 "slight model overshoot is normalized to 8 instead of wasting a model turn."
             ),
             {
