@@ -42,6 +42,15 @@ _BASE_ENV = (
     "LANG",
     "LC_ALL",
 )
+_SPECIFIC_FAILURE_REASONS = frozenset(
+    {
+        "context_window_exceeded",
+        "tool_timeout",
+        "provider_insufficient_balance",
+        "provider_rate_limited",
+        "provider_unavailable",
+    }
+)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -122,6 +131,34 @@ def _iter_events(path: Path) -> list[dict[str, Any]]:
 def _append_event(path: Path, event: Mapping[str, Any]) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(dict(event), ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _preserved_failure_reason(path: Path) -> str:
+    """Keep a host's concrete provider/context reason across runner wrapping.
+
+    Some hosts emit a precise ``host_error`` and then exit non-zero.  The outer
+    runner must not append a later generic ``host_error`` that downgrades a 402,
+    rate limit, provider outage, context overflow, or timeout into an opaque
+    failure in suite aggregation.
+    """
+
+    if not path.is_file():
+        return "host_error"
+    reason = "host_error"
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, Mapping) or event.get("type") != "host_error":
+                continue
+            candidate = str(event.get("failure_reason") or "").strip()
+            if candidate in _SPECIFIC_FAILURE_REASONS:
+                reason = candidate
+    return reason
 
 
 def run_host(
@@ -222,6 +259,7 @@ def run_host(
                     transcript,
                     {
                         "type": "host_error",
+                        "failure_reason": _preserved_failure_reason(transcript),
                         "returncode": returncode,
                         "stdout_chars": len(stdout),
                         "stderr_chars": len(stderr),
@@ -236,6 +274,7 @@ def run_host(
                 transcript,
                 {
                     "type": "host_error",
+                    "failure_reason": "tool_timeout",
                     "error": "timeout",
                     "timeout_seconds": timeout_seconds,
                     "stdout_chars": len(stdout),
