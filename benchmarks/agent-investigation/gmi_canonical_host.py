@@ -18,6 +18,7 @@ from tracecite.runtime import (
     InvestigationStore,
     QueryTarget,
     RangeTarget,
+    SourceTarget,
     retrieve,
 )
 
@@ -129,14 +130,7 @@ class CanonicalRuntime(base.BenchmarkToolRuntime):
         path = common._safe_input(self.input_root, file_name)
         result = retrieve(
             EvidenceRequest(
-                QueryTarget(
-                    path,
-                    ".*",
-                    regex=True,
-                    snapshot=False,
-                    max_evidence=None,
-                    max_line_chars=None,
-                ),
+                SourceTarget(path),
                 investigation_path=self._investigation_path,
                 cache=True,
             )
@@ -217,7 +211,7 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
             "tracecite_inspect",
             (
                 "Inspect one raw evidence source through TraceCite's canonical Runtime before forming a root-cause conclusion. "
-                "Repeated evidence is mechanically suppressed by the linked InvestigationState."
+                "This returns bounded source structure/coverage rather than dumping the whole source into model context."
             ),
             {"file": file_property},
             ["file"],
