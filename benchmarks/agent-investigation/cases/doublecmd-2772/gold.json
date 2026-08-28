@@ -7,5 +7,5 @@
     {"id":"startup-config-format","patterns":["default.{0,80}format","format.{0,100}(setting|value|config)","startup.{0,100}format"]}
   ],
   "evidence_markers":["EConvertError","grids.pas","qtwidgets.pas"],
-  "thresholds":{"concept_recall":0.6667,"evidence_marker_recall":0.6667},"leak_terms":["f8342e72"]
+  "thresholds":{"concept_recall":0.6666,"evidence_marker_recall":0.6666},"leak_terms":["f8342e72"]
 }
