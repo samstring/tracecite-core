@@ -1,0 +1,239 @@
+name: TraceBench First 3 Real Agent
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - ".github/workflows/evidence-tracebench-first3-real.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  first-three-tiers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1600"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install TraceCite and fair baseline tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[dev]"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ripgrep
+          command -v rg
+      - name: Validate model configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is not configured"; exit 1; }
+          test -n "$BENCH_MODEL" || { echo "TRACECITE_BENCH_MODEL is not configured"; exit 1; }
+      - name: Download and verify pinned TraceBench
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tb-first3/archive
+          curl -L --retry 5 --retry-delay 2 \
+            -o /tmp/tb-first3/archive/HDFS_v3_TraceBench.zip \
+            'https://zenodo.org/records/8196385/files/HDFS_v3_TraceBench.zip?download=1'
+          echo 'c69999ff28933d2b163170d26c2faf64  /tmp/tb-first3/archive/HDFS_v3_TraceBench.zip' | md5sum -c -
+      - name: Build deterministic 25KB, 500KB and 5MB evidence tiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tb-first3/extracted
+          cd /tmp/tb-first3/extracted
+          unzip -q /tmp/tb-first3/archive/HDFS_v3_TraceBench.zip \
+            'tracebench/AN_Data_corruptBlk_r_30FDN_30C_1to19B_0to120INT_15RT_5WT/event.csv' \
+            'tracebench/NM_*/event.csv'
+          cd "$GITHUB_WORKSPACE"
+          python - <<'PY'
+          from __future__ import annotations
+          import csv, hashlib, json
+          from pathlib import Path
+
+          root = Path('/tmp/tb-first3/extracted/tracebench')
+          fault = root / 'AN_Data_corruptBlk_r_30FDN_30C_1to19B_0to120INT_15RT_5WT' / 'event.csv'
+          target_task = 'EC78D31AEC1E64FD'
+          out_root = Path('/tmp/tb-first3/tiers')
+          out_root.mkdir(parents=True, exist_ok=True)
+
+          with fault.open(encoding='utf-8', errors='replace', newline='') as fh:
+              reader = csv.reader(fh)
+              header = next(reader)
+              target_rows = [row for row in reader if row and row[0] == target_task]
+          assert len(target_rows) == 143, len(target_rows)
+
+          normal_files = sorted(p for p in root.glob('NM_*/event.csv') if p.is_file())
+          assert normal_files
+
+          def normal_rows():
+              for source in normal_files:
+                  with source.open(encoding='utf-8', errors='replace', newline='') as fh:
+                      reader = csv.reader(fh)
+                      source_header = next(reader, None)
+                      if source_header != header:
+                          raise RuntimeError(f'header mismatch: {source}')
+                      yield from reader
+
+          def write_target(path: Path) -> None:
+              with path.open('w', encoding='utf-8', newline='') as out:
+                  writer = csv.writer(out)
+                  writer.writerow(header)
+                  writer.writerows(target_rows)
+
+          target_path = out_root / 'target-only.csv'
+          write_target(target_path)
+          target_bytes = target_path.stat().st_size
+          assert target_bytes == 25600, target_bytes
+
+          for target_size in (500_000, 5_000_000):
+              path = out_root / f'{target_size}.csv'
+              before_budget = max(0, (target_size - target_bytes) // 2)
+              inserted = False
+              with path.open('w', encoding='utf-8', newline='') as out:
+                  writer = csv.writer(out)
+                  writer.writerow(header)
+                  for row in normal_rows():
+                      if not inserted and out.tell() >= before_budget:
+                          writer.writerows(target_rows)
+                          inserted = True
+                      writer.writerow(row)
+                      if inserted and out.tell() >= target_size:
+                          break
+                  if not inserted:
+                      writer.writerows(target_rows)
+
+          expected = {
+              'target-only.csv': (25600, '8a99726a33e3d1d651c13a481df34574990c838cf0388f25eb6809d5bb303a43'),
+              '500000.csv': (500162, 'df1861fe7d0cf1f1a779770b192a27164c0c38141a63f6b67a3a4fdab04eba3a'),
+              '5000000.csv': (5000105, '6f15b49df8981bacf9743ac8e2480e3fc4b98063196b3653c45591d5aae75804'),
+          }
+          manifest = []
+          for name, (expected_bytes, expected_sha) in expected.items():
+              path = out_root / name
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              if path.stat().st_size != expected_bytes or digest != expected_sha:
+                  raise RuntimeError(f'deterministic tier mismatch: {name} bytes={path.stat().st_size} sha={digest}')
+              text = path.read_text(encoding='utf-8', errors='replace')
+              if text.count(target_task) != 143 or text.lower().count('checksumexception') < 4 or text.lower().count('reportbadblocks') < 8:
+                  raise RuntimeError(f'fault truth missing from {name}')
+              manifest.append({'file': name, 'bytes': path.stat().st_size, 'sha256': digest})
+          Path('/tmp/tb-first3/tier-manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+          print(json.dumps(manifest, indent=2))
+          PY
+      - name: Run paired MiniMax investigation on first three tiers
+        shell: bash
+        run: |
+          set -uo pipefail
+          root=/tmp/tb-first3
+          mkdir -p "$root/results/runs" "$root/results/scores" "$root/results/failures"
+          failed=0
+          for spec in 'target-only.csv:25kb' '500000.csv:500kb' '5000000.csv:5mb'; do
+            file=${spec%%:*}
+            tier=${spec##*:}
+            size=$(stat -c '%s' "$root/tiers/$file")
+            sha=$(sha256sum "$root/tiers/$file" | awk '{print $1}')
+            case_dir="$root/cases/$tier"
+            input_dir="$root/inputs/$tier"
+            mkdir -p "$case_dir" "$input_dir"
+            cp "$root/tiers/$file" "$input_dir/runtime.csv"
+            cat > "$case_dir/question.md" <<'EOF'
+          Using only the supplied HDFS runtime evidence, investigate the failed copy-to-local activity. Identify the affected task/trace, reconstruct the relevant failure sequence, state the immediate failure mechanism, and identify the most likely underlying data-integrity problem. Distinguish direct observation from inference and cite precise runtime.csv line locations. Do not assume any injected-fault label or outside knowledge.
+          EOF
+            cat > "$case_dir/gold.json" <<'EOF'
+          {
+            "required_concepts": [
+              {"id":"target-task","patterns":["EC78D31AEC1E64FD"]},
+              {"id":"copy-operation","patterns":["copyToLocal|copy[- ]?to[- ]?local"]},
+              {"id":"checksum-mechanism","patterns":["ChecksumException|checksum.{0,30}(?:error|mismatch|fail)"]},
+              {"id":"bad-block-sequence","patterns":["reportBadBlocks|bad block|block.{0,30}(?:bad|unavailable|corrupt)"]},
+              {"id":"data-integrity-cause","patterns":["(?:data|block).{0,40}corrupt|corrupt(?:ed|ion).{0,40}(?:data|block)|block data.{0,40}(?:modified|damaged|corrupt)"]},
+              {"id":"source-citation","patterns":["runtime\\.csv:\\d+|#L\\d+|(?:line|lines)\\s+\\d+"]}
+            ],
+            "evidence_markers": ["EC78D31AEC1E64FD", "ChecksumException", "reportBadBlocks"],
+            "thresholds": {"concept_recall":1.0,"evidence_marker_recall":1.0},
+            "leak_terms": ["AN_Data_corruptBlk", "data blocks modified on some DataNodes"]
+          }
+          EOF
+            python - "$case_dir/case.json" "$tier" "$sha" <<'PY'
+          import json, sys
+          path, tier, sha = sys.argv[1:]
+          payload = {
+              'schema_version': 1,
+              'id': f'tracebench-corrupt-block-{tier}',
+              'question_file': 'question.md',
+              'gold_file': 'gold.json',
+              'inputs': [{
+                  'id': f'tracebench-derived-{tier}',
+                  'url': 'derived://tracebench/HDFS_v3/runtime.csv',
+                  'filename': 'runtime.csv',
+                  'sha256': sha,
+              }],
+          }
+          open(path, 'w', encoding='utf-8').write(json.dumps(payload, indent=2)+'\n')
+          PY
+            python -m tracecite.benchmarking validate "$case_dir"
+            python - "$root/prepared-$tier.json" "$input_dir/runtime.csv" "$size" "$sha" "$case_dir/question.md" "$tier" <<'PY'
+          import json, sys
+          path, source, size, sha, question, tier = sys.argv[1:]
+          payload = {
+              'schema_version': 1,
+              'case_id': f'tracebench-corrupt-block-{tier}',
+              'question': question,
+              'inputs': [{'id':f'tracebench-derived-{tier}','path':source,'bytes':int(size),'sha256':sha,'source_url':'derived://tracebench/HDFS_v3/runtime.csv'}],
+          }
+          open(path, 'w', encoding='utf-8').write(json.dumps(payload, indent=2)+'\n')
+          PY
+
+            for mode in free_shell tracecite; do
+              echo "== TraceBench $tier / $mode =="
+              transcript="$root/results/runs/${tier}-${mode}.jsonl"
+              score="$root/results/scores/${tier}-${mode}.json"
+              if python benchmarks/agent-investigation/run_host.py \
+                "$case_dir" "$root/prepared-$tier.json" \
+                --mode "$mode" \
+                --model "$BENCH_MODEL" \
+                --seed 1 \
+                --timeout-seconds 600 \
+                --output "$transcript" \
+                --pass-env OPENAI_API_KEY \
+                --pass-env OPENAI_BASE_URL \
+                --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
+                -- python benchmarks/agent-investigation/gmi_scale_host.py; then
+                if python -m tracecite.benchmarking score "$case_dir" "$transcript" > "$score"; then
+                  cat "$score"
+                else
+                  failed=$((failed + 1))
+                  cat "$score" || true
+                fi
+              else
+                failed=$((failed + 1))
+                printf '{"tier":"%s","mode":"%s","stage":"host"}\n' "$tier" "$mode" > "$root/results/failures/${tier}-${mode}.json"
+                tail -n 8 "$transcript" || true
+              fi
+            done
+          done
+          printf '{"requested":6,"failed":%d}\n' "$failed" | tee "$root/results/batch-summary.json"
+      - name: Upload first-three results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracebench-first3-real-agent
+          path: |
+            /tmp/tb-first3/results
+            /tmp/tb-first3/tier-manifest.json
+          if-no-files-found: error
+
+# Temporary branch/path push trigger. Restore manual-only after the first-three validation run.
