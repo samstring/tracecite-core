@@ -135,4 +135,4 @@ jobs:
             /tmp/bgl-scale/input-metadata.json
           if-no-files-found: error
 
-# Temporary self-scoped push trigger for one paid smoke; restore manual-only after validation.
+# Triggered once for the pinned 317KB BGL paired smoke; restore manual-only after validation.
