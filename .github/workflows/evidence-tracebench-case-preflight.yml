@@ -95,4 +95,4 @@ jobs:
             /tmp/tb/case-analysis.json
           if-no-files-found: error
 
-# Temporary self-scoped push trigger for one model-free case analysis; restore manual-only afterwards.
+# Triggered once for model-free corrupt-block schema analysis; restore manual-only afterwards.
