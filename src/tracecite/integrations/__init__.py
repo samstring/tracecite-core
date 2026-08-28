@@ -7,7 +7,12 @@ from .agent_profile import (
     profile_names,
     select_agent_profile,
 )
-from .agent_projection import prefer_smaller_agent_view
+from .agent_projection import (
+    Projection,
+    ProjectionProfile,
+    prefer_smaller_agent_view,
+    project,
+)
 from .context_engine import (
     CONTEXT_SCHEMA_VERSION,
     ContextEngine,
@@ -23,9 +28,12 @@ __all__ = [
     "ContextEngine",
     "ContextState",
     "ContextStateStore",
+    "Projection",
+    "ProjectionProfile",
     "get_agent_profile",
     "prefer_smaller_agent_view",
     "profile_names",
+    "project",
     "project_search_delta",
     "select_agent_profile",
 ]
