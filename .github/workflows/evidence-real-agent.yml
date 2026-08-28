@@ -70,6 +70,7 @@ jobs:
           python -m py_compile \
             benchmarks/agent-investigation/openai_host.py \
             benchmarks/agent-investigation/gmi_host.py \
+            benchmarks/agent-investigation/gmi_host_v2.py \
             benchmarks/agent-investigation/free_shell.py \
             benchmarks/agent-investigation/run_host.py
           python -m tracecite.benchmarking validate benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence
@@ -98,7 +99,7 @@ jobs:
               --pass-env OPENAI_API_KEY \
               --pass-env OPENAI_BASE_URL \
               --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
-              -- python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_host.py"
+              -- python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_host_v2.py"
             python -m tracecite.benchmarking score "$case_dir" "$transcript" > "$score"
           done
           python benchmarks/agent-investigation/aggregate_scores.py \
