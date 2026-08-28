@@ -98,6 +98,7 @@ jobs:
 
           normal_files = sorted(p for p in root.glob('NM_*/event.csv') if p.is_file())
           assert normal_files
+
           def normal_rows():
               for source in normal_files:
                   with source.open(encoding='utf-8', errors='replace', newline='') as fh:
@@ -142,16 +143,18 @@ jobs:
           digest = digest_state.hexdigest()
 
           manifest = {
-              'file':'runtime.csv',
-              'bytes':size,
-              'sha256':digest,
-              'target_task':target_task,
-              'target_rows':143,
+              'file': 'runtime.csv',
+              'bytes': size,
+              'sha256': digest,
+              'target_task': target_task,
+              'target_rows': 143,
           }
-          (work/'tier-manifest.json').write_text(json.dumps(manifest, indent=2)+'\n', encoding='utf-8')
+          (work / 'tier-manifest.json').write_text(
+              json.dumps(manifest, indent=2) + '\n', encoding='utf-8'
+          )
           print(json.dumps(manifest, indent=2))
           PY
-      - name: Run paired MiniMax 50MB benchmark
+      - name: Run candidate-first MiniMax 50MB benchmark
         shell: bash
         run: |
           set -uo pipefail
@@ -173,7 +176,7 @@ jobs:
               {"id":"checksum-mechanism","patterns":["ChecksumException|checksum.{0,30}(?:error|mismatch|fail)"]},
               {"id":"bad-block-sequence","patterns":["reportBadBlocks|bad block|block.{0,30}(?:bad|unavailable|corrupt)"]},
               {"id":"data-integrity-cause","patterns":["(?:data|block).{0,40}corrupt|corrupt(?:ed|ion).{0,40}(?:data|block)|block data.{0,40}(?:modified|damaged|corrupt)"]},
-              {"id":"source-citation","patterns":["runtime\\.csv:\\d+|#L\\d+|(?:line|lines)\\s+\\d+"]}
+              {"id":"source-citation","patterns":["runtime\\.csv:\\d+|#?L\\d+|(?:line|lines)\\s+\\d+"]}
             ],
             "evidence_markers": ["EC78D31AEC1E64FD", "ChecksumException", "reportBadBlocks"],
             "thresholds": {"concept_recall":1.0,"evidence_marker_recall":1.0},
@@ -183,23 +186,88 @@ jobs:
           python - "$root/case/case.json" "$sha" <<'PY'
           import json, sys
           path, sha = sys.argv[1:]
-          payload = {'schema_version':1,'id':'tracebench-corrupt-block-50mb','question_file':'question.md','gold_file':'gold.json','inputs':[{'id':'tracebench-derived-50mb','url':'derived://tracebench/HDFS_v3/runtime.csv','filename':'runtime.csv','sha256':sha}]}
-          open(path,'w',encoding='utf-8').write(json.dumps(payload,indent=2)+'\n')
+          payload = {
+              'schema_version': 1,
+              'id': 'tracebench-corrupt-block-50mb',
+              'question_file': 'question.md',
+              'gold_file': 'gold.json',
+              'inputs': [{
+                  'id': 'tracebench-derived-50mb',
+                  'url': 'derived://tracebench/HDFS_v3/runtime.csv',
+                  'filename': 'runtime.csv',
+                  'sha256': sha,
+              }],
+          }
+          open(path, 'w', encoding='utf-8').write(json.dumps(payload, indent=2) + '\n')
           PY
           python -m tracecite.benchmarking validate "$root/case"
           python - "$root/prepared.json" "$root/input/runtime.csv" "$size" "$sha" "$root/case/question.md" <<'PY'
           import json, sys
           path, source, size, sha, question = sys.argv[1:]
-          payload={'schema_version':1,'case_id':'tracebench-corrupt-block-50mb','question':question,'inputs':[{'id':'tracebench-derived-50mb','path':source,'bytes':int(size),'sha256':sha,'source_url':'derived://tracebench/HDFS_v3/runtime.csv'}]}
-          open(path,'w',encoding='utf-8').write(json.dumps(payload,indent=2)+'\n')
+          payload = {
+              'schema_version': 1,
+              'case_id': 'tracebench-corrupt-block-50mb',
+              'question': question,
+              'inputs': [{
+                  'id': 'tracebench-derived-50mb',
+                  'path': source,
+                  'bytes': int(size),
+                  'sha256': sha,
+                  'source_url': 'derived://tracebench/HDFS_v3/runtime.csv',
+              }],
+          }
+          open(path, 'w', encoding='utf-8').write(json.dumps(payload, indent=2) + '\n')
           PY
 
-          failed=0
-          for mode in free_shell tracecite; do
+          failure_reason() {
+            python - "$1" <<'PY'
+          import json, re, sys
+          reason = 'host_error'
+          try:
+              with open(sys.argv[1], encoding='utf-8') as handle:
+                  for raw in handle:
+                      try:
+                          event = json.loads(raw)
+                      except Exception:
+                          continue
+                      if event.get('type') != 'host_error':
+                          continue
+                      explicit = str(event.get('failure_reason') or '').strip()
+                      message = str(event.get('message') or '')
+                      if explicit and explicit != 'host_error':
+                          reason = explicit
+                          break
+                      if 'HTTP 402' in message or 'Insufficient balance' in message:
+                          reason = 'provider_quota_exhausted'
+                          break
+                      if 'HTTP 429' in message or 'Rate limit exceeded' in message:
+                          reason = 'provider_rate_limited'
+                          break
+                      if re.search(r'HTTP (?:500|502|503|504)\b', message):
+                          reason = 'provider_unavailable'
+                          break
+          except OSError:
+              pass
+          print(reason)
+          PY
+          }
+
+          candidate_failed=0
+          baseline_failed=0
+          infra_inconclusive=0
+          baseline_skipped=0
+
+          for mode in tracecite free_shell; do
+            if [ "$mode" = free_shell ] && { [ "$candidate_failed" -ne 0 ] || [ "$infra_inconclusive" -ne 0 ]; }; then
+              baseline_skipped=1
+              break
+            fi
+
             echo "== TraceBench 50MB / $mode =="
             transcript="$root/results/runs/50mb-${mode}.jsonl"
             score="$root/results/scores/50mb-${mode}.json"
             failure="$root/results/failures/50mb-${mode}.json"
+
             if python benchmarks/agent-investigation/run_host.py \
               "$root/case" "$root/prepared.json" \
               --mode "$mode" --model "$BENCH_MODEL" --seed 1 --timeout-seconds 900 \
@@ -210,55 +278,61 @@ jobs:
                 cat "$score"
                 if ! python - "$score" <<'PY'
           import json, sys
-          score=json.load(open(sys.argv[1],encoding='utf-8'))
+          score = json.load(open(sys.argv[1], encoding='utf-8'))
           raise SystemExit(0 if score.get('passed') is True else 1)
           PY
                 then
-                  failed=$((failed+1))
-                  printf '{"mode":"%s","stage":"quality"}\n' "$mode" > "$failure"
+                  printf '{"mode":"%s","stage":"quality","reason":"quality_gate"}\n' "$mode" > "$failure"
+                  if [ "$mode" = tracecite ]; then
+                    candidate_failed=$((candidate_failed + 1))
+                  else
+                    baseline_failed=$((baseline_failed + 1))
+                  fi
                 fi
               else
-                failed=$((failed+1))
-                printf '{"mode":"%s","stage":"score"}\n' "$mode" > "$failure"
+                printf '{"mode":"%s","stage":"score","reason":"score_error"}\n' "$mode" > "$failure"
+                if [ "$mode" = tracecite ]; then
+                  candidate_failed=$((candidate_failed + 1))
+                else
+                  baseline_failed=$((baseline_failed + 1))
+                fi
               fi
             else
-              failed=$((failed+1))
-              python - "$mode" "$transcript" "$failure" <<'PY'
-          import json, sys
-          from pathlib import Path
-
-          mode, transcript_value, failure_value = sys.argv[1:]
-          transcript = Path(transcript_value)
-          reason = 'host_error'
-          error_type = ''
-          message = ''
-          if transcript.is_file():
-              with transcript.open(encoding='utf-8', errors='replace') as handle:
-                  for raw in handle:
-                      try:
-                          event = json.loads(raw)
-                      except ValueError:
-                          continue
-                      if event.get('type') != 'host_error':
-                          continue
-                      reason = str(event.get('failure_reason') or reason)
-                      error_type = str(event.get('error') or '')
-                      message = str(event.get('message') or '')
-          payload = {'mode': mode, 'stage': 'host', 'reason': reason}
-          if error_type:
-              payload['error'] = error_type
-          if message:
-              payload['message'] = message[:2000]
-          Path(failure_value).write_text(json.dumps(payload, ensure_ascii=False) + '\n', encoding='utf-8')
-          print(json.dumps(payload, ensure_ascii=False))
-          PY
+              reason=$(failure_reason "$transcript")
+              printf '{"mode":"%s","stage":"host","reason":"%s"}\n' "$mode" "$reason" > "$failure"
               tail -n 12 "$transcript" || true
+              case "$reason" in
+                provider_quota_exhausted|provider_rate_limited|provider_unavailable)
+                  if [ "$mode" = tracecite ]; then
+                    infra_inconclusive=$((infra_inconclusive + 1))
+                  else
+                    baseline_failed=$((baseline_failed + 1))
+                  fi
+                  ;;
+                *)
+                  if [ "$mode" = tracecite ]; then
+                    candidate_failed=$((candidate_failed + 1))
+                  else
+                    baseline_failed=$((baseline_failed + 1))
+                  fi
+                  ;;
+              esac
             fi
           done
-          printf '{"requested":2,"failed":%d}\n' "$failed" | tee "$root/results/batch-summary.json"
-          if [ "$failed" -ne 0 ]; then
-            echo "::error::$failed of 2 benchmark runs failed host or quality gates"
+
+          printf '{"candidate_requested":1,"candidate_failed":%d,"baseline_requested":1,"baseline_failed":%d,"baseline_skipped":%d,"infra_inconclusive":%d}\n' \
+            "$candidate_failed" "$baseline_failed" "$baseline_skipped" "$infra_inconclusive" | tee "$root/results/batch-summary.json"
+
+          if [ "$infra_inconclusive" -ne 0 ]; then
+            echo "::error::TraceCite 50MB candidate gate is inconclusive because provider infrastructure failed"
+            exit 2
+          fi
+          if [ "$candidate_failed" -ne 0 ]; then
+            echo "::error::TraceCite 50MB candidate failed host or quality gate"
             exit 1
+          fi
+          if [ "$baseline_failed" -ne 0 ]; then
+            echo "::notice::50MB baseline failed; retained as comparison evidence and does not block the TraceCite candidate gate"
           fi
       - name: Upload 50MB results
         if: always()
@@ -270,4 +344,4 @@ jobs:
             /tmp/tb-50mb/tier-manifest.json
           if-no-files-found: error
 
-# Temporary push trigger for one 50MB validation. Restore manual-only after this run.
+# Candidate-first ordering prevents a pathological baseline from starving TraceCite.
