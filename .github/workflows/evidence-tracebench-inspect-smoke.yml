@@ -2,11 +2,6 @@ name: TraceBench Inspect Smoke
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - experiment/evidence-intelligence
-    paths:
-      - ".github/workflows/evidence-tracebench-inspect-smoke.yml"
 
 permissions:
   contents: read
@@ -165,5 +160,3 @@ jobs:
           name: tracebench-inspect-smoke
           path: /tmp/tb-inspect/outputs
           if-no-files-found: error
-
-# Temporary push trigger for the first model-free validation. Restore manual-only after success.
