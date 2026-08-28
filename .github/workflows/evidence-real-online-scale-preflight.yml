@@ -1,8 +1,10 @@
 name: Real Online Scale 10 Preflight
 
 # Deterministic, no-model qualification for the real online benchmark set.
-# It downloads the original public incident evidence, records actual size/SHA,
-# verifies issue/fix provenance, and rejects synthetic or out-of-ceiling inputs.
+# It downloads the selected original public incident evidence, records actual
+# size/SHA, verifies issue/fix provenance, and separately discovers natural
+# .log/.txt/.out artifacts from the same public CI run. Discovery never mutates
+# or auto-selects benchmark evidence.
 on:
   workflow_dispatch:
   push:
@@ -10,6 +12,7 @@ on:
       - experiment/evidence-intelligence
     paths:
       - benchmarks/agent-investigation/real-online-scale-10.json
+      - benchmarks/agent-investigation/discover_real_online_evidence.py
       - .github/workflows/evidence-real-online-scale-preflight.yml
 
 permissions:
@@ -24,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download and qualify real incident evidence
+      - name: Download and qualify selected real incident evidence
         shell: bash
         run: |
           set -euo pipefail
@@ -207,15 +210,26 @@ jobs:
           print(json.dumps(report, indent=2, sort_keys=True))
           PY
 
-      - name: Upload qualification report
+      - name: Discover natural text logs in the same public incident runs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python benchmarks/agent-investigation/discover_real_online_evidence.py \
+            --manifest benchmarks/agent-investigation/real-online-scale-10.json \
+            --output /tmp/real-online-scale-10/discovery.json
+
+      - name: Upload qualification and discovery reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: real-online-scale-10-preflight
-          path: /tmp/real-online-scale-10/preflight.json
+          path: |
+            /tmp/real-online-scale-10/preflight.json
+            /tmp/real-online-scale-10/discovery.json
           if-no-files-found: error
 
-      - name: Enforce qualification gate
+      - name: Enforce selected-evidence qualification gate
         shell: bash
         run: |
           set -euo pipefail
