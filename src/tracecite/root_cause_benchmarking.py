@@ -193,11 +193,16 @@ def _tool_line_refs(text: str) -> set[int]:
     return result
 
 
+def _visible_line_refs(tool_outputs: Iterable[str]) -> set[int]:
+    visible: set[int] = set()
+    for output in tool_outputs:
+        visible.update(_tool_line_refs(output))
+    return visible
+
+
 def _citation_quality(answer: str, tool_outputs: list[str]) -> dict[str, Any]:
     answer_refs = _line_refs(answer)
-    visible_refs: set[int] = set()
-    for output in tool_outputs:
-        visible_refs.update(_tool_line_refs(output))
+    visible_refs = _visible_line_refs(tool_outputs)
     valid = answer_refs & visible_refs
     invalid = answer_refs - visible_refs
     accuracy = len(valid) / len(answer_refs) if answer_refs else 0.0
@@ -209,6 +214,51 @@ def _citation_quality(answer: str, tool_outputs: list[str]) -> dict[str, Any]:
         "cited_lines": sorted(answer_refs),
         "invalid_lines": sorted(invalid),
     }
+
+
+def _answer_blocks(answer: str) -> list[str]:
+    """Return paragraph-sized claim units without interpreting semantics."""
+
+    return [
+        block.strip()
+        for block in re.split(r"\n\s*\n", answer)
+        if block.strip()
+    ]
+
+
+def _dimension_evidence_support(
+    answer: str,
+    gold: Mapping[str, Any],
+    tool_outputs: list[str],
+) -> list[dict[str, Any]]:
+    """Bind each root-cause rubric hit to valid evidence cited in that block.
+
+    Global citation accuracy alone can be gamed accidentally: an answer may hit
+    a correct root-cause regex in one paragraph and cite an unrelated visible
+    line elsewhere.  This mechanical check requires the paragraph containing
+    the dimension claim itself to carry at least one line reference that the
+    model actually saw in tool output.
+    """
+
+    rubric = gold["root_cause"]
+    visible = _visible_line_refs(tool_outputs)
+    blocks = _answer_blocks(answer)
+    results: list[dict[str, Any]] = []
+    for dimension in ROOT_CAUSE_DIMENSIONS:
+        pats = _patterns(rubric[dimension], field=f"root_cause.{dimension}")
+        matching = [block for block in blocks if _hit(block, pats)]
+        refs: set[int] = set()
+        for block in matching:
+            refs.update(_line_refs(block) & visible)
+        results.append(
+            {
+                "id": dimension,
+                "hit": bool(matching),
+                "supported": bool(matching and refs),
+                "valid_cited_lines": sorted(refs),
+            }
+        )
+    return results
 
 
 def _attempted_context(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -261,6 +311,11 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
 
     dimensions = _dimension_results(answer, gold)
     dimension_recall = sum(1 for item in dimensions if item["hit"]) / len(dimensions)
+    dimension_support = _dimension_evidence_support(answer, gold, tool_outputs)
+    supported_dimension_recall = (
+        sum(1 for item in dimension_support if item["supported"])
+        / len(dimension_support)
+    )
     unsupported = _negative_results(answer, gold, "unsupported_claims")
     contradictions = _negative_results(answer, gold, "contradictions")
     unsupported_hits = sum(1 for item in unsupported if item["hit"])
@@ -280,6 +335,9 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
 
     thresholds = gold.get("root_cause_thresholds") or {}
     min_dimensions = float(thresholds.get("dimension_recall", 0.75))
+    min_supported_dimensions = float(
+        thresholds.get("supported_dimension_recall", 0.0)
+    )
     min_citations = float(thresholds.get("citation_accuracy", 0.5))
     min_markers = float(thresholds.get("evidence_marker_recall", 0.0))
     max_unsupported = int(thresholds.get("max_unsupported_claim_hits", 0))
@@ -287,6 +345,7 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
     passed = bool(answer.strip()) and all(
         (
             dimension_recall >= min_dimensions,
+            supported_dimension_recall >= min_supported_dimensions,
             citations["accuracy"] >= min_citations,
             marker_recall >= min_markers,
             unsupported_hits <= max_unsupported,
@@ -312,6 +371,8 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
         "quality": {
             "dimension_recall": round(dimension_recall, 4),
             "dimensions": dimensions,
+            "supported_dimension_recall": round(supported_dimension_recall, 4),
+            "dimension_evidence_support": dimension_support,
             "evidence_marker_recall": round(marker_recall, 4),
             "evidence_markers": marker_results,
             "citation": citations,
