@@ -40,7 +40,8 @@ jobs:
           case_dir="$root/case"
           input_dir="$root/input"
           mkdir -p "$case_dir" "$input_dir"
-          url='https://raw.githubusercontent.com/logpai/loghub/d1020fd7c08fd50f184f60ae3dfe8e81ee069623/BGL/BGL_2k.log'
+          source_commit='dd61d0952749ee7963bde24220d1be5ede023033'
+          url="https://raw.githubusercontent.com/logpai/loghub/${source_commit}/BGL/BGL_2k.log"
           curl -L --fail --retry 5 --retry-delay 2 -o "$input_dir/BGL_2k.log" "$url"
           bytes=$(stat -c '%s' "$input_dir/BGL_2k.log")
           sha=$(sha256sum "$input_dir/BGL_2k.log" | awk '{print $1}')
@@ -85,7 +86,7 @@ jobs:
           }
           open(path,'w',encoding='utf-8').write(json.dumps(payload, indent=2)+'\n')
           PY
-          printf '{"bytes":%s,"sha256":"%s","source_commit":"d1020fd7c08fd50f184f60ae3dfe8e81ee069623"}\n' "$bytes" "$sha" > "$root/input-metadata.json"
+          printf '{"bytes":%s,"sha256":"%s","source_commit":"%s"}\n' "$bytes" "$sha" "$source_commit" > "$root/input-metadata.json"
           cat "$root/input-metadata.json"
       - name: Run paired real-model comparison
         shell: bash
@@ -135,4 +136,4 @@ jobs:
             /tmp/bgl-scale/input-metadata.json
           if-no-files-found: error
 
-# Triggered once for the pinned 317KB BGL paired smoke; restore manual-only after validation.
+# Re-run with a real repository commit pin; restore manual-only after validation.
