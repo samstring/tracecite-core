@@ -27,11 +27,20 @@ jobs:
           python-version: "3.12"
       - name: Install TraceCite
         run: python -m pip install -e ".[dev]"
+      - name: Install baseline shell tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ripgrep
+          command -v rg
+          rg --version | head -n 1
       - name: Validate configuration
         shell: bash
         run: |
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is not configured"; exit 1; }
           test -n "$BENCH_MODEL" || { echo "TRACECITE_BENCH_MODEL is not configured"; exit 1; }
+          command -v rg >/dev/null || { echo "rg baseline tool is missing"; exit 1; }
       - name: Prepare pinned real BGL sample
         shell: bash
         run: |
@@ -55,9 +64,10 @@ jobs:
               {"id":"alert-category","patterns":["APPREAD"]},
               {"id":"severity","patterns":["FATAL"]},
               {"id":"component","patterns":["ciod"]},
-              {"id":"mechanism","patterns":["failed.{0,40}read.{0,40}message prefix|message prefix.{0,40}control stream"]}
+              {"id":"mechanism","patterns":["failed.{0,40}read.{0,40}message prefix|message prefix.{0,40}control stream"]},
+              {"id":"line-citation","patterns":["(?:line|#L)\\s*9\\b|BGL_2k\\.log:9\\b"]}
             ],
-            "evidence_markers": ["BGL_2k.log:9", "APPREAD", "ciod"],
+            "evidence_markers": ["APPREAD", "ciod", "failed to read message prefix on control stream"],
             "thresholds": {"concept_recall":1.0,"evidence_marker_recall":1.0},
             "leak_terms": []
           }
@@ -86,7 +96,7 @@ jobs:
           }
           open(path,'w',encoding='utf-8').write(json.dumps(payload, indent=2)+'\n')
           PY
-          printf '{"bytes":%s,"sha256":"%s","source_commit":"%s"}\n' "$bytes" "$sha" "$source_commit" > "$root/input-metadata.json"
+          printf '{"bytes":%s,"sha256":"%s","source_commit":"%s","baseline_rg":true}\n' "$bytes" "$sha" "$source_commit" > "$root/input-metadata.json"
           cat "$root/input-metadata.json"
       - name: Run paired real-model comparison
         shell: bash
@@ -136,4 +146,4 @@ jobs:
             /tmp/bgl-scale/input-metadata.json
           if-no-files-found: error
 
-# Re-run with a real repository commit pin; restore manual-only after validation.
+# Fairness rerun: install and verify ripgrep for the advertised free-shell baseline.
