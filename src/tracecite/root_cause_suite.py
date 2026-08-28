@@ -12,6 +12,7 @@ from typing import Any, Iterable, Mapping
 
 from . import benchmarking as legacy
 from . import root_cause_benchmarking as root_eval
+from . import root_cause_truth
 
 SUITE_SCHEMA_VERSION = 1
 SUITE_ID = "github-root-cause-30"
@@ -28,6 +29,7 @@ Cite exact evidence line numbers for the important claims. Do not assume access 
 """
 DEFAULT_THRESHOLDS = {
     "dimension_recall": 0.75,
+    "supported_dimension_recall": 0.75,
     "citation_accuracy": 0.5,
     "evidence_marker_recall": 0.0,
     "max_unsupported_claim_hits": 0,
@@ -129,7 +131,8 @@ def validate_suite(repo_root: Path) -> dict[str, Any]:
         else:
             project = str(source["repo"])
         projects[project] += 1
-    return {"status": "ok", "schema_version": SUITE_SCHEMA_VERSION, "suite_id": SUITE_ID, "cases": len(cases), "cohorts": dict(sorted(cohorts.items())), "projects": dict(sorted(projects.items()))}
+    truth_lock = root_cause_truth.validate_truth_lock(repo_root, cases)
+    return {"status": "ok", "schema_version": SUITE_SCHEMA_VERSION, "suite_id": SUITE_ID, "cases": len(cases), "cohorts": dict(sorted(cohorts.items())), "projects": dict(sorted(projects.items())), "truth_lock": truth_lock}
 
 
 def _http_json(url: str) -> Mapping[str, Any]:
@@ -291,6 +294,29 @@ def run_suite(repo_root: Path, work_dir: Path, output_dir: Path, *, mode: str, m
     return summary
 
 
+def _mean_quality(scores: list[Mapping[str, Any]], field: str) -> float | None:
+    if not scores:
+        return None
+    return round(
+        sum(float((score.get("quality") or {}).get(field, 0.0)) for score in scores)
+        / len(scores),
+        4,
+    )
+
+
+def _mean_citation_accuracy(scores: list[Mapping[str, Any]]) -> float | None:
+    if not scores:
+        return None
+    return round(
+        sum(
+            float(((score.get("quality") or {}).get("citation") or {}).get("accuracy", 0.0))
+            for score in scores
+        )
+        / len(scores),
+        4,
+    )
+
+
 def aggregate_results(output_dir: Path, *, mode: str | None = None) -> dict[str, Any]:
     scores = []
     scores_dir = output_dir / "scores"
@@ -314,9 +340,9 @@ def aggregate_results(output_dir: Path, *, mode: str | None = None) -> dict[str,
         cohort_scores = [s for s in scores if cases.get(str(s.get("case_id")), {}).get("cohort") == cohort]
         cohort_failures = [f for f in failures if cases.get(str(f.get("case_id")), {}).get("cohort") == cohort]
         requested = sum(1 for item in cases.values() if item["cohort"] == cohort)
-        by_cohort[cohort] = {"requested": requested, "scored": len(cohort_scores), "passed": sum(bool(s.get("passed")) for s in cohort_scores), "host_failures": len(cohort_failures), "pass_rate_scored": round(sum(bool(s.get("passed")) for s in cohort_scores) / len(cohort_scores), 4) if cohort_scores else None, "mean_dimension_recall": round(sum(float((s.get("quality") or {}).get("dimension_recall", 0.0)) for s in cohort_scores) / len(cohort_scores), 4) if cohort_scores else None, "mean_citation_accuracy": round(sum(float(((s.get("quality") or {}).get("citation") or {}).get("accuracy", 0.0)) for s in cohort_scores) / len(cohort_scores), 4) if cohort_scores else None}
+        by_cohort[cohort] = {"requested": requested, "scored": len(cohort_scores), "passed": sum(bool(s.get("passed")) for s in cohort_scores), "host_failures": len(cohort_failures), "pass_rate_scored": round(sum(bool(s.get("passed")) for s in cohort_scores) / len(cohort_scores), 4) if cohort_scores else None, "mean_dimension_recall": _mean_quality(cohort_scores, "dimension_recall"), "mean_supported_dimension_recall": _mean_quality(cohort_scores, "supported_dimension_recall"), "mean_citation_accuracy": _mean_citation_accuracy(cohort_scores)}
     reasons = Counter(str(f.get("reason") or "host_error") for f in failures)
-    return {"schema_version": SUITE_SCHEMA_VERSION, "suite_id": SUITE_ID, "mode": mode, "scores": len(scores), "score_passed": sum(bool(s.get("passed")) for s in scores), "failures": len(failures), "failure_reasons": dict(sorted(reasons.items())), "cohorts": by_cohort, "reported_input_tokens": sum(int((s.get("context_cost") or {}).get("reported_input_tokens") or 0) for s in scores), "reported_output_tokens": sum(int((s.get("context_cost") or {}).get("reported_output_tokens") or 0) for s in scores), "tool_output_chars": sum(int((s.get("context_cost") or {}).get("tool_output_chars") or 0) for s in scores), "cumulative_attempted_context_chars": sum(int((s.get("context_cost") or {}).get("cumulative_attempted_context_chars") or 0) for s in scores), "peak_attempted_context_chars": max([int((s.get("context_cost") or {}).get("peak_attempted_context_chars") or 0) for s in scores] or [0])}
+    return {"schema_version": SUITE_SCHEMA_VERSION, "suite_id": SUITE_ID, "mode": mode, "scores": len(scores), "score_passed": sum(bool(s.get("passed")) for s in scores), "failures": len(failures), "failure_reasons": dict(sorted(reasons.items())), "cohorts": by_cohort, "mean_dimension_recall": _mean_quality(scores, "dimension_recall"), "mean_supported_dimension_recall": _mean_quality(scores, "supported_dimension_recall"), "mean_citation_accuracy": _mean_citation_accuracy(scores), "reported_input_tokens": sum(int((s.get("context_cost") or {}).get("reported_input_tokens") or 0) for s in scores), "reported_output_tokens": sum(int((s.get("context_cost") or {}).get("reported_output_tokens") or 0) for s in scores), "tool_output_chars": sum(int((s.get("context_cost") or {}).get("tool_output_chars") or 0) for s in scores), "cumulative_attempted_context_chars": sum(int((s.get("context_cost") or {}).get("cumulative_attempted_context_chars") or 0) for s in scores), "peak_attempted_context_chars": max([int((s.get("context_cost") or {}).get("peak_attempted_context_chars") or 0) for s in scores] or [0])}
 
 
 def _parser() -> argparse.ArgumentParser:
