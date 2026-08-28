@@ -194,18 +194,29 @@ def _investigate_source(
     return _with_routing(resolved, decision)
 
 
-def _bounded_query(request: EvidenceRequest, policy: EvidenceRoutingPolicy) -> EvidenceRequest:
+def _bounded_query(
+    request: EvidenceRequest,
+    policy: EvidenceRoutingPolicy,
+    *,
+    route: EvidenceRoute,
+) -> EvidenceRequest:
     assert isinstance(request.target, QueryTarget)
     target = request.target
+    if route == EvidenceRoute.INVESTIGATE:
+        evidence_cap = policy.investigate_max_evidence
+        line_cap = policy.investigate_max_line_chars
+    else:
+        evidence_cap = policy.bounded_max_evidence
+        line_cap = policy.bounded_max_line_chars
     max_evidence = (
-        policy.bounded_max_evidence
+        evidence_cap
         if target.max_evidence is None
-        else min(target.max_evidence, policy.bounded_max_evidence)
+        else min(target.max_evidence, evidence_cap)
     )
     max_line_chars = (
-        policy.bounded_max_line_chars
+        line_cap
         if target.max_line_chars is None
-        else min(target.max_line_chars, policy.bounded_max_line_chars)
+        else min(target.max_line_chars, line_cap)
     )
     return EvidenceRequest(
         QueryTarget(
@@ -282,7 +293,7 @@ def retrieve(
 
     routed_request = request
     if isinstance(request.target, QueryTarget) and decision.route != EvidenceRoute.DIRECT:
-        routed_request = _bounded_query(request, policy)
+        routed_request = _bounded_query(request, policy, route=decision.route)
     result = _correct_range_novelty(_retrieve(routed_request), routed_request)
     decision = refine_route_after_result(decision, result.canonical_result, policy=policy)
     return _with_routing(result, decision)
