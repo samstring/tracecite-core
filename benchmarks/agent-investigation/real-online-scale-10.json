@@ -25,13 +25,13 @@
       "evidence_kind": "original_public_crash_report"
     },
     {
-      "id": "kubernetes-140541",
+      "id": "kubernetes-140268",
       "purpose": "scale_root_cause",
-      "source_issue": "https://github.com/kubernetes/kubernetes/issues/140541",
-      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140623",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/140268",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140323",
       "fix_kind": "pull_request",
-      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-kubernetes-integration-race-master/2076980673838583808",
-      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-integration-race-master/2076980673838583808/build-log.txt",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-containerd/2074205743732494336",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-containerd/2074205743732494336/build-log.txt",
       "evidence_kind": "original_public_ci_log"
     },
     {
@@ -40,9 +40,9 @@
       "source_issue": "https://github.com/kubernetes/kubernetes/issues/140628",
       "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140631",
       "fix_kind": "pull_request",
-      "evidence_view": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-node-crio-swap-serial/2077851676416413696/artifacts/e2-standard-2-fedora-coreos-44-20260621-3-1-gcp-x86-64-ae042d69/kubelet.log",
-      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-node-crio-swap-serial/2077851676416413696/artifacts/e2-standard-2-fedora-coreos-44-20260621-3-1-gcp-x86-64-ae042d69/kubelet.log",
-      "evidence_kind": "original_public_kubelet_log"
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-node-crio-swap-serial/2077851676416413696",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-node-crio-swap-serial/2077851676416413696/build-log.txt",
+      "evidence_kind": "original_public_ci_log"
     },
     {
       "id": "kubernetes-140760",
@@ -55,13 +55,13 @@
       "evidence_kind": "original_public_ci_log"
     },
     {
-      "id": "kubernetes-140815",
+      "id": "kubernetes-140887",
       "purpose": "scale_root_cause",
-      "source_issue": "https://github.com/kubernetes/kubernetes/issues/140815",
-      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140821",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/140887",
+      "fix_reference": "https://github.com/kubernetes/test-infra/pull/37526",
       "fix_kind": "pull_request",
-      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-kubernetes-unit/2079717425376399360",
-      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-unit/2079717425376399360/build-log.txt",
+      "evidence_view": "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-containerd-alpha-features/2079839944150355968",
+      "evidence_url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-containerd-alpha-features/2079839944150355968/build-log.txt",
       "evidence_kind": "original_public_ci_log"
     },
     {
