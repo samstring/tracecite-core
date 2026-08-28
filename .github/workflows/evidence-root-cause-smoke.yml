@@ -1,0 +1,59 @@
+name: Root Cause Real Smoke
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/evidence-root-cause-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prometheus-19432:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1800"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install TraceCite
+        run: python -m pip install -e ".[dev]"
+      - name: Run one real end-to-end case
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tracecite-root-smoke-results
+          python -m tracecite.root_cause_suite run \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --work-dir /tmp/tracecite-root-smoke \
+            --output-dir /tmp/tracecite-root-smoke-results \
+            --mode tracecite \
+            --model "$BENCH_MODEL" \
+            --host "$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_canonical_host.py" \
+            --timeout-seconds 300 \
+            --case-id prometheus-19432
+      - name: Print result
+        if: always()
+        run: |
+          cat /tmp/tracecite-root-smoke-results/batch-summary.json 2>/dev/null || true
+          find /tmp/tracecite-root-smoke-results/scores -type f -maxdepth 1 -print -exec cat {} \; 2>/dev/null || true
+          find /tmp/tracecite-root-smoke-results/failures -type f -maxdepth 1 -print -exec cat {} \; 2>/dev/null || true
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: root-cause-real-smoke
+          path: |
+            /tmp/tracecite-root-smoke/suite-index.json
+            /tmp/tracecite-root-smoke/snapshots
+            /tmp/tracecite-root-smoke-results
+          if-no-files-found: warn
