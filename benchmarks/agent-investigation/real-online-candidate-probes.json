@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "candidates": [
+    {
+      "id": "kubernetes-140039-runc-containerd",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-containerd-e2e-ubuntu-gce/2070389396091179008/artifacts/bootstrap-e2e-master/containerd.log",
+      "needles": [
+        "unable to fetch SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV bit: invalid argument",
+        "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV",
+        "invalid argument"
+      ]
+    },
+    {
+      "id": "kubernetes-140039-runc-kubelet",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-containerd-e2e-ubuntu-gce/2070389396091179008/artifacts/bootstrap-e2e-master/kubelet.log",
+      "needles": [
+        "unable to fetch SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV bit: invalid argument",
+        "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV",
+        "invalid argument"
+      ]
+    },
+    {
+      "id": "kubernetes-141402-worker-journal",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-kind-cloud-provider-loadbalancer/2086677576276774912/artifacts/kind-worker/journal.log",
+      "needles": [
+        "podcertificate",
+        "client logs did not contain expected success message pattern",
+        "Got response body: Client Identity: spiffe://",
+        "client-",
+        "server-"
+      ]
+    },
+    {
+      "id": "kubernetes-141402-worker-kubelet",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-kind-cloud-provider-loadbalancer/2086677576276774912/artifacts/kind-worker/kubelet.log",
+      "needles": [
+        "podcertificate",
+        "client logs did not contain expected success message pattern",
+        "Got response body: Client Identity: spiffe://",
+        "client-",
+        "server-"
+      ]
+    }
+  ]
+}
