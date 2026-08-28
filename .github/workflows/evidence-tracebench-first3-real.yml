@@ -267,4 +267,4 @@ jobs:
             /tmp/tb-first3/tier-manifest.json
           if-no-files-found: error
 
-# Temporary push trigger for one paired inspect-first validation. Restore manual-only after this run.
+# Push-trigger refresh for the EvidenceProgress 25KB/5MB regression gate.
