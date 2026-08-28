@@ -42,6 +42,10 @@ class EvidenceRoutingPolicy:
     search because deep/high-cardinality exploration repeats every visible
     result in subsequent model turns. Canonical evidence remains recoverable;
     only the Agent projection is narrowed.
+
+    A truncated search also retains a tiny bounded set of generic high-signal
+    candidates. These are navigation hints only: the Agent must ``get`` them
+    before they become formal line-covered Evidence.
     """
 
     mode: str = "adaptive"
@@ -53,6 +57,8 @@ class EvidenceRoutingPolicy:
     bounded_max_line_chars: int = 1_024
     investigate_max_evidence: int = 20
     investigate_max_line_chars: int = 768
+    signal_hint_limit: int = 4
+    signal_signature_cap: int = 256
     bounded_match_records: int = 64
     investigate_match_records: int = 256
     investigate_after_executions: int = 4
@@ -80,6 +86,8 @@ class EvidenceRoutingPolicy:
             "bounded_max_line_chars",
             "investigate_max_evidence",
             "investigate_max_line_chars",
+            "signal_hint_limit",
+            "signal_signature_cap",
             "bounded_match_records",
             "investigate_match_records",
             "investigate_after_executions",
@@ -95,6 +103,8 @@ class EvidenceRoutingPolicy:
             raise ValueError("investigate_max_evidence must be <= bounded_max_evidence")
         if self.investigate_max_line_chars > self.bounded_max_line_chars:
             raise ValueError("investigate_max_line_chars must be <= bounded_max_line_chars")
+        if self.signal_signature_cap < self.signal_hint_limit:
+            raise ValueError("signal_signature_cap must be >= signal_hint_limit")
         if self.investigate_match_records < self.bounded_match_records:
             raise ValueError("investigate_match_records must be >= bounded_match_records")
         if not (0.0 <= float(self.repeated_evidence_ratio) <= 1.0):
