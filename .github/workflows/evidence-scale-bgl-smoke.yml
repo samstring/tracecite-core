@@ -1,0 +1,138 @@
+name: Evidence Scale BGL Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - ".github/workflows/evidence-scale-bgl-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bgl-317kb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1200"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install TraceCite
+        run: python -m pip install -e ".[dev]"
+      - name: Validate configuration
+        shell: bash
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is not configured"; exit 1; }
+          test -n "$BENCH_MODEL" || { echo "TRACECITE_BENCH_MODEL is not configured"; exit 1; }
+      - name: Prepare pinned real BGL sample
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=/tmp/bgl-scale
+          case_dir="$root/case"
+          input_dir="$root/input"
+          mkdir -p "$case_dir" "$input_dir"
+          url='https://raw.githubusercontent.com/logpai/loghub/d1020fd7c08fd50f184f60ae3dfe8e81ee069623/BGL/BGL_2k.log'
+          curl -L --fail --retry 5 --retry-delay 2 -o "$input_dir/BGL_2k.log" "$url"
+          bytes=$(stat -c '%s' "$input_dir/BGL_2k.log")
+          sha=$(sha256sum "$input_dir/BGL_2k.log" | awk '{print $1}')
+          test "$bytes" = "317150"
+          cat > "$case_dir/question.md" <<'EOF'
+          Using only the supplied Blue Gene/L runtime log, locate the earliest alert-labeled event in the sample (the dataset uses '-' in the first field for non-alert records and a category token for alert records). Identify the alert category, severity, subsystem/component, and the immediate observed failure. Cite the exact source line that supports the answer. Do not infer an upstream root cause that is not present in the log.
+          EOF
+          cat > "$case_dir/gold.json" <<'EOF'
+          {
+            "required_concepts": [
+              {"id":"alert-category","patterns":["APPREAD"]},
+              {"id":"severity","patterns":["FATAL"]},
+              {"id":"component","patterns":["ciod"]},
+              {"id":"mechanism","patterns":["failed.{0,40}read.{0,40}message prefix|message prefix.{0,40}control stream"]}
+            ],
+            "evidence_markers": ["BGL_2k.log:9", "APPREAD", "ciod"],
+            "thresholds": {"concept_recall":1.0,"evidence_marker_recall":1.0},
+            "leak_terms": []
+          }
+          EOF
+          python - "$case_dir/case.json" "$sha" "$url" <<'PY'
+          import json, sys
+          path, sha, url = sys.argv[1:]
+          payload = {
+              'schema_version': 1,
+              'id': 'bgl-real-317kb-first-alert',
+              'question_file': 'question.md',
+              'gold_file': 'gold.json',
+              'inputs': [{'id':'bgl-real-sample','url':url,'filename':'BGL_2k.log','sha256':sha}],
+          }
+          open(path,'w',encoding='utf-8').write(json.dumps(payload, indent=2)+'\n')
+          PY
+          python -m tracecite.benchmarking validate "$case_dir"
+          python - "$root/prepared.json" "$input_dir/BGL_2k.log" "$sha" "$url" <<'PY'
+          import json, sys
+          path, source, sha, url = sys.argv[1:]
+          payload = {
+              'schema_version': 1,
+              'case_id': 'bgl-real-317kb-first-alert',
+              'question': '/tmp/bgl-scale/case/question.md',
+              'inputs': [{'id':'bgl-real-sample','path':source,'bytes':317150,'sha256':sha,'source_url':url}],
+          }
+          open(path,'w',encoding='utf-8').write(json.dumps(payload, indent=2)+'\n')
+          PY
+          printf '{"bytes":%s,"sha256":"%s","source_commit":"d1020fd7c08fd50f184f60ae3dfe8e81ee069623"}\n' "$bytes" "$sha" > "$root/input-metadata.json"
+          cat "$root/input-metadata.json"
+      - name: Run paired real-model comparison
+        shell: bash
+        run: |
+          set -uo pipefail
+          root=/tmp/bgl-scale
+          mkdir -p "$root/runs" "$root/scores" "$root/failures"
+          failed=0
+          for mode in free_shell tracecite; do
+            echo "== BGL 317KB / $mode =="
+            transcript="$root/runs/${mode}.jsonl"
+            score="$root/scores/${mode}.json"
+            host="$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_host.py"
+            if [ "$mode" = tracecite ]; then
+              host="$GITHUB_WORKSPACE/benchmarks/agent-investigation/gmi_scale_host.py"
+            fi
+            if python benchmarks/agent-investigation/run_host.py \
+              "$root/case" "$root/prepared.json" \
+              --mode "$mode" \
+              --model "$BENCH_MODEL" \
+              --seed 1 \
+              --timeout-seconds 600 \
+              --output "$transcript" \
+              --pass-env OPENAI_API_KEY \
+              --pass-env OPENAI_BASE_URL \
+              --pass-env TRACECITE_BENCH_MAX_OUTPUT_TOKENS \
+              -- python "$host"; then
+              python -m tracecite.benchmarking score "$root/case" "$transcript" > "$score" || failed=$((failed + 1))
+              cat "$score" || true
+            else
+              failed=$((failed + 1))
+              echo '{"stage":"host"}' > "$root/failures/${mode}.json"
+              tail -n 5 "$transcript" || true
+            fi
+          done
+          printf '{"requested":2,"failed":%d}\n' "$failed" > "$root/runs/batch-summary.json"
+          cat "$root/runs/batch-summary.json"
+      - name: Upload paired results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bgl-real-317kb-scale-smoke
+          path: |
+            /tmp/bgl-scale/runs
+            /tmp/bgl-scale/scores
+            /tmp/bgl-scale/failures
+            /tmp/bgl-scale/input-metadata.json
+          if-no-files-found: error
+
+# Temporary self-scoped push trigger for one paid smoke; restore manual-only after validation.
