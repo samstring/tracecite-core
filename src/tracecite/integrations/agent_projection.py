@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import copy
 import json
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Union
 
 DEFAULT_AGENT_MAX_OUTPUT_CHARS = 12_000
 DEFAULT_FILTER_MAX_LINE_CHARS = 1024
 DEFAULT_AGENT_MAX_EVIDENCE = 30
+Projection = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+ProjectionProfile = Union[str, Projection]
 
 
 def encoded_json(payload: Any) -> str:
@@ -24,8 +26,8 @@ def prefer_smaller_agent_view(candidate: Mapping[str, Any], fallback: Mapping[st
     """Return ``candidate`` only when it is strictly cheaper to serialize.
 
     Agent-context optimizations are optional projections over recoverable
-    canonical data.  A projection that saves too little payload to cover its
-    own metadata should not make the Agent turn larger.  Ties deliberately keep
+    canonical data. A projection that saves too little payload to cover its
+    own metadata should not make the Agent turn larger. Ties deliberately keep
     the fallback so enabling an optimization never increases model-visible
     transport cost.
     """
@@ -146,6 +148,36 @@ def lightweight_result(payload: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def project(
+    payload: Mapping[str, Any],
+    *,
+    profile: ProjectionProfile = "agent",
+) -> dict[str, Any]:
+    """Project canonical Runtime output for an upper-layer consumer.
+
+    The Runtime owns canonical Evidence and recovery. Integrations own the
+    transport view. ``profile='agent'`` applies the conservative built-in
+    token projection, ``profile='full'`` returns a detached canonical view,
+    and a callable lets Mobile/MCP/third-party hosts define their own view
+    without adding another Core API or forking Runtime semantics.
+    """
+
+    if not isinstance(payload, Mapping):
+        raise TypeError("project payload must be a mapping")
+    canonical = copy.deepcopy(dict(payload))
+    if callable(profile):
+        projected = profile(canonical)
+        if not isinstance(projected, Mapping):
+            raise TypeError("custom projection must return a mapping")
+        return copy.deepcopy(dict(projected))
+    name = str(profile or "").strip().lower()
+    if name == "full":
+        return canonical
+    if name == "agent":
+        return lightweight_result(apply_survey_brief(canonical))
+    raise ValueError(f"unsupported projection profile: {profile!r}")
+
+
 def compact_filter_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return a bounded mobile filter view; full text stays in records_path."""
 
@@ -181,6 +213,8 @@ __all__ = [
     "DEFAULT_AGENT_MAX_EVIDENCE",
     "DEFAULT_AGENT_MAX_OUTPUT_CHARS",
     "DEFAULT_FILTER_MAX_LINE_CHARS",
+    "Projection",
+    "ProjectionProfile",
     "apply_survey_brief",
     "compact_filter_payload",
     "dedupe_evidence_labels",
@@ -188,4 +222,5 @@ __all__ = [
     "encoded_json",
     "lightweight_result",
     "prefer_smaller_agent_view",
+    "project",
 ]
