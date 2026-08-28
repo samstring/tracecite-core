@@ -22,11 +22,9 @@ jobs:
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 1
       matrix:
         case:
-          - id: kubernetes-140268
-            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140268
           - id: kubernetes-140848-scale
             dir: benchmarks/agent-investigation/scale-cases/kubernetes-140848
           - id: kubernetes-140628-scale
