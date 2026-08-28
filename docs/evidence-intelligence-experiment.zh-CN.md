@@ -6,35 +6,105 @@
 
 ## 目标
 
-在不让 TraceCite 变成自治 Agent、代码搜索器或 Observability 存储平台的前提下，把 runtime evidence 转换成一个可关联、可探索、可压缩、可恢复的 Evidence Space：
+在不让 TraceCite 变成自治 Agent、代码搜索器或 Observability 存储平台的前提下，把 runtime evidence 转换成一个可关联、可探索、可压缩、可恢复、可确定性停止的 Evidence Space。
 
-1. 通过稳定实体标识建立证据图；
-2. 对重复 evidence 做确定性 grouping 和 representative selection；
+当前目标包括：
+
+1. 通过稳定、版本化 identity 建立 Evidence provenance 与关系；
+2. 对重复 evidence 做确定性 grouping / representative selection；
 3. 基于 seed、graph distance、severity、entity expansion、citation 与 source diversity 做确定性排序；
 4. 在 Agent token budget 下生成显式暴露 omission / Coverage / recovery 的 EvidencePackage；
-5. 用跨轮 Evidence / Group / Relation delta 避免重复上下文；
-6. 把“发现稳定实体 -> 再取相关证据”的机械循环下沉到 TraceCite Runtime，减少 Agent 的 search/expand 决策轮次；
-7. 对已覆盖 range、重复 Evidence、无新增 Evidence、source/frontier exhausted 等状态提供可解释的确定性停止信号。
+5. 用跨轮 Evidence delta 避免重复上下文；
+6. 把“发现稳定实体 -> 再取相关证据”的机械循环下沉到 TraceCite Runtime；
+7. 对已覆盖 range、重复 Evidence、无新增 Evidence、source/frontier exhausted 等状态提供可解释的机械停止信号；
+8. 让 Mobile / MCP / 第三方通过 Provider / Capability / Projection 扩展，而不是不断增加 Core 顶层 API。
 
 核心路径：
 
 ```text
-Provider
+Provider / Source
   -> Normalize
+  -> Versioned Evidence Identity
   -> Correlate
   -> Explore Entity Frontier
   -> Group / Reduce
   -> Evidence Progress / Coverage
-  -> Token-aware EvidencePackage
-  -> Context Delta / Agent Transport
+  -> Token-aware Projection
   -> Agent reasoning
 ```
 
-## 新增探索闭环
+## 产品边界
 
-实验分支提供领域无关的 `EvidenceProvider` contract：Provider 只根据 Evidence ID / `EntityRef` 取回事实，不负责相关性排序、根因判断或 Agent 推理。
+TraceCite 负责：
 
-Runtime 的 `investigate_evidence()` 在 `ExplorationPolicy` 的硬限制下执行：
+- Evidence identity / version identity；
+- provenance / citation / recovery；
+- deterministic retrieval；
+- correlation；
+- grouping / reduction；
+- coverage；
+- novelty；
+- progress；
+- bounded frontier exploration；
+- mechanical stop reason。
+
+TraceCite 不负责：
+
+- LLM hypothesis generation；
+- root-cause ranking；
+- causal conclusion；
+- 通用代码搜索体验；
+- 通用 Git/CI/issue navigation；
+- observability backend 存储。
+
+可以通过 EvidenceProvider 摄取 Git、CI、issue、crash、trace、metric 等与 incident 相关的事实；“可以摄取某领域 Evidence”不等于 TraceCite 成为该领域的通用产品。
+
+## Canonical Agent API 方向
+
+实验分支开始把长期 public surface 收敛到较少入口：
+
+```text
+Runtime:
+  retrieve(request)
+  investigate(...)
+  verify(...)
+  list_capabilities()
+
+Integration transport:
+  project(result, profile=...)
+```
+
+原有 `probe/search/expand/sample/survey/...` 继续作为兼容/便利 API 保留，不要求上层把每个内部操作长期映射成独立 RPC 或 MCP tool。
+
+### retrieve()
+
+`retrieve()` 使用统一 `EvidenceRequest`，当前 typed target 包括：
+
+```text
+SourceTarget
+QueryTarget
+RangeTarget
+ProviderTarget
+```
+
+Runtime 内部仍可以调用不同执行器，但上层只需要处理统一的 retrieval result / progress / stop contract。
+
+### Provider 扩展
+
+新增 Bugly / Sentry / OTel / CI / 自研平台时，优先实现已有：
+
+```text
+EvidenceProvider.can_handle(request)
+EvidenceProvider.retrieve(request)
+```
+
+而不是给 Core 增加 provider-specific 顶层函数。
+
+Provider 只取事实，不进行 Agent reasoning。
+
+### investigate()
+
+Runtime-level `investigate()` 执行：
 
 ```text
 seed
@@ -42,135 +112,203 @@ seed
  -> discover EntityRef
  -> retrieve related evidence
  -> correlate
- -> repeat until frontier exhausted / budget stop
+ -> group
+ -> reduce
+ -> progress / coverage
+ -> stop
 ```
 
-默认限制包括 depth、retrieval 次数、Evidence 数量、source 数量、wall time、bytes scanned、provider errors、no-growth rounds 和 frontier size。每次自动展开都会记录 reason/provider/status/new evidence，并把超预算、provider failure、缺失 seed、关系悬空等情况暴露为 Coverage/diagnostics。
+它不产生 root-cause conclusion。
 
-高层 `investigate()` 将探索结果继续交给 Grouping、Reducer 和 EvidencePackage，因此 Agent 可以用一次高层调用获得 bounded correlated evidence，而无需由模型逐轮执行 session -> request -> trace 的机械查询。
+### project()
 
-## Evidence Progress 实验结论
+Canonical Runtime result 保留完整 provenance / recovery。
 
-实验分支已经建立 `EvidenceProgressTracker`，并在 scale benchmark adapter 中验证了以下行为：
+Integration 提供统一 projection：
 
-- 已覆盖 range 的重复 `get` 可以确定性返回 `NO_NEW_EVIDENCE`；
-- 不同 query 如果只返回已经见过的 canonical Evidence URI，也可以返回 `NO_NEW_EVIDENCE`；
-- duplicate inspect/search 不需要重复向 Agent 回放原始 Evidence；
-- 256 个 signal signature 达到容量后，高 severity 新信号可以替换更低 severity retained signal，保持 bounded 的同时降低关键异常被噪声挤掉的风险；
-- progress/coverage/no-growth 信号可以明显减少重复 evidence transport。
+- `full`：完整 detached view；
+- `agent`：保守的 Agent-facing compact view；
+- custom callable：允许上层自由定义自己的 projection，而不用修改 Core。
 
-**重要边界：这些 semantics 目前在 benchmark `ScaleRuntime` 中验证得最完整，还没有全部下沉到 canonical `src/tracecite/runtime/tools.py` / investigation path。** 后续产品化工作的重点是让正式 API 获得同样的行为，而不是继续只增强 benchmark adapter。
+## Evidence Identity
 
-## 边界
-
-- `EntityRef` / `EvidenceRelation` 只描述事实身份与关系，不表达根因。
-- Correlation 不生成 Finding；temporal relation 永远是 `< 1.0` confidence 的启发式弱关系，不能冒充 exact entity relation。
-- Orchestrator 不产生 Hypothesis / Finding，不使用 LLM planner。
-- Provider 不嵌入领域结论；具体 Bugly/Sentry/Datadog/OTel 适配应只负责取证和标准化。
-- Reducer 不使用 LLM，不修改 canonical evidence。
-- EvidencePackage 是 Agent-facing projection；省 token 不能隐藏 Coverage 缺口。
-- Canonical evidence / URI 必须可恢复；Agent projection 可以压缩，但不能破坏 provenance。
-- 原有 `EvidenceLedger` / `ContextEngine` 暂不删除。实验验证通过后再设计兼容迁移，而不是直接替换。
-- TraceCite 的目标不是让单次搜索永远比 `rg` 更小或更快，而是控制完整 investigation 中的 Evidence flow、重复上下文和 provenance。
-
-## 当前可执行验证
-
-组件级验证包含：
-
-- multi-source `crash -> session -> request -> trace -> callback` 自动探索；
-- 噪声 session 不进入目标 Evidence Graph；
-- Provider error / retrieval budget 会返回 incomplete/partial；
-- namespace 可防止相同 ID 在不同系统间被错误 exact join；
-- 10,000 个同实体 Evidence 使用 star correlation，relation 数量保持 O(n)，Grouping 收敛为代表集合；
-- EvidencePackage URI 可重新 resolve 到原 Provider record；
-- synthetic structural benchmark 比较“Agent 自己逐轮跟实体”与“一次 investigate 调用”的结构性 loop 数；
-- scale host 对 range coverage、cross-query novelty、failure classification、severity-aware retention 的 deterministic tests。
-
-组件级测试证明实现正确性、boundedness、结构性 Agent-loop 下沉和组件级 Evidence retention；真实 token / diagnosis 结论必须来自真实模型 Agent Host benchmark。
-
-## Model-level benchmark
-
-外部 Agent Host runner 支持：
-
-1. `shell_rg`
-2. `free_shell`
-3. `tracecite`
-4. `tracecite_context`
-5. `tracecite_intelligence`
-6. `tracecite_investigate`
-
-`free_shell` 是当前更强的现实 baseline：Agent 可以自由选择只读本地工具（如 `rg`、`cat`、`sed`、`head`、`tail` 等），用来回答“聪明 Agent + shell/rg 是否已经足够”的问题。
-
-`tracecite_intelligence` 用于隔离“关联/分组/压缩”的价值；`tracecite_investigate` 用于额外测量“自动 Entity exploration 是否真正减少 Agent/model loop”。详细公平性和指标见 `benchmarks/agent-investigation/EVIDENCE_INTELLIGENCE_MODES.md`。
-
-### 2026-08-28 已验证规模结果
-
-当前真实模型使用 `MiniMaxAI/MiniMax-M3`（GMI OpenAI-compatible endpoint）。
-
-TraceBench HDFS_v3 corruption case 使用真实故障记录，并混入同一公开数据集中的真实 normal records 作为 deterministic background noise；不是手写 synthetic fault。
-
-正式 scale gate 当前结论：
+实验分支正式区分三层 identity：
 
 ```text
-25KB TraceCite  -> PASS
-5MB TraceCite   -> PASS
-50MB TraceCite  -> PASS
+record identity
+!= event identity
+!= group identity
 ```
 
-50MB TraceCite：
+### Record identity
 
-- required concepts：6/6；
-- evidence markers：3/3；
-- model-visible tool output：约 88.5K chars；
-- provider-reported cumulative input tokens：375,211；
-- cached input tokens：335,852；
-- output tokens：4,908；
-- model calls：17；
-- tool calls：34。
+一个具体 provider/source record 的可追溯 identity，拥有 provenance。
 
-同一 50MB evidence 下，`free_shell` baseline 在一次约 5.2M chars 的工具输出之后，下一轮模型请求触发 `context_window_exceeded`。
+### Event identity
 
-因此当前规模实验支持的是：
+多个 record 可关联到同一真实事件；event identity 用于 correlation，不能覆盖各 record 的 provenance。
 
-> TraceCite 能把大规模真实 runtime evidence 转换成 bounded、可引用、可恢复的 Evidence flow，降低自由 shell Agent 因低选择性原始输出把模型上下文打爆的风险。
+### Group identity
 
-这不是“TraceCite 搜索一定比 rg 快/小”的结论，也不能把某一个 case 的 token 比例宣传成固定节省率。
+Grouping/Reducer 的投影 identity，只用于压缩或 representative selection，不能代替 record/source identity。
 
-## Scale 验证边界
+## Source Version
 
-**当前项目决定把 50MB 作为本阶段最大必测规模。**
+新增 domain-neutral `SourceVersion`：
 
-100MB、500MB 或更大的模型级 benchmark 不再是当前验收项。已经存在的更大 workflow 可以保留为可选 stress tooling，但不需要继续运行，也不应阻塞产品化或 merge 决策。
+```text
+sha256
+cursor
+generation
+mutable
+```
 
-后续优先级从“继续放大文件”切换为：
+对 immutable file/snapshot：
 
-1. 把 benchmark 已验证的 Evidence Progress / coverage / novelty hard-stop 下沉到 canonical runtime；
-2. 统一 `NO_NEW_EVIDENCE`、`SOURCE_EXHAUSTED`、`FRONTIER_EXHAUSTED` 的正式 API 语义；
-3. 完善 scanned bytes、unique evidence growth、repeated evidence ratio、source coverage、wall time、peak memory、attempted context load 等指标；
-4. 扩大真实 root-cause case 的领域覆盖，并用 maintainer diagnosis / merged fix 作为独立 truth。
+```text
+source path + sha256
+```
 
-## Token 指标解释
+形成版本化 source identity。
 
-模型级 benchmark 同时记录两类不同指标：
+对 live/remote provider，可使用 cursor / generation 表达其稳定版本边界。
 
-- `reported_input_tokens` / `reported_output_tokens` / cached-token 字段：模型 provider 对每次成功请求真实返回的 usage，跨 Agent 轮次累加；
-- `tool_output_chars` 与 `chars / 4`：模型可见工具证据大小及其粗略 token 估计，后者不是 tokenizer 精确值。
+`mutable` 明确表示不能仅靠历史 path coverage 做 zero-read hard stop。
 
-多轮 Agent 的 cumulative input 会重复包含历史上下文，因此不能把 cumulative input tokens 直接理解为“原始文件被压缩后的唯一 evidence token 数”。
+## Evidence Progress
 
-同样，如果一个 baseline 在把超大 tool output 放入下一轮时直接 context overflow，该失败请求可能没有 provider usage；因此不能只看成功请求的 `reported_input_tokens` 判断它更省。
+Evidence Progress 是 Runtime 的一等机械概念，但不是第二套持久化数据库。
+
+现有：
+
+- `EvidenceRequirement`；
+- `EvidenceGap`；
+- `EvidenceDelta`；
+- `EvidenceReadiness`；
+- `EvidenceProgressTracker`。
+
+当前还增加：
+
+```text
+CoverageStatus:
+  unknown | partial | complete | stale
+
+ReadinessStatus:
+  unknown | insufficient | partial | ready
+```
+
+Progress 可以从 `InvestigationState.executions` 中的 Evidence URI、source SHA、line range、coverage 等机械历史重建。
+
+`restore()` 重建历史时不会把旧 evidence 误算成本轮 no-growth。
+
+## Stop 语义
+
+StopReason 只描述 Evidence acquisition，不描述诊断结论。
+
+### no_new_evidence
+
+本次 retrieval 没有产生此前未见的 canonical Evidence。
+
+不等于 investigation complete。
+
+### source_exhausted
+
+当前 source 在当前 investigation scope / requirement 下没有 Runtime 可机械发现的新增 Evidence。
+
+不等于物理文件全部返回给 Agent。
+
+### frontier_exhausted
+
+当前所有已知、允许确定性展开的 Entity / relation frontier 已处理完成。
+
+不等于 root cause found。
+
+### 其他机械状态
+
+```text
+budget_exhausted
+provider_unavailable
+source_changed
+```
+
+StopReason 带 `kind / scope / basis`，用于解释和测试 stop 的机械依据。
+
+## Canonical Runtime 已验证行为
+
+当前 `retrieve()` 已覆盖：
+
+- linked investigation history 重建；
+- repeated QueryTarget Evidence 的 novelty projection；
+- canonical result 继续保留完整 repeated Evidence，Agent-facing projection 可以不重复发送；
+- immutable RangeTarget 在 source version 相同且 context range 已覆盖时 deterministic hard-stop；
+- source 内容变化时旧 SHA 不能触发错误 hard-stop；
+- ProviderTarget 允许自定义 EvidenceProvider 进入统一 retrieve surface。
+
+Runtime-level `investigate()` 已能把 deterministic frontier stop 映射到 formal progress / stop projection。
+
+## Capability Registry
+
+复用已有：
+
+```text
+CapabilitySpec
+register_capability
+list_capabilities
+execute_capability
+```
+
+不增加第二套 capability registry。
+
+长期目标是让 Mobile / MCP 动态发现能力，并通过少量稳定入口执行，而不是每增加一个 Core feature 就新增上层专用 API。
+
+## 规模验证结论
+
+正式 scale gate 截止 50MB：
+
+```text
+25KB -> PASS
+5MB  -> PASS
+50MB -> PASS
+```
+
+50MB TraceCite 保持 required concept / evidence marker 全通过，且模型可见 tool output 保持 bounded；相同 Evidence 的 free-shell baseline 曾因约 5.2M chars 低选择性工具输出导致下一轮 `context_window_exceeded`。
+
+100MB / 500MB / 1GB+ 不再作为当前 merge / 产品价值判断的必测条件。继续放大同一 HDFS case 的新增决策信息低于多领域真实 root-cause 验证。
 
 ## 合并验收
 
-规模层面的 25KB / 5MB / 50MB 已经给出正向证据，但**目前还不应仅凭 scale benchmark 直接合并全部实验 API**。
+最终合并回 `refactor/agent-v2` 前，建议至少满足：
 
-合并回 `refactor/agent-v2` 前仍应完成或明确收敛：
+- canonical Runtime API / Progress / Stop / Identity tests green；
+- Core Python 3.10–3.14 Linux/macOS matrix green；
+- Evidence Intelligence Benchmark green；
+- 如 transport 语义发生变化，回归 25KB / 5MB / 50MB；
+- evidence recall 不下降；
+- answer correctness 不下降；
+- citation 可恢复且准确；
+- 至少 4–5 个不同领域真实 root-cause case 提供独立 truth；
+- Mobile/MCP 可以依赖 Provider/Capability/Projection contract，而不是 benchmark-only 逻辑。
 
-- canonical runtime 获得 progress / coverage / novelty hard-stop，而不是只存在于 benchmark host；
-- evidence recall 与 citation recovery 保持不下降；
-- real root-cause suite 扩展到多个独立项目/领域；
-- evaluator 能检查 unsupported claims、citation 与 fix alignment；
-- wall time、扫描量、重复 evidence、内存等资源成本不会抵消上下文收益；
-- 对外 Runtime/Integration contract 收敛，避免 benchmark-only 行为与产品行为长期分叉。
+真实 root-cause case 应尽量满足：
 
-如果这些条件成立，再把实验 API 收敛为正式 Runtime/Integration contract，并开始合并新旧 Ledger/Context 路径。
+```text
+real incident
++ runtime evidence
++ maintainer diagnosis
++ merged PR / fix commit
+```
+
+Agent 看不到 evaluator truth。
+
+## 当前下一主线
+
+Canonical Runtime contract 完全收绿之后：
+
+```text
+metrics 完善
+-> 多领域 real root-cause suite
+-> merge decision
+-> Mobile / MCP 稳定 contract 迁移
+```
+
+不再以更大的单一日志规模作为主线。
