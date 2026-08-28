@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "suite_id": "github-root-cause-30",
+  "cases": {
+    "pulumi-14231": {
+      "repo": "pulumi/pulumi",
+      "source_issue": 14231,
+      "fix_pr": 14234,
+      "merged_at": "2023-10-12T17:07:41Z",
+      "merge_commit_sha": "0dd51644b4782c8e20a28e6809240ac289106124",
+      "fix_title": "[pcl/binder] Fixes panic when binding the signature of output-versioned invokes without arguments",
+      "truth_text": "Fixes panic when binding the signature of output-versioned invokes without arguments."
+    },
+    "pulumi-21700": {
+      "repo": "pulumi/pulumi",
+      "source_issue": 21700,
+      "fix_pr": 21815,
+      "merged_at": "2026-02-17T08:42:18Z",
+      "merge_commit_sha": "86fc36f2a28ec48ebd9d02904520024970e75465",
+      "fix_title": "fix race in refresh step",
+      "truth_text": "In refresh --run-program the completion source was fulfilled immediately before the step executor had completed and registered the step in the snapshot, which could trigger an assertion. Fix this by fulfilling the completion source only in the complete function returned from Apply, when the step is truly completed."
+    },
+    "flutter-167887": {
+      "repo": "flutter/flutter",
+      "source_issue": 167887,
+      "fix_pr": 167954,
+      "merged_at": "2025-04-29T01:03:51Z",
+      "merge_commit_sha": "f7d7633f548b99275743002ee25475b31ea3cf91",
+      "fix_title": "Fix `late` variable non-assignment when WASM is enabled",
+      "truth_text": "Fix late variable non-assignment when WASM is enabled. This appears to be a regression from issue 165006."
+    },
+    "flutter-190799": {
+      "repo": "flutter/flutter",
+      "source_issue": 190799,
+      "fix_pr": 190819,
+      "merged_at": "2026-08-18T07:40:05Z",
+      "merge_commit_sha": "295e9f1e553f2e946d6e24f3bf28ca33fc78a83d",
+      "fix_title": "[native_assets] Record bundled code assets under their install name",
+      "truth_text": "On macOS and iOS the framework install name used @rpath/<name>.framework/<name> while NativeAssetsManifest.json recorded <name>.framework/<name>, so dlopen could map a second copy after rebuild and handles from the first copy became invalid. Both strings now come from one frameworkInstallName helper and the manifest records the same install name."
+    },
+    "otel-collector-13117": {
+      "repo": "open-telemetry/opentelemetry-collector",
+      "source_issue": 13117,
+      "fix_pr": 13118,
+      "merged_at": "2025-06-03T09:16:13Z",
+      "merge_commit_sha": "72878a1e9786482a045c32969d14f7ad581726a9",
+      "fix_title": "[confmap] fix panic when assigning nil maps",
+      "truth_text": "Do not panic on assigning nil maps to non-nil maps."
+    },
+    "otel-contrib-24908": {
+      "repo": "open-telemetry/opentelemetry-collector-contrib",
+      "source_issue": 24908,
+      "fix_pr": 24979,
+      "merged_at": "2023-08-07T13:44:55Z",
+      "merge_commit_sha": "4f2f4166d462d92f0ca94d8254efbe26dff48d67",
+      "fix_title": "[exporter/datadog] Set Capabilities on metrics exporter",
+      "truth_text": "Correctly set MutatesData to true on the Datadog metrics exporter. The missing capability was leading to panics when using multiple exporters."
+    },
+    "otel-contrib-16469": {
+      "repo": "open-telemetry/opentelemetry-collector-contrib",
+      "source_issue": 16469,
+      "fix_pr": 16470,
+      "merged_at": "2022-11-24T13:21:48Z",
+      "merge_commit_sha": "e4f1a43894160670a7974f83a5cdbe809942501a",
+      "fix_title": "[receiver/prometheus] fix panic on shutdown",
+      "truth_text": "Prometheus receiver: fix panic on Shutdown by guarding the shutdown path."
+    },
+    "envoy-43513": {
+      "repo": "envoyproxy/envoy",
+      "source_issue": 43513,
+      "fix_pr": 43526,
+      "merged_at": "2026-02-25T19:25:34Z",
+      "merge_commit_sha": "2d83b4f5a298f3b24be802c5e246e4d7cb329abd",
+      "fix_title": "peak_ewma: fix segfault, ring buffer overflow, and alpha calculation",
+      "truth_text": "The Peak EWMA constructor called createTimer on an Event::Dispatcher from worker threads, violating dispatcher thread safety and causing isThreadSafe assertion failures or segfaults. The fix removes timer-based aggregation and performs aggregation inline in chooseHost, avoiding the dispatcher timer."
+    },
+    "envoy-7154": {
+      "repo": "envoyproxy/envoy",
+      "source_issue": 7154,
+      "fix_pr": 7192,
+      "merged_at": "2019-06-07T03:40:47Z",
+      "merge_commit_sha": "9d47062517cf9d728d0c09246ebdcb1111449c6a",
+      "fix_title": "fix regression in router that can cause a crash on response timeout",
+      "truth_text": "Retry hedging changed response-timeout logic so the upstream request was only reset before headers. A timeout after headers but before end_stream could decode body or trailers through a null pointer. The fix restores resetting the upstream request on response timeout."
+    },
+    "containerd-8742": {
+      "repo": "containerd/containerd",
+      "source_issue": 8742,
+      "fix_pr": 8748,
+      "merged_at": "2023-07-10T15:12:05Z",
+      "merge_commit_sha": "97f2e3bc031113ecc3726954f159ca5770e89317",
+      "fix_title": "Resolve docker.NewResolver race condition",
+      "truth_text": "Resolve docker.NewResolver race condition. The race detector showed a concurrent map read in remotes/docker.NewResolver; the change makes resolver map access safe."
+    },
+    "containerd-10062": {
+      "repo": "containerd/containerd",
+      "source_issue": 10062,
+      "fix_pr": 10133,
+      "merged_at": "2024-04-25T09:10:53Z",
+      "merge_commit_sha": "0426e3c2eb39b246f783cb16d0980ed9e0e69563",
+      "fix_title": "cri: introspectRuntimeFeatures: fix nil panic",
+      "truth_text": "CRI introspectRuntimeFeatures: fix nil panic by guarding nil options before marshaling runtime feature options."
+    },
+    "containerd-4795": {
+      "repo": "containerd/containerd",
+      "source_issue": 4795,
+      "fix_pr": 4855,
+      "merged_at": "2020-12-16T13:35:34Z",
+      "merge_commit_sha": "318e34b9831d0c08bf7052eacb19014983249bcc",
+      "fix_title": "docker: avoid concurrent map access panic",
+      "truth_text": "Docker resolver/push path: avoid concurrent map access panic by removing unsafe shared concurrent map access."
+    },
+    "kubernetes-39480": {
+      "repo": "kubernetes/kubernetes",
+      "source_issue": 39480,
+      "fix_pr": 39493,
+      "merged_at": "2017-01-06T16:44:18Z",
+      "merge_commit_sha": "402abd23ef8b7958055465835a131a70398cee19",
+      "fix_title": "kubelet: fix nil deref in volume type check",
+      "truth_text": "For VolumeSpec either Volume or PersistentVolume is set, not both, so the old volume type check could nil-dereference PersistentVolumes. PersistentVolumes are not memory-backed; the fix limits the check to local/temporal volumes and avoids dereferencing a missing Volume."
+    },
+    "kubernetes-86676": {
+      "repo": "kubernetes/kubernetes",
+      "source_issue": 86676,
+      "fix_pr": 86689,
+      "merged_at": "2020-01-08T10:57:41Z",
+      "merge_commit_sha": "fd0358fd211a52106fd21f036ccb0bffbc582474",
+      "fix_title": "Lock checksum calculation for v1 CPUManager state to pre 1.18 logic",
+      "truth_text": "Pre-1.18 checkpoints were hashed using the type name CPUManagerCheckpoint, but migration verified V1 using CPUManagerCheckpointV1, making real old files appear corrupt. Verify V1 checksums with the original CPUManagerCheckpoint type name and lock the pre-1.18 checksum algorithm."
+    },
+    "argocd-25189": {
+      "repo": "argoproj/argo-cd",
+      "source_issue": 25189,
+      "fix_pr": 25192,
+      "merged_at": "2025-11-13T15:49:19Z",
+      "merge_commit_sha": "60f2ff5f77912847de4844f7363706bac2347ace",
+      "fix_title": "fix: return empty list instead of nil to prevent panic. Fixes #25189",
+      "truth_text": "Cluster cache resource list path: return an empty UnstructuredList instead of nil to prevent a nil panic when List returns nil with no error."
+    },
+    "argocd-18020": {
+      "repo": "argoproj/argo-cd",
+      "source_issue": 18020,
+      "fix_pr": 18840,
+      "merged_at": "2024-06-29T15:03:36Z",
+      "merge_commit_sha": "3d3620e6a0b5fb0933f7e23290437fa3f0ed84c7",
+      "fix_title": "fix(controller): bad server-side diffs (#18213)",
+      "truth_text": "A nil gvkParser caused panics when using server-side diff and incorrect diffs when using server-side apply. The fix initializes the gvkParser for the server-side diff/apply path."
+    },
+    "argocd-7898": {
+      "repo": "argoproj/argo-cd",
+      "source_issue": 7898,
+      "fix_pr": 11805,
+      "merged_at": "2023-02-01T17:59:34Z",
+      "merge_commit_sha": "e510a77a1d28f6d0a9a39396e747482b94a173f8",
+      "fix_title": "fix: repo-server - prevent locked state after unclean git checkout",
+      "truth_text": "When checkout crossed ARGOCD_EXEC_TIMEOUT git received SIGKILL and could leave index.lock behind, causing later operations to fail. The fix sends SIGTERM and waits for git to exit cleanly before continuing."
+    },
+    "prometheus-19432": {
+      "repo": "prometheus/prometheus",
+      "source_issue": 19432,
+      "fix_pr": 19433,
+      "merged_at": "2026-08-18T09:19:18Z",
+      "merge_commit_sha": "98c983239715d0d81b8acf3560d47aba2a6d1649",
+      "fix_title": "rules: fix nil logger panic in the default group loader",
+      "truth_text": "NewManager defaulted Logger only after constructing FileLoader, so the loader captured a nil logger. Multi-document warning code later dereferenced it and panicked. Move logger defaulting before FileLoader construction so everything captures the non-nil no-op logger."
+    }
+  }
+}
