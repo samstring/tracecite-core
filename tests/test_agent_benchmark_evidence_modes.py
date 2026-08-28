@@ -228,21 +228,33 @@ def test_scale_search_has_no_benchmark_specific_caps(tmp_path: Path) -> None:
             context_id="",
         )
         runtime._inspected_files.add("evidence.log")
-        captured: list[str] = []
+        captured: dict[str, object] = {}
 
-        def fake_run(command, *, timeout=300):
-            captured.extend(str(item) for item in command)
-            return "ok"
+        class SearchCaptured(RuntimeError):
+            pass
 
-        runtime._run = fake_run
-        assert runtime._tracecite_search_scale(
-            {"file": "evidence.log", "query": "one", "regex": False}
-        ) == "ok"
-        assert "--no-snapshot" in captured
-        assert "--compact" in captured
-        assert "--max-output-chars" not in captured
-        assert "--max-evidence" not in captured
-        assert "--max-line-chars" not in captured
+        def fake_search(path, query, **kwargs):
+            captured["path"] = path
+            captured["query"] = query
+            captured.update(kwargs)
+            raise SearchCaptured
+
+        module.tracecite_search = fake_search
+        try:
+            runtime._tracecite_search_scale(
+                {"file": "evidence.log", "query": "one", "regex": False}
+            )
+        except SearchCaptured:
+            pass
+        else:
+            raise AssertionError("scale search did not invoke canonical tracecite_search")
+
+        assert captured["path"] == evidence
+        assert captured["query"] == "one"
+        assert captured["snapshot"] is False
+        assert captured["max_evidence"] is None
+        assert captured["max_line_chars"] is None
+        assert captured["cache"] is True
     finally:
         _restore_scale_host_globals(module)
 
