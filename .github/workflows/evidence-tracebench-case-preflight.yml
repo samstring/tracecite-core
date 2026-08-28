@@ -1,0 +1,98 @@
+name: TraceBench Case Preflight
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - ".github/workflows/evidence-tracebench-case-preflight.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  corrupt-block-case:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download pinned TraceBench
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tb
+          curl -L --retry 5 --retry-delay 2 -o /tmp/tb/tb.zip \
+            'https://zenodo.org/records/8196385/files/HDFS_v3_TraceBench.zip?download=1'
+          echo 'c69999ff28933d2b163170d26c2faf64  /tmp/tb/tb.zip' | md5sum -c -
+      - name: Extract selected fault and normal controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /tmp/tb
+          unzip -q tb.zip \
+            'tracebench/AN_Data_corruptBlk_r_30FDN_30C_1to19B_0to120INT_15RT_5WT/*' \
+            'tracebench/NM_CL_r_30C_1to19B_0to120INT_50RT_10WT/*' \
+            'tracebench/NM_CL_rpc_30C_0to0INT_10RT_1WT/*'
+          find tracebench -type f -printf '%s\t%p\n' | sort -nr | tee /tmp/tb/selected-sizes.tsv
+      - name: Inspect schemas and fault signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          fault=/tmp/tb/tracebench/AN_Data_corruptBlk_r_30FDN_30C_1to19B_0to120INT_15RT_5WT
+          {
+            for f in operation.csv trace.csv edge.csv event.csv; do
+              echo "=== $f ==="
+              head -n 8 "$fault/$f"
+              echo
+            done
+            echo '=== candidate fault evidence ==='
+            rg -n -i -m 80 'checksum|corrupt|exception|error|failed|bad block|could not obtain block|readBlock' "$fault/event.csv" || true
+          } > /tmp/tb/case-preview.txt
+          sed -n '1,220p' /tmp/tb/case-preview.txt
+      - name: Analyze task and event distributions
+        shell: bash
+        run: |
+          python - <<'PY'
+          import csv, json
+          from collections import Counter
+          from pathlib import Path
+          root = Path('/tmp/tb/tracebench/AN_Data_corruptBlk_r_30FDN_30C_1to19B_0to120INT_15RT_5WT')
+          out = {'files': {p.name: p.stat().st_size for p in root.iterdir() if p.is_file()}}
+          for name in ('operation.csv','trace.csv','edge.csv','event.csv'):
+              p = root/name
+              with p.open(encoding='utf-8', errors='replace', newline='') as fh:
+                  reader = csv.reader(fh)
+                  header = next(reader, [])
+                  rows = []
+                  for i,row in enumerate(reader):
+                      rows.append(row)
+                      if i >= 9999:
+                          break
+              out[name] = {'header': header, 'sample_rows': rows[:5], 'sampled_rows': len(rows)}
+          event = root/'event.csv'
+          keywords = Counter()
+          examples = []
+          with event.open(encoding='utf-8', errors='replace') as fh:
+              for lineno,line in enumerate(fh,1):
+                  lower=line.lower()
+                  hits=[k for k in ('checksum','corrupt','exception','error','failed','could not obtain block','readblock') if k in lower]
+                  for k in hits: keywords[k]+=1
+                  if hits and len(examples)<80:
+                      examples.append({'line':lineno,'hits':hits,'text':line.rstrip()[:1000]})
+          out['fault_keyword_counts']=dict(keywords)
+          out['fault_examples']=examples
+          Path('/tmp/tb/case-analysis.json').write_text(json.dumps(out,indent=2),encoding='utf-8')
+          print(json.dumps(out,indent=2)[:20000])
+          PY
+      - name: Upload compact case analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracebench-corrupt-block-preflight
+          path: |
+            /tmp/tb/selected-sizes.tsv
+            /tmp/tb/case-preview.txt
+            /tmp/tb/case-analysis.json
+          if-no-files-found: error
+
+# Temporary self-scoped push trigger for one model-free case analysis; restore manual-only afterwards.
