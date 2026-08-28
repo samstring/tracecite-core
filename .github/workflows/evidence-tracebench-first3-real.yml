@@ -44,29 +44,29 @@ jobs:
         id: tracebench-cache
         uses: actions/cache@v4
         with:
-          path: /tmp/tb-first3/archive/HDFS_v3_TraceBench.zip
+          path: /tmp/tracebench-cache/HDFS_v3_TraceBench.zip
           key: tracebench-hdfs-v3-c69999ff28933d2b163170d26c2faf64
       - name: Download pinned TraceBench
         if: steps.tracebench-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/tb-first3/archive
+          mkdir -p /tmp/tracebench-cache
           curl -L --retry 5 --retry-delay 2 \
-            -o /tmp/tb-first3/archive/HDFS_v3_TraceBench.zip \
+            -o /tmp/tracebench-cache/HDFS_v3_TraceBench.zip \
             'https://zenodo.org/records/8196385/files/HDFS_v3_TraceBench.zip?download=1'
       - name: Verify pinned TraceBench
         shell: bash
         run: |
           set -euo pipefail
-          echo 'c69999ff28933d2b163170d26c2faf64  /tmp/tb-first3/archive/HDFS_v3_TraceBench.zip' | md5sum -c -
+          echo 'c69999ff28933d2b163170d26c2faf64  /tmp/tracebench-cache/HDFS_v3_TraceBench.zip' | md5sum -c -
       - name: Build deterministic 25KB, 500KB and 5MB evidence tiers
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p /tmp/tb-first3/extracted
           cd /tmp/tb-first3/extracted
-          unzip -q /tmp/tb-first3/archive/HDFS_v3_TraceBench.zip \
+          unzip -q /tmp/tracebench-cache/HDFS_v3_TraceBench.zip \
             'tracebench/AN_Data_corruptBlk_r_30FDN_30C_1to19B_0to120INT_15RT_5WT/event.csv' \
             'tracebench/NM_*/event.csv'
           cd "$GITHUB_WORKSPACE"
@@ -237,6 +237,10 @@ jobs:
             done
           done
           printf '{"requested":6,"failed":%d}\n' "$failed" | tee "$root/results/batch-summary.json"
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::$failed of 6 benchmark runs failed host or quality gates"
+            exit 1
+          fi
       - name: Upload first-three results
         if: always()
         uses: actions/upload-artifact@v4
@@ -247,4 +251,4 @@ jobs:
             /tmp/tb-first3/tier-manifest.json
           if-no-files-found: error
 
-# Temporary branch/path push trigger. Restore manual-only after the fixed validation run.
+# Temporary branch/path push trigger for the inspect-first validation run. Restore manual-only after this run.
