@@ -1,0 +1,46 @@
+Source: https://github.com/pulumi/pulumi/issues/20529
+Project: pulumi/pulumi
+
+Symptom
+=======
+After changing @pulumi/kubernetes versions and performing an update that removes/replaces resources, Pulumi sometimes aborts with:
+
+panic: fatal: An assertion has failed: 'Check' and 'Diff' must be called before 'Update' (urn:pulumi:<redacted>::pulumi:providers:kubernetes::eks-provider)
+
+The failure is timing-dependent. Repeatedly switching between two program versions and running `pulumi up --skip-preview` eventually reproduces it. After the panic, the program exits and the Pulumi Cloud operation remains pending until manually cancelled.
+
+Relevant environment
+====================
+CLI versions observed around 3.162.0-3.191.0.
+Kubernetes provider versions include 4.21.1 and 4.23.0.
+Linux x86_64.
+
+Observed update log
+===================
+
+pulumi:pulumi:Stack <redacted> running read pulumi:pulumi:StackReference cluster-stack
+~ pulumi:providers:kubernetes eks-provider updating (0s) [diff: ~version]
+Error: Command failed with exit code 2: pulumi up --yes --skip-preview ...
+panic: fatal: An assertion has failed: 'Check' and 'Diff' must be called before 'Update' (urn:pulumi:<redacted>::pulumi:providers:kubernetes::eks-provider)
+
+goroutine 166 [running]:
+github.com/pulumi/pulumi/sdk/v3/go/common/util/contract.failfast(...)
+  sdk/v3/go/common/util/contract/failfast.go:23
+github.com/pulumi/pulumi/sdk/v3/go/common/util/contract.Assertf(...)
+  sdk/v3/go/common/util/contract/assert.go:35
+github.com/pulumi/pulumi/pkg/v3/resource/deploy/providers.(*Registry).Update(...)
+  pkg/v3/resource/deploy/providers/registry.go:836
+github.com/pulumi/pulumi/pkg/v3/resource/deploy.(*UpdateStep).Apply(...)
+  pkg/v3/resource/deploy/step.go:826
+github.com/pulumi/pulumi/pkg/v3/resource/deploy.(*stepExecutor).continueExecuteStep(...)
+  pkg/v3/resource/deploy/step_executor.go:468
+github.com/pulumi/pulumi/pkg/v3/resource/deploy.(*stepExecutor).executeStep(...)
+  pkg/v3/resource/deploy/step_executor.go:461
+github.com/pulumi/pulumi/pkg/v3/resource/deploy.(*stepExecutor).executeChain(...)
+  pkg/v3/resource/deploy/step_executor.go:379
+github.com/pulumi/pulumi/pkg/v3/resource/deploy.(*stepExecutor).worker(...)
+  pkg/v3/resource/deploy/step_executor.go:658
+
+Reproduction characteristics
+============================
+The update changes the Kubernetes provider version while resources are also being removed/replaced. It is not consistent across runs and appears timing dependent, which suggests concurrent engine activity rather than a deterministic input-validation failure.

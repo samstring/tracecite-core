@@ -1,0 +1,31 @@
+Source: https://github.com/doublecmd/doublecmd/issues/2777
+Project: doublecmd/doublecmd
+Version: 1.2.3 beta Rev. 178, x86_64-Linux-qt6, Arch Linux/KDE Wayland, Qt 6.10.2
+
+Symptom
+=======
+Opening Options -> File Associations closes Double Commander. Deleting extassoc.xml makes the settings section open again; after creating an association and reopening the section, it crashes again. Existing associations otherwise work. Version 1.1.32 worked on the same OS.
+
+Crash log
+=========
+
+--------------- 09-03-2026, 18:35:22 ---------------
+| DC v1.2.3 beta Rev. 178 -- x86_64-Linux-qt6
+| Arch Linux -- Qt 6.10.2 | PID 27349
+Unhandled exception: EAccessViolation: Access violation
+  Stack trace:
+  $00007F5D6854A0C4 in /usr/lib/libQt6Widgets.so.6
+  $00000000005E8393 in /opt/doublecmd/doublecmd
+  $00000000006242FC in /opt/doublecmd/doublecmd
+  $00007F5D6855E1BB in /usr/lib/libQt6Widgets.so.6
+  $00007F5D685CCDA6 in /usr/lib/libQt6Widgets.so.6
+  $00007F5D6736AC4A in /usr/lib/libQt6Core.so.6
+  $00007F5D68503370 in /usr/lib/libQt6Widgets.so.6
+  $00007F5D6736BF48 in /usr/lib/libQt6Core.so.6
+  $00007F5D6854F42E in /usr/lib/libQt6Widgets.so.6
+  $00007F5D685517A7 in /usr/lib/libQt6Widgets.so.6
+  $00007F5D685760BF in /usr/lib/libQt6Widgets.so.6
+
+Key contrast
+============
+The crash depends on persisted file-association configuration: removing extassoc.xml removes the immediate crash, and saving a new association makes the crash return on the next settings open.

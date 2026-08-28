@@ -1,0 +1,37 @@
+Source: https://github.com/doublecmd/doublecmd/issues/2616
+Project: doublecmd/doublecmd
+Version: 1.1.30 gamma Rev. 815, Windows 10 x86_64
+
+Symptom
+=======
+Selecting all files from a checkout of cudatext-addons/cuda_snippets and packing them into ZIP from the Double Commander toolbar crashes the application.
+
+Crash log
+=========
+
+--------------- 19-11-2025, 21:56:56 ---------------
+| DC v1.1.30 gamma Rev. 815 -- x86_64-Win64-win32/win64
+| Windows 10 22H2 x86_64 | PID 7316
+Unhandled exception: EAccessViolation: Access violation
+  Stack trace:
+  $00007FFDC90949E6 in C:\Windows\SYSTEM32\ntdll.dll
+  $00007FFDC905FCB4 in C:\Windows\SYSTEM32\ntdll.dll
+  $00007FFDC905FAE2 in C:\Windows\SYSTEM32\ntdll.dll
+  $000000011001067A in C:\doublecmd\plugins\wcx\zip\zip.wcx
+  $000000011000FC8B in C:\doublecmd\plugins\wcx\zip\zip.wcx
+  $000000011000F159 in C:\doublecmd\plugins\wcx\zip\zip.wcx
+  $000000011000F269 in C:\doublecmd\plugins\wcx\zip\zip.wcx
+  $000000011000F393 in C:\doublecmd\plugins\wcx\zip\zip.wcx
+  $000000011000E40B in C:\doublecmd\plugins\wcx\zip\zip.wcx
+  $0000000110006609 in C:\doublecmd\plugins\wcx\zip\zip.wcx
+  $0000000110006684 in C:\doublecmd\plugins\wcx\zip\zip.wcx
+  $000000011001478E in C:\doublecmd\plugins\wcx\zip\zip.wcx
+  $000000011009ADBD in C:\doublecmd\plugins\wcx\zip\zip.wcx
+  $0000000110036EC4 in C:\doublecmd\plugins\wcx\zip\zip.wcx
+  $00007FF7A31DF66A line 491, column 37 of uwcxmodule.pas in C:\doublecmd\doublecmd.exe
+  $00007FF7A31E08E5 line 799, column 18 of uwcxmodule.pas in C:\doublecmd\doublecmd.exe
+  $00007FF7A338B827 line 405, column 55 of filesources/wcxarchive/uwcxarchivefilesource.pas in C:\doublecmd\doublecmd.exe
+
+Evidence concentration
+======================
+Most of the crash stack is inside the bundled ZIP WCX plugin before returning through Double Commander's WCX module and archive file source.

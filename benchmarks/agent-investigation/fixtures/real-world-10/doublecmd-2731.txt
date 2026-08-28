@@ -1,0 +1,15 @@
+Source: https://github.com/doublecmd/doublecmd/issues/2731
+Project: doublecmd/doublecmd
+Version: 1.1.24 gamma Rev. 721, Windows 11 25H2 x86_64
+
+Symptom
+=======
+In File Associations settings, entering an icon path such as `C:/Windows/System32/shell32.dll,1` causes Double Commander to crash when typing a colon (`:`) or slash (`/`). Pasting the path and moving/deleting text also crashes when the caret reaches one of these characters.
+
+Behavior detail
+===============
+The crash does not necessarily occur on every later slash or in unusual combinations such as `C://::/:`; the failure is associated with editing/parsing the icon filename/path field as specific path-separator characters are processed.
+
+Context
+=======
+The affected UI is the File Associations configuration workflow, specifically the icon file/path entry. No unrelated filesystem operation is required; the crash is triggered while editing the text field itself.

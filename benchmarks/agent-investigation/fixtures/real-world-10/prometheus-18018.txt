@@ -1,0 +1,50 @@
+Source: https://github.com/prometheus/prometheus/issues/18018
+Project: prometheus/prometheus
+Reported against: Prometheus v3.8.1 and v3.9.1
+
+Symptom
+=======
+Several PromQL range-function queries panic when an @ modifier points to a timestamp with no data.
+
+Observed error:
+
+execution: unexpected error: runtime error: index out of range [0] with length 0
+
+Expected behavior: return no data instead of panicking.
+
+Reproduction queries
+====================
+
+quantile_over_time(scalar(up) + 1, {__name__="up"}[1h:1m] @ 1111111)
+deriv({__name__="up"}[1h:1m] @ 1111111)
+changes({__name__="up"}[1h:1m] @ 1111111)
+predict_linear({__name__="up"}[1h:1m] @ 111111111, 0.1)
+
+The reporter notes that data exists at ordinary timestamps but the chosen @ timestamp has no data. The same family of queries without the empty @ result does not panic. The reporter also suspects a behavior change after Prometheus PR #16797.
+
+Example panic stack
+===================
+
+ts=2026-02-04T07:36:49.155683215Z caller=handler.go:87 level=error caller=engine.go:1123
+time=2026-02-04T07:36:49.155674062Z msg="runtime panic during query evaluation"
+expr="predict_linear({__name__=\"test_series_a\",status_code!=\"404\"} offset 2m9s[1h:1m] @ 1770183402.434 offset 1m40s, -time())"
+err="runtime error: index out of range [0] with length 0"
+
+stacktrace:
+  goroutine 55914 [running]:
+    github.com/prometheus/prometheus/promql.(*evaluator).recover(...)
+        promql/engine.go:1121
+    panic(...)
+        runtime/panic.go:783
+    github.com/prometheus/prometheus/promql.funcPredictLinear(...)
+        promql/functions.go:1504
+    github.com/prometheus/prometheus/promql.(*evaluator).eval.func3(...)
+        promql/engine.go:1854
+    github.com/prometheus/prometheus/promql.(*evaluator).rangeEval(...)
+        promql/engine.go:1338
+    github.com/prometheus/prometheus/promql.(*evaluator).eval(...)
+        promql/engine.go:1853
+
+Important contrast
+==================
+The failing @ timestamp produces an empty range/vector. Queries with data at the evaluation point, or equivalent queries without the empty @ selection, do not show the panic.

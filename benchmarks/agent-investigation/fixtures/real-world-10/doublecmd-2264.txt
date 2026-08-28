@@ -1,0 +1,23 @@
+Source: https://github.com/doublecmd/doublecmd/issues/2264
+Project: doublecmd/doublecmd
+Version: 1.1.23 gamma Rev. 694, x86_64-Linux-gtk2, Linux Mint 22.1
+
+Symptom
+=======
+After configuring an SFTP/SSH+SCP connection with private keys and clicking OK, Double Commander crashes. It reproduces with different remote servers.
+
+Terminal evidence
+=================
+
+Destroying connection TWfxPluginFileSourceConnection
+Creating connection TWfxPluginFileSourceConnection
+An unhandled exception occurred at $000074CFEEAFAE77:
+EFCreateError: Unable to create file "/usr/share/doublecmd/settings/wfx.ini"
+
+Installation context
+====================
+The application archive was unpacked under `/usr/share/doublecmd` and a symlink was created in `/usr/local/bin`. The `/usr/share/doublecmd/settings/` directory is owned by root and a regular user cannot write there. Making the directory world-writable causes the SFTP setup to work, although the reporter identifies that only as a workaround.
+
+Evidence concentration
+======================
+The immediate failure is a settings-save attempt to a non-writable system installation directory, not a network connection failure to either remote server.

@@ -1,0 +1,31 @@
+Source: https://github.com/doublecmd/doublecmd/issues/2772
+Project: doublecmd/doublecmd
+Version: 1.3.0 alpha Rev. 12785, x86_64-Linux-qt6, Arch Linux, Qt 6.10.2
+
+Symptom
+=======
+Double Commander fails during launch and hangs unless killed/aborted. The same class of error is also observed with the packaged 1.2.3 build.
+
+Crash log
+=========
+
+--------------- 03-03-2026, 17:41:32 ---------------
+| DC v1.3.0 alpha Rev. 12785 -- x86_64-Linux-qt6
+| Arch Linux -- Qt 6.10.2 | PID 76331
+Unhandled exception: EConvertError: Illegal character in format string
+  Stack trace:
+  $00000000004A3BAC in /home/paradise/Misc/compiledSoftware/doublecmd/doublecmd
+  $00000000004A37F4 in /home/paradise/Misc/compiledSoftware/doublecmd/doublecmd
+  $0000000000898071 line 4541, column 9 of grids.pas in /home/paradise/Misc/compiledSoftware/doublecmd/doublecmd
+  $0000000000897CDB line 4461, column 7 of grids.pas in /home/paradise/Misc/compiledSoftware/doublecmd/doublecmd
+  $000000000089527D line 3926, column 5 of grids.pas in /home/paradise/Misc/compiledSoftware/doublecmd/doublecmd
+  $0000000000672FFE line 123, column 5 of include/customcontrol.inc in /home/paradise/Misc/compiledSoftware/doublecmd/doublecmd
+  $0000000000650145 line 4913, column 7 of include/wincontrol.inc in /home/paradise/Misc/compiledSoftware/doublecmd/doublecmd
+  $000000000089AB59 line 5085, column 31 of grids.pas in /home/paradise/Misc/compiledSoftware/doublecmd/doublecmd
+  $0000000000853D34 line 4358, column 9 of qtwidgets.pas in /home/paradise/Misc/compiledSoftware/doublecmd/doublecmd
+
+A second exception follows shortly afterward with the same EConvertError class.
+
+Evidence concentration
+======================
+The exception is a format-string conversion error during grid/widget initialization rather than a filesystem or network failure. The stack repeatedly runs through Lazarus grid code during startup.

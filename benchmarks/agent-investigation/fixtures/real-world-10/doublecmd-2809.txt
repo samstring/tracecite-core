@@ -1,0 +1,32 @@
+Source: https://github.com/doublecmd/doublecmd/issues/2809
+Project: doublecmd/doublecmd
+Version: 1.2.4 beta, x86_64-Linux-qt6, Gentoo/KDE Wayland, Qt 6.10.2
+
+Symptom
+=======
+Opening Options -> File views -> Brief throws an EReadError, including with a freshly cleared ~/.config/doublecmd directory.
+
+Crash log
+=========
+
+--------------- 30-03-2026, 22:45:45 ---------------
+| DC v1.2.4 beta -- x86_64-Linux-qt6
+| Gentoo -- Qt 6.10.2 | PID 67912
+Unhandled exception: EReadError: Error reading gbColumns.ChildSizing.EnlargeVertical: Invalid value for property
+  Stack trace:
+  $000000000047CA19 in /usr/bin/doublecmd
+  $000000000047BCA9 in /usr/bin/doublecmd
+  $000000000047B9D2 in /usr/bin/doublecmd
+  $000000000047BD64 in /usr/bin/doublecmd
+  $000000000047D78F in /usr/bin/doublecmd
+  $00000000005E19D0 line 3164, column 47 of lresources.pp in /usr/bin/doublecmd
+  $00000000005D9391 line 804, column 13 of lresources.pp in /usr/bin/doublecmd
+  $000000000047561E in /usr/bin/doublecmd
+  $00000000004B67F9 line 233, column 3 of include/customframe.inc in /usr/bin/doublecmd
+  $0000000000B5E7B1 line 502, column 26 of foptions.pas in /usr/bin/doublecmd
+  $00000000007BCB2F line 4486, column 25 of include/treeview.inc in /usr/bin/doublecmd
+  $00000000006FE516 line 179, column 5 of customtimer.pas in /usr/bin/doublecmd
+
+Key contrast
+============
+The same failure occurs after clearing user configuration, so the evidence points away from a corrupted per-user settings file and toward a shipped form/resource property incompatibility or invalid serialized property value in the Brief options UI.

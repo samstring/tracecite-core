@@ -1,0 +1,28 @@
+Source: https://github.com/doublecmd/doublecmd/issues/3061
+Project: doublecmd/doublecmd
+Version: 1.2.8 gamma Rev. 383, x86_64-Linux-qt5, Ubuntu 26.04
+
+Symptom
+=======
+Viewing or editing a reduced Swagger YAML file with F3/F4 reproducibly crashes Double Commander with EAccessViolation. The reporter noticed the YAML uses backslash-escaped line endings and that the viewer renders nonsense around those lines before crashing.
+
+Crash log
+=========
+
+--------------- 26-08-2026, 10:25:37 ---------------
+| DC v1.2.8 gamma Rev. 383 -- x86_64-Linux-qt5
+| Ubuntu 26.04 LTS -- Qt 5.15.18 | PID 21697
+Unhandled exception: EAccessViolation: Access violation
+  Stack trace:
+  $0000000000A70CC8 line 515, column 12 of synhighlighteryaml.pas in /usr/bin/doublecmd
+  $0000000000975FB2 line 1768, column 5 of synedithighlighter.pp in /usr/bin/doublecmd
+  $0000000000975A1A line 1696, column 18 of synedithighlighter.pp in /usr/bin/doublecmd
+  $0000000000873145 line 5590, column 3 of synedit.pp in /usr/bin/doublecmd
+  $00000000008732FE line 5612, column 3 of synedit.pp in /usr/bin/doublecmd
+  $0000000000865459 line 2623, column 7 of synedit.pp in /usr/bin/doublecmd
+  $00000000008690BB line 3736, column 7 of synedit.pp in /usr/bin/doublecmd
+  $0000000000B04FA0 line 358, column 3 of ushowform.pas in /usr/bin/doublecmd
+
+Reproduction note
+=================
+A heavily reduced version of the YAML remains sufficient to reproduce the crash. The suspicious input characteristic is escaped/backslash-heavy YAML text, and the top application frame is specifically the YAML syntax highlighter.
