@@ -69,3 +69,4 @@ jobs:
           if-no-files-found: warn
 
 # Push-triggered smoke is intentional while validating the new raw evidence surface.
+# Provider availability probe: 2026-08-28.
