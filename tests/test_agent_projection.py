@@ -6,6 +6,7 @@ from tracecite.integrations.agent_projection import (
     dedupe_evidence_labels,
     dedupe_survey_coverage,
     lightweight_result,
+    project,
 )
 
 
@@ -88,3 +89,26 @@ def test_apply_survey_brief_strips_template_text() -> None:
     assert brief["data"]["brief"] is True
     assert "text" not in brief["data"]["top_templates"][0]["samples"][0]
     assert len(brief["evidence"][0]["label"]) <= 80
+
+
+def test_project_full_returns_detached_canonical_view() -> None:
+    payload = {"operation": "search", "data": {"query": "timeout"}, "evidence": []}
+
+    full = project(payload, profile="full")
+    full["data"]["query"] = "changed"
+
+    assert payload["data"]["query"] == "timeout"
+
+
+def test_project_accepts_custom_upper_layer_projection() -> None:
+    payload = {"operation": "search", "status": "ok", "evidence": [{"uri": "E1"}]}
+
+    view = project(
+        payload,
+        profile=lambda result: {
+            "status": result["status"],
+            "evidence_count": len(result.get("evidence") or []),
+        },
+    )
+
+    assert view == {"status": "ok", "evidence_count": 1}
