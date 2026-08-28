@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -82,4 +83,17 @@ common._tools_for_mode = _tools_for_mode
 
 
 if __name__ == "__main__":
-    raise SystemExit(base.run())
+    try:
+        raise SystemExit(base.run())
+    except Exception as exc:
+        transcript_value = os.environ.get("TRACECITE_BENCH_TRANSCRIPT", "").strip()
+        if transcript_value:
+            try:
+                common._append_event(
+                    Path(transcript_value),
+                    {"type": "host_error", "error": type(exc).__name__, "message": str(exc)},
+                )
+            except Exception:
+                pass
+        print(f"benchmark host failed: {type(exc).__name__}: {exc}", file=os.sys.stderr)
+        raise
