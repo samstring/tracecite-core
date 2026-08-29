@@ -98,8 +98,8 @@ jobs:
           set -euo pipefail
           rm -rf "$RESULT"
           mkdir -p "$RESULT" "$PREP"
-          python -m tracecite.root_cause_benchmarking validate "$CASE_DIR" > "$RESULT/validate.json"
-          python -m tracecite.root_cause_benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT/prepare.json"
+          python -m tracecite.benchmarking validate "$CASE_DIR" > "$RESULT/validate.json"
+          python -m tracecite.benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT/prepare.json"
           PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
           test -n "$PREPARED"
           python - "$PREPARED" >> "$GITHUB_ENV" <<'PY'
@@ -161,7 +161,7 @@ jobs:
             python benchmarks/agent-investigation/pi_session_to_transcript.py \
               "$SESSION" "$ANSWER" "$RESULT/pi-tracecite-transcript.jsonl" \
               --mode pi-tracecite --model "$BENCH_MODEL"
-            python -m tracecite.root_cause_benchmarking score \
+            python -m tracecite.benchmarking score \
               "$CASE_DIR" "$RESULT/pi-tracecite-transcript.jsonl" \
               > "$RESULT/pi-tracecite-score.json" || true
             cat "$RESULT/pi-tracecite-score.json"
