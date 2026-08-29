@@ -59,6 +59,13 @@ from .source_session import (
     update_source_session_coverage,
 )
 from .finding_validation import FindingValidationResult, validate_finding
+from .test_assessment import (
+    TEST_ASSESSMENT_OUTCOMES,
+    TestAssessmentValidation,
+    assess_test,
+    latest_test_assessments,
+    validate_test_assessment,
+)
 from .investigation_summary import (
     SUMMARY_SCHEMA_VERSION,
     InvestigationSummaryError,
@@ -188,6 +195,11 @@ __all__ = [
     "FINDING_OUTCOMES",
     "FindingValidationResult",
     "validate_finding",
+    "TEST_ASSESSMENT_OUTCOMES",
+    "TestAssessmentValidation",
+    "assess_test",
+    "latest_test_assessments",
+    "validate_test_assessment",
     "SOURCE_SESSION_STATUSES",
     "register_source_session",
     "get_source_session",
