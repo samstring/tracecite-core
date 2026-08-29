@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/pi-agent-real-benchmark.yml
       - benchmarks/agent-investigation/pi_session_to_transcript.py
+      - benchmarks/agent-investigation/pi_tracecite_extension.ts
       - benchmarks/agent-investigation/scale-cases/kubernetes-140268/**
       - src/tracecite/**
 
@@ -84,7 +85,7 @@ jobs:
                                   "cacheWrite": 0,
                               },
                               "contextWindow": 1_000_000,
-                              "maxTokens": 1_800,
+                              "maxTokens": 4_096,
                               "compat": {
                                   "supportsDeveloperRole": False,
                                   "supportsReasoningEffort": False,
@@ -132,7 +133,7 @@ jobs:
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
           SYSTEM_PROMPT=$(cat <<'EOF'
-          You are a real coding agent investigating one supplied CI log. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, and the final conclusion. Use native read, grep, find, ls, and bash tools as needed. Keep exploration bounded. Every material factual claim in the final answer must cite exact line numbers you actually observed, preferably as build-log.txt:L123. Distinguish direct observation from inference. Answer the user's questions directly.
+          You are a real coding agent investigating one supplied CI log. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, and the final conclusion. Use native read, grep, find, ls, and bash tools as needed. Keep exploration bounded. Every material factual claim in the final answer must cite exact line numbers you actually observed, preferably as build-log.txt:L123. Distinguish direct observation from inference. Finish with a concise answer containing only the requested conclusions and evidence, not an internal monologue.
           EOF
           )
           mkdir -p "$RESULT/pi-baseline-session"
@@ -162,13 +163,13 @@ jobs:
       - name: Install TraceCite for Pi additive arm
         run: python -m pip install -e ".[dev]"
 
-      - name: Run real Pi with TraceCite CLI available
+      - name: Run real Pi with first-class TraceCite tools
         shell: bash
         run: |
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
           SYSTEM_PROMPT=$(cat <<'EOF'
-          You are a real coding agent investigating one supplied CI log. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, and the final conclusion. Native read, grep, find, ls, and bash tools are available. In addition, the `tracecite` CLI is available through bash as a deterministic evidence-retrieval tool; TraceCite is not a reasoner and its output is not root-cause truth. On this large log, prefer bounded TraceCite searches when useful, for example: `tracecite search build-log.txt "query" --no-snapshot --compact --max-evidence 20 --max-output-chars 16000 --lightweight`. You may still use native tools when they are better. Keep exploration bounded. Every material factual claim in the final answer must cite exact line numbers you actually observed, preferably as build-log.txt:L123. Distinguish direct observation from inference. Answer the user's questions directly.
+          You are a real coding agent investigating one supplied CI log. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, and the final conclusion. Native read, grep, find, ls, and bash tools are available. You also have first-class tracecite_search and tracecite_expand tools for deterministic bounded evidence retrieval from large logs. TraceCite is not a reasoner: its results are evidence/navigation with explicit coverage, not root-cause truth. Prefer tracecite_search when native grep would create broad/high-volume context, and tracecite_expand before relying on a decisive compact hit. You may still use native tools when they are better. Keep exploration bounded. Every material factual claim in the final answer must cite exact line numbers you actually observed, preferably as build-log.txt:L123. Distinguish direct observation from inference. Finish with a concise answer containing only the requested conclusions and evidence, not an internal monologue.
           EOF
           )
           mkdir -p "$RESULT/pi-tracecite-session"
@@ -182,8 +183,8 @@ jobs:
             --mode text \
             --print \
             --session-dir "$RESULT/pi-tracecite-session" \
-            --tools read,bash,grep,find,ls \
-            --no-extensions \
+            --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+            --tools read,bash,grep,find,ls,tracecite_search,tracecite_expand \
             --no-skills \
             --no-prompt-templates \
             --no-context-files \
@@ -218,12 +219,25 @@ jobs:
           python - <<'PY'
           import json
           import os
+          from collections import Counter
           from pathlib import Path
 
           result = Path(os.environ["RESULT"])
           summary = {"pi_version": "0.84.4", "model": os.environ.get("BENCH_MODEL"), "arms": {}}
           for arm in ("baseline", "tracecite"):
-              row = {"exit_code": None, "passed": None, "dimension_recall": None, "supported_dimension_recall": None, "citation_accuracy": None}
+              row = {
+                  "exit_code": None,
+                  "passed": None,
+                  "dimension_recall": None,
+                  "supported_dimension_recall": None,
+                  "citation_accuracy": None,
+                  "model_calls": None,
+                  "tool_calls": None,
+                  "tool_names": {},
+                  "reported_input_tokens": None,
+                  "reported_output_tokens": None,
+                  "tool_output_chars": None,
+              }
               exit_path = result / f"pi-{arm}-exit.txt"
               if exit_path.is_file():
                   row["exit_code"] = int(exit_path.read_text().strip())
@@ -235,6 +249,25 @@ jobs:
                   row["dimension_recall"] = quality.get("dimension_recall")
                   row["supported_dimension_recall"] = quality.get("supported_dimension_recall")
                   row["citation_accuracy"] = (quality.get("citation") or {}).get("accuracy")
+                  cost = score.get("context_cost") or {}
+                  for key in (
+                      "model_calls",
+                      "tool_calls",
+                      "reported_input_tokens",
+                      "reported_output_tokens",
+                      "tool_output_chars",
+                  ):
+                      row[key] = cost.get(key)
+              transcript_path = result / f"pi-{arm}-transcript.jsonl"
+              if transcript_path.is_file():
+                  names = Counter()
+                  for line in transcript_path.read_text(encoding="utf-8").splitlines():
+                      if not line.strip():
+                          continue
+                      event = json.loads(line)
+                      if event.get("type") == "tool":
+                          names[str(event.get("name") or "unknown")] += 1
+                  row["tool_names"] = dict(sorted(names.items()))
               summary["arms"][arm] = row
           (result / "pi-comparison.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           print(json.dumps(summary, indent=2, sort_keys=True))
