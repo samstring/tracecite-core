@@ -35,6 +35,7 @@ jobs:
 
           proj_path = Path('src/tracecite/integrations/agent_projection.py')
           cli_path = Path('src/tracecite/integrations/cli.py')
+          host_path = Path('benchmarks/agent-investigation/gmi_host.py')
           canonical_path = Path('benchmarks/agent-investigation/gmi_canonical_host.py')
           scale_path = Path('benchmarks/agent-investigation/gmi_scale_host.py')
           test_path = Path('tests/test_agent_projection.py')
@@ -53,6 +54,27 @@ jobs:
               'CLI transport profile mapping',
           )
           cli_path.write_text(cli, encoding='utf-8')
+
+          host = host_path.read_text(encoding='utf-8')
+          host = host.replace(
+              'from tracecite.integrations import cli as trace_cli\n',
+              'from tracecite.integrations.agent_profile import render_frame\n'
+              'from tracecite.integrations.agent_projection import project\n',
+              1,
+          )
+          host = replace_once(
+              host,
+              '''        baseline = trace_cli._compact_search_result(canonical, max_output_chars=None)\n        baseline = trace_cli.lightweight_result(baseline)\n        if self.mode != "tracecite_context":\n            return trace_cli.render_frame(baseline)\n''',
+              '''        baseline = project(canonical, profile="frame", max_output_chars=None)\n        if self.mode != "tracecite_context":\n            return render_frame(baseline)\n''',
+              'legacy host baseline projection',
+          )
+          host = replace_once(
+              host,
+              '''        delta = trace_cli._compact_search_result(projected, max_output_chars=None)\n        delta = trace_cli.lightweight_result(delta)\n        baseline_frame = trace_cli.render_frame(baseline)\n        delta_frame = trace_cli.render_frame(delta)\n''',
+              '''        delta = project(projected, profile="frame", max_output_chars=None)\n        baseline_frame = render_frame(baseline)\n        delta_frame = render_frame(delta)\n''',
+              'legacy host delta projection',
+          )
+          host_path.write_text(host, encoding='utf-8')
 
           canonical = canonical_path.read_text(encoding='utf-8')
           canonical = canonical.replace('from tracecite.integrations import cli as trace_cli\n', '', 1)
@@ -88,7 +110,7 @@ jobs:
           tests = test_path.read_text(encoding='utf-8')
           tests = tests.replace(
               'for name in ("agent", "portable-json", "strict-json", "stateful-index", "frame"):',
-              'for name in ("portable-json", "strict-json", "stateful-index", "frame"): ',
+              'for name in ("portable-json", "strict-json", "stateful-index", "frame"):',
               1,
           )
           tests += '''\n\ndef test_generic_agent_projection_preserves_canonical_evidence_shape() -> None:\n    digest = "b" * 64\n    payload = {\n        "operation": "search",\n        "status": "ok",\n        "outcome": "not_assessed",\n        "evidence": [{\n            "uri": f"evidence://sha256/{digest}#L9",\n            "source_path": "/tmp/runtime.log",\n            "sha256": digest,\n            "start_line": 9,\n            "end_line": 9,\n            "label": "visible evidence",\n        }],\n        "coverage": {"match_records": 1, "evidence_returned": 1},\n        "data": {},\n    }\n\n    view = project(payload, profile="agent")\n    assert isinstance(view["evidence"], list)\n    assert view["evidence"][0]["label"] == "visible evidence"\n    assert payload["evidence"][0]["label"] == "visible evidence"\n'''
@@ -121,6 +143,7 @@ jobs:
           git add \
             src/tracecite/integrations/agent_projection.py \
             src/tracecite/integrations/cli.py \
+            benchmarks/agent-investigation/gmi_host.py \
             benchmarks/agent-investigation/gmi_canonical_host.py \
             benchmarks/agent-investigation/gmi_scale_host.py \
             tests/test_agent_projection.py \
