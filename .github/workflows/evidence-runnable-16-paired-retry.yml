@@ -22,7 +22,7 @@ permissions:
 
 concurrency:
   group: evidence-runnable-16-paired-retry
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   paired:
