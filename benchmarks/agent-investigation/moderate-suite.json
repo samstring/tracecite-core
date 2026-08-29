@@ -3,6 +3,10 @@
   "suite_id": "agent-evidence-moderate-v1",
   "description": "Two small direct guards plus four natural 1-25 MiB real-evidence cases. Primary correctness excludes dimensions that the supplied evidence universe cannot establish.",
   "policy": {
+    "official_comparison_harness": "pi_ab",
+    "native_baseline": "pi-native",
+    "tracecite_arm": "pi-tracecite",
+    "free_shell_allowed": false,
     "target_case_count": 6,
     "small_case_count": 2,
     "medium_case_count": 4,
