@@ -7,6 +7,15 @@ on:
       - experiment/evidence-intelligence
     paths:
       - .github/workflows/evidence-runnable-16-paired-retry.yml
+      - src/tracecite/runtime/evidence_routing.py
+      - src/tracecite/runtime/retrieve_contract.py
+      - src/tracecite/integrations/agent_projection.py
+      - benchmarks/agent-investigation/gmi_canonical_host.py
+      - benchmarks/agent-investigation/run_paired_retry.py
+      - benchmarks/agent-investigation/aggregate_runnable_pairs.py
+      - tests/test_evidence_routing.py
+      - tests/test_gmi_canonical_host.py
+      - tests/test_runnable_pair_aggregate.py
 
 permissions:
   contents: read
@@ -170,6 +179,21 @@ jobs:
           if transient:
               raise SystemExit(f'transient provider failures remained after retry loop: {transient}')
           print('All 32 outcomes produced; no retryable provider failure remains.')
+          PY
+      - name: Enforce TraceCite no-harm correctness gate
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          summary = json.loads(Path('/tmp/runnable-16-retry-summary/summary.json').read_text())
+          regressions = summary.get('no_harm_regressions') or []
+          if regressions:
+              raise SystemExit(
+                  'TraceCite no-harm regression: free_shell passed but TraceCite did not: '
+                  + json.dumps(regressions, ensure_ascii=False, sort_keys=True)
+              )
+          print('No-harm gate passed: TraceCite did not turn any free_shell pass into a failure.')
           PY
       - uses: actions/upload-artifact@v4
         if: always()
