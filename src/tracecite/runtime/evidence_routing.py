@@ -4,11 +4,12 @@ Routing is intentionally about evidence transport cost/risk, not diagnosis.
 The default policy starts with the cheapest safe path and only escalates:
 DIRECT -> BOUNDED -> INVESTIGATE.
 
-A small source is not identified by a magic MB threshold.  DIRECT is allowed
-only when the fully line-addressable representation is estimated to fit inside
-the configured evidence/context budget.  Investigation history can then force
-escalation when cardinality, source fan-out, repeated evidence, or exploration
-depth grows.
+DIRECT is a fidelity-first transport mode.  An unseen local source may stay on
+DIRECT even after other sources were inspected when the aggregate fully
+line-addressable representation of all directly exposed sources still fits the
+configured context budget.  The same source is not dumped repeatedly: once it
+has participated in the investigation, later retrievals are bounded unless an
+explicit RangeTarget is requested.
 """
 
 from __future__ import annotations
@@ -36,7 +37,8 @@ class EvidenceRoutingPolicy:
     ``remaining_context_tokens`` is optional because Core cannot know every
     model host's live context budget.  When supplied, DIRECT uses only a small
     fraction of that remaining budget.  Otherwise ``fallback_direct_chars`` is
-    a conservative evidence-output budget, not a source-size product limit.
+    a conservative aggregate evidence-output budget, not a source-size product
+    limit.
 
     Investigation transport is deliberately tighter than ordinary bounded
     search because deep/high-cardinality exploration repeats every visible
@@ -130,6 +132,7 @@ class RoutingDecision:
     reasons: tuple[str, ...] = ()
     source_bytes: int | None = None
     estimated_direct_chars: int | None = None
+    aggregate_direct_chars: int | None = None
     direct_char_budget: int | None = None
     previous_executions: int = 0
     source_count: int = 0
@@ -150,6 +153,8 @@ class RoutingDecision:
             payload["source_bytes"] = self.source_bytes
         if self.estimated_direct_chars is not None:
             payload["estimated_direct_chars"] = self.estimated_direct_chars
+        if self.aggregate_direct_chars is not None:
+            payload["aggregate_direct_chars"] = self.aggregate_direct_chars
         if self.direct_char_budget is not None:
             payload["direct_char_budget"] = self.direct_char_budget
         if self.next_route is not None:
@@ -160,9 +165,20 @@ class RoutingDecision:
 @dataclass(frozen=True)
 class _History:
     executions: int = 0
+    source_paths: tuple[str, ...] = ()
     source_count: int = 0
     max_match_records: int = 0
     repeated_evidence_ratio: float = 0.0
+
+
+def _normalise_source(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return str(Path(text).expanduser().resolve())
+    except (OSError, RuntimeError):
+        return text
 
 
 def _history(executions: Sequence[Mapping[str, Any]]) -> _History:
@@ -173,13 +189,13 @@ def _history(executions: Sequence[Mapping[str, Any]]) -> _History:
         params = execution.get("parameters") or {}
         if isinstance(params, Mapping):
             for key in ("input", "source"):
-                value = str(params.get(key) or "").strip()
+                value = _normalise_source(params.get(key))
                 if value:
                     sources.add(value)
         for item in execution.get("evidence") or []:
             if not isinstance(item, Mapping):
                 continue
-            source = str(item.get("source_path") or "").strip()
+            source = _normalise_source(item.get("source_path"))
             if source:
                 sources.add(source)
         refs = execution.get("evidence_refs") or []
@@ -193,22 +209,18 @@ def _history(executions: Sequence[Mapping[str, Any]]) -> _History:
     repeated = 0.0
     if evidence_refs:
         repeated = max(0.0, 1.0 - (len(set(evidence_refs)) / len(evidence_refs)))
+    ordered_sources = tuple(sorted(sources))
     return _History(
         executions=len(executions),
-        source_count=len(sources),
+        source_paths=ordered_sources,
+        source_count=len(ordered_sources),
         max_match_records=max_match_records,
         repeated_evidence_ratio=repeated,
     )
 
 
 def estimate_line_addressable_chars(path: Path, *, stop_after: int | None = None) -> tuple[int, int]:
-    """Estimate chars for ``N: text`` rendering without decoding the source.
-
-    The byte count is an upper bound for decoded UTF-8 character count.  The
-    only extra cost is the deterministic line-number prefix, which can be
-    counted exactly enough from newline cardinality.  ``stop_after`` lets the
-    caller abort counting once DIRECT is already impossible.
-    """
+    """Estimate chars for ``N: text`` rendering without decoding the source."""
 
     size = path.stat().st_size
     if size == 0:
@@ -229,6 +241,39 @@ def estimate_line_addressable_chars(path: Path, *, stop_after: int | None = None
     lines = newline_count + (0 if last_byte == b"\n" else 1)
     prefix_chars = lines * (len(str(max(1, lines))) + 2)
     return size, size + prefix_chars
+
+
+def _aggregate_line_addressable_chars(
+    prior_sources: Sequence[str],
+    source: Path,
+    *,
+    budget: int,
+) -> int | None:
+    """Estimate one-time raw exposure cost for unique local sources."""
+
+    values = list(prior_sources)
+    current = str(source.expanduser().resolve())
+    if current not in values:
+        values.append(current)
+    total = 0
+    for value in values:
+        path = Path(value).expanduser()
+        if not path.is_file():
+            return None
+        try:
+            size = path.stat().st_size
+            if total + size > budget:
+                return budget + 1
+            _, chars = estimate_line_addressable_chars(
+                path,
+                stop_after=max(1, budget - total),
+            )
+        except OSError:
+            return None
+        total += chars
+        if total > budget:
+            return total
+    return total
 
 
 def decide_route(
@@ -275,6 +320,61 @@ def decide_route(
             repeated_evidence_ratio=hist.repeated_evidence_ratio,
         )
 
+    source_bytes: int | None = None
+    direct_chars: int | None = None
+    aggregate_direct_chars: int | None = None
+    current_source = ""
+    source_seen = False
+    if source is not None and source.is_file():
+        try:
+            resolved = source.expanduser().resolve()
+            current_source = str(resolved)
+            source_seen = current_source in set(hist.source_paths)
+            source_bytes = resolved.stat().st_size
+            if source_bytes <= direct_budget:
+                source_bytes, direct_chars = estimate_line_addressable_chars(
+                    resolved,
+                    stop_after=direct_budget,
+                )
+                aggregate_direct_chars = _aggregate_line_addressable_chars(
+                    hist.source_paths,
+                    resolved,
+                    budget=direct_budget,
+                )
+        except OSError:
+            source_seen = False
+
+    # Fidelity-first DIRECT is a one-time exposure for an unseen source.  It is
+    # safe to continue across several tiny sources when their aggregate raw,
+    # line-addressable representation still fits one direct budget.  This
+    # prevents source-count alone from pushing a simple multi-file incident into
+    # lossy/heavier investigation machinery.
+    fresh_direct_safe = bool(
+        current_source
+        and not source_seen
+        and direct_chars is not None
+        and aggregate_direct_chars is not None
+        and aggregate_direct_chars <= direct_budget
+    )
+    if fresh_direct_safe:
+        reason = (
+            "line_addressable_source_fits_budget"
+            if hist.source_count == 0
+            else "aggregate_line_addressable_sources_fit_budget"
+        )
+        return RoutingDecision(
+            route=EvidenceRoute.DIRECT,
+            reasons=(reason,),
+            source_bytes=source_bytes,
+            estimated_direct_chars=direct_chars,
+            aggregate_direct_chars=aggregate_direct_chars,
+            direct_char_budget=direct_budget,
+            previous_executions=hist.executions,
+            source_count=hist.source_count,
+            max_match_records=hist.max_match_records,
+            repeated_evidence_ratio=hist.repeated_evidence_ratio,
+        )
+
     escalation: list[str] = []
     if hist.source_count > 1:
         escalation.append("multiple_sources")
@@ -291,37 +391,9 @@ def decide_route(
         return RoutingDecision(
             route=EvidenceRoute.INVESTIGATE,
             reasons=tuple(escalation),
-            direct_char_budget=direct_budget,
-            previous_executions=hist.executions,
-            source_count=hist.source_count,
-            max_match_records=hist.max_match_records,
-            repeated_evidence_ratio=hist.repeated_evidence_ratio,
-        )
-
-    source_bytes: int | None = None
-    direct_chars: int | None = None
-    direct_safe = False
-    if source is not None and source.is_file():
-        try:
-            source_bytes = source.stat().st_size
-            # Do not count line prefixes for an obviously over-budget source.
-            if source_bytes <= direct_budget:
-                source_bytes, direct_chars = estimate_line_addressable_chars(
-                    source,
-                    stop_after=direct_budget,
-                )
-                direct_safe = direct_chars <= direct_budget
-        except OSError:
-            direct_safe = False
-
-    # DIRECT is deliberately a first-step optimisation.  Once an investigation
-    # has begun, subsequent retrievals become bounded even for a small file.
-    if direct_safe and hist.executions == 0:
-        return RoutingDecision(
-            route=EvidenceRoute.DIRECT,
-            reasons=("line_addressable_source_fits_budget",),
             source_bytes=source_bytes,
             estimated_direct_chars=direct_chars,
+            aggregate_direct_chars=aggregate_direct_chars,
             direct_char_budget=direct_budget,
             previous_executions=hist.executions,
             source_count=hist.source_count,
@@ -332,11 +404,15 @@ def decide_route(
     reasons: list[str] = []
     if hist.max_match_records >= policy.bounded_match_records:
         reasons.append("match_cardinality_requires_bounds")
+    if source_seen:
+        reasons.append("source_already_seen")
     if hist.executions:
         reasons.append("investigation_already_started")
     if source is None or not source.is_file():
         reasons.append("source_collection_or_provider")
-    elif not direct_safe:
+    elif aggregate_direct_chars is not None and aggregate_direct_chars > direct_budget:
+        reasons.append("aggregate_direct_output_exceeds_budget")
+    elif direct_chars is None or direct_chars > direct_budget:
         reasons.append("direct_output_exceeds_budget")
     if not reasons:
         reasons.append("bounded_default")
@@ -345,6 +421,7 @@ def decide_route(
         reasons=tuple(reasons),
         source_bytes=source_bytes,
         estimated_direct_chars=direct_chars,
+        aggregate_direct_chars=aggregate_direct_chars,
         direct_char_budget=direct_budget,
         previous_executions=hist.executions,
         source_count=hist.source_count,
@@ -384,6 +461,7 @@ def refine_route_after_result(
         reasons=decision.reasons,
         source_bytes=decision.source_bytes,
         estimated_direct_chars=decision.estimated_direct_chars,
+        aggregate_direct_chars=decision.aggregate_direct_chars,
         direct_char_budget=decision.direct_char_budget,
         previous_executions=decision.previous_executions,
         source_count=decision.source_count,
