@@ -19,7 +19,7 @@ def _canonical_search() -> dict[str, object]:
         "schema_version": 1,
         "operation": "search",
         "status": "ok",
-        "outcome": "supported",
+        "outcome": "not_assessed",
         "evidence": [
             {
                 "uri": f"evidence://sha256/{digest}#L8",
@@ -63,7 +63,7 @@ def test_frame_keeps_columnar_identity_and_context() -> None:
     payload = {
         "operation": "expand_many",
         "status": "ok",
-        "outcome": "supported",
+        "outcome": "not_assessed",
         "result_id": "b" * 64,
         "evidence": {
             "columns": ["ref", "start", "end", "context"],
@@ -77,12 +77,55 @@ def test_frame_keeps_columnar_identity_and_context() -> None:
 
     frame = render_frame(payload)
 
-    assert frame.startswith("@TCF 1 expand_many status=ok outcome=supported")
+    assert frame.startswith("@TCF 1 expand_many status=ok outcome=not_assessed")
     assert f"@R {'b' * 64}" in frame
     assert "@E ref\tstart\tend\tcontext" in frame
     assert "#L8\t8\t8\tc1" in frame
     assert "@CTX c1 5-11 truncated=False" in frame
     assert "8: reloadData" in frame
+
+
+def test_frame_preserves_decision_critical_evidence_metadata() -> None:
+    payload = {
+        "operation": "search",
+        "status": "ok",
+        "outcome": "not_assessed",
+        "coverage": {"match_records": 2},
+        "evidence": {"columns": ["ref", "start", "end", "label"], "rows": []},
+        "missing_evidence": [
+            {"kind": "scope_uniqueness_unverified", "actionable": True}
+        ],
+        "next_queries": ["testdevice"],
+        "verification": {"integrity_checked": True},
+        "data": {
+            "actionable_retrieval": {
+                "operation": "search",
+                "query": "testdevice",
+                "purpose": "verify_identifier_uniqueness_across_scopes",
+            },
+            "correlation_constraints": [
+                {
+                    "identifier_value": "testdevice",
+                    "identifier_only_correlation_safe": False,
+                    "minimum_safe_correlation_key": ["scoped_entity", "resourceID"],
+                }
+            ],
+            "evidence_integrity": {"correlation_safe": False},
+            "progress": {"actionable_gaps": 1},
+            "routing": {"mode": "bounded", "next_mode": "investigate"},
+        },
+    }
+
+    frame = render_frame(payload)
+
+    assert '@ACT {"operation":"search","purpose":"verify_identifier_uniqueness_across_scopes","query":"testdevice"}' in frame
+    assert '@CONSTRAINT [{"identifier_only_correlation_safe":false' in frame
+    assert '@INTEGRITY {"correlation_safe":false}' in frame
+    assert '@PROGRESS {"actionable_gaps":1}' in frame
+    assert '@ROUTE {"mode":"bounded","next_mode":"investigate"}' in frame
+    assert '@GAP [{"actionable":true,"kind":"scope_uniqueness_unverified"}]' in frame
+    assert '@NEXT ["testdevice"]' in frame
+    assert '@VERIFY {"integrity_checked":true}' in frame
 
 
 def test_profile_selection_changes_transport_not_canonical_result(tmp_path, monkeypatch, capsys) -> None:
@@ -107,7 +150,7 @@ def test_profile_selection_changes_transport_not_canonical_result(tmp_path, monk
         ]
     ) == 0
     frame = capsys.readouterr().out
-    assert frame.startswith("@TCF 1 search status=ok outcome=supported")
+    assert frame.startswith("@TCF 1 search status=ok outcome=not_assessed")
     assert "@R " in frame
     assert "@E ref\tstart\tend\tlabel" in frame
 
