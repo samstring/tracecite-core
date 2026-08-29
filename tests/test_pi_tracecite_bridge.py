@@ -32,14 +32,14 @@ def _run_bridge(*args: str, cwd: Path) -> dict:
     return json.loads(completed.stdout)
 
 
-def test_pi_bridge_uses_canonical_retrieve_and_persists_novelty(tmp_path: Path) -> None:
+def test_pi_bridge_uses_independent_retrieval_session_and_persists_novelty(tmp_path: Path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("before\nERROR timeout request=7\nafter\n", encoding="utf-8")
-    state = tmp_path / "pi-investigation.json"
+    session = tmp_path / "pi-session.json"
 
     first = _run_bridge(
-        "--state",
-        str(state),
+        "--session",
+        str(session),
         "search",
         str(source),
         "timeout",
@@ -52,10 +52,12 @@ def test_pi_bridge_uses_canonical_retrieve_and_persists_novelty(tmp_path: Path) 
     assert first["evidence"]
     assert first["coverage"]["new_evidence"] == 1
     assert "progress" in first["data"]
+    assert not session.exists()
+    assert (tmp_path / "_retrieval_sessions" / "pi-session.json").is_file()
 
     repeated = _run_bridge(
-        "--state",
-        str(state),
+        "--session",
+        str(session),
         "search",
         str(source),
         "timeout",
@@ -70,15 +72,15 @@ def test_pi_bridge_uses_canonical_retrieve_and_persists_novelty(tmp_path: Path) 
     assert repeated["data"]["stop_reason"]["kind"] == "no_new_evidence"
 
 
-def test_pi_bridge_expand_is_observation_not_semantic_support(tmp_path: Path) -> None:
+def test_pi_bridge_expand_tracks_immutable_range_without_investigation(tmp_path: Path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("one\ntwo\nthree\n", encoding="utf-8")
-    state = tmp_path / "pi-investigation.json"
+    session = tmp_path / "pi-session.json"
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
 
     expanded = _run_bridge(
-        "--state",
-        str(state),
+        "--session",
+        str(session),
         "expand",
         str(source),
         "2",
@@ -93,3 +95,20 @@ def test_pi_bridge_expand_is_observation_not_semantic_support(tmp_path: Path) ->
     assert "1: one" in expanded["data"]["text"]
     assert "2: two" in expanded["data"]["text"]
     assert "3: three" in expanded["data"]["text"]
+
+    repeated = _run_bridge(
+        "--session",
+        str(session),
+        "expand",
+        str(source),
+        "2",
+        "--radius",
+        "1",
+        "--sha256",
+        digest,
+        cwd=tmp_path,
+    )
+    assert repeated["status"] == "no_new_evidence"
+    assert repeated["evidence"] == []
+    assert repeated["data"]["stop_reason"]["kind"] == "no_new_evidence"
+    assert not session.exists()

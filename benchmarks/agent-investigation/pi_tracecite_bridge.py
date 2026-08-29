@@ -4,27 +4,26 @@ import argparse
 import json
 from pathlib import Path
 
-from tracecite.runtime import (
-    EvidenceRequest,
-    InvestigationStore,
-    QueryTarget,
-    RangeTarget,
-    retrieve,
-)
+from tracecite.runtime import EvidenceRequest, QueryTarget, RangeTarget
+from tracecite.runtime.retrieval_session import RetrievalSessionStore
+from tracecite.runtime.session_retrieval import retrieve_with_session
 
 
-def _ensure_investigation(path: str) -> Path:
-    state_path = Path(path).expanduser().resolve()
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    store = InvestigationStore(state_path)
-    if state_path.exists():
-        store.load()
-    else:
-        store.create("Pi Agent evidence retrieval session")
-    return state_path
+def _session_store(path: str) -> RetrievalSessionStore:
+    requested = Path(path).expanduser().resolve()
+    requested.parent.mkdir(parents=True, exist_ok=True)
+    session_id = requested.stem or "pi-agent"
+    store = RetrievalSessionStore(
+        requested.parent,
+        session_id,
+        namespace="_retrieval_sessions",
+        legacy_evidence_context=False,
+    )
+    store.load()
+    return store
 
 
-def _search(args: argparse.Namespace, state_path: Path) -> dict:
+def _search(args: argparse.Namespace, session: RetrievalSessionStore) -> dict:
     target = QueryTarget(
         Path(args.file),
         args.query,
@@ -32,12 +31,10 @@ def _search(args: argparse.Namespace, state_path: Path) -> dict:
         snapshot=True,
         max_evidence=args.max_evidence,
     )
-    return retrieve(
-        EvidenceRequest(target, investigation_path=state_path)
-    ).to_dict()
+    return retrieve_with_session(EvidenceRequest(target), session).to_dict()
 
 
-def _expand(args: argparse.Namespace, state_path: Path) -> dict:
+def _expand(args: argparse.Namespace, session: RetrievalSessionStore) -> dict:
     radius = max(0, int(args.radius))
     target = RangeTarget(
         Path(args.file),
@@ -47,9 +44,7 @@ def _expand(args: argparse.Namespace, state_path: Path) -> dict:
         expected_sha256=args.sha256 or None,
         max_chars=int(args.max_chars),
     )
-    return retrieve(
-        EvidenceRequest(target, investigation_path=state_path)
-    ).to_dict()
+    return retrieve_with_session(EvidenceRequest(target), session).to_dict()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,9 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Thin Pi-to-TraceCite canonical retrieval bridge."
     )
     parser.add_argument(
-        "--state",
+        "--session",
         required=True,
-        help="Persistent InvestigationState used only to retain retrieval progress.",
+        help="Persistent RetrievalSession anchor; no InvestigationState is created.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -80,11 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    state_path = _ensure_investigation(args.state)
+    session = _session_store(args.session)
     if args.command == "search":
-        payload = _search(args, state_path)
+        payload = _search(args, session)
     else:
-        payload = _expand(args, state_path)
+        payload = _expand(args, session)
     print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     return 0
 

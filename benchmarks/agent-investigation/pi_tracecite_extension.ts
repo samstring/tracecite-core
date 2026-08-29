@@ -9,15 +9,16 @@ import { Type } from "typebox";
 const execFileAsync = promisify(execFile);
 const MAX_BUFFER = 256 * 1024;
 const BRIDGE = fileURLToPath(new URL("./pi_tracecite_bridge.py", import.meta.url));
-const STATE =
+const SESSION =
+  process.env.TRACECITE_PI_SESSION ||
   process.env.TRACECITE_PI_INVESTIGATION ||
-  join(tmpdir(), `tracecite-pi-${process.pid}`, "investigation.json");
+  join(tmpdir(), `tracecite-pi-${process.pid}`, "retrieval-session.json");
 
 async function runBridge(args: string[], cwd: string, signal?: AbortSignal): Promise<string> {
   try {
     const { stdout, stderr } = await execFileAsync(
       "python",
-      [BRIDGE, "--state", STATE, ...args],
+      [BRIDGE, "--session", SESSION, ...args],
       {
         cwd,
         encoding: "utf8",
@@ -168,6 +169,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
           file: params.file,
           query: params.query,
           canonical_retrieve: true,
+          independent_retrieval_session: true,
         },
       };
     },
@@ -212,6 +214,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
           line: params.line,
           radius: params.radius ?? 8,
           canonical_retrieve: true,
+          independent_retrieval_session: true,
         },
       };
     },
