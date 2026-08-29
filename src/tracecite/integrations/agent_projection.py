@@ -1,4 +1,9 @@
-"""Shared agent-facing projections over canonical tool results."""
+"""Shared transport-only projections over canonical Runtime results.
+
+Projection must never discover new Evidence, reopen source files, or perform
+identity verification.  Runtime owns retrieval/materialization/integrity;
+integrations only select and encode an already-canonical view.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +14,6 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Union
 
 from tracecite.runtime.evidence_ambiguity import scoped_identity_fanout_hints
-from tracecite.runtime.evidence_fidelity import enrich_search_leaf_context
 
 DEFAULT_AGENT_MAX_OUTPUT_CHARS = 12_000
 DEFAULT_FILTER_MAX_LINE_CHARS = 1024
@@ -102,12 +106,11 @@ def apply_survey_brief(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def attach_ambiguity_hints(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Surface domain-neutral scope fan-out already present in raw evidence.
+    """Compatibility helper for callers that explicitly request text-only hints.
 
-    The canonical result is left untouched.  The hint is navigation metadata,
-    not Evidence and not a diagnosis: it only tells the Agent that several
-    generated sibling names coexist under one scope, so scope should stay
-    attached to identifiers until uniqueness has actually been established.
+    This function is intentionally pure: it examines only text already present
+    in ``payload`` and performs no source I/O.  The built-in ``project`` path no
+    longer calls it; canonical Runtime retrieval owns integrity observations.
     """
 
     result = copy.deepcopy(dict(payload))
@@ -272,8 +275,6 @@ def lightweight_result(payload: Mapping[str, Any]) -> dict[str, Any]:
         if not result.get(key):
             result.pop(key, None)
 
-    # The linked InvestigationState remains canonical/recoverable outside the
-    # model turn. IDs/revision/path do not help the Agent interpret evidence.
     result.pop("investigation", None)
 
     data = dict(result.get("data") or {})
@@ -319,11 +320,10 @@ def project(
 ) -> dict[str, Any]:
     """Project canonical Runtime output for an upper-layer consumer.
 
-    The Runtime owns canonical Evidence and recovery. Integrations own the
-    transport view. ``profile='agent'`` applies the conservative built-in
-    token projection, ``profile='full'`` returns a detached canonical view,
-    and a callable lets Mobile/MCP/third-party hosts define their own view
-    without adding another Core API or forking Runtime semantics.
+    Runtime owns Evidence acquisition, materialization and integrity.  This
+    function is deliberately transport-only: ``profile='agent'`` removes
+    recoverable bookkeeping, ``profile='full'`` returns a detached canonical
+    view, and custom callables may encode another upper-layer view.
     """
 
     if not isinstance(payload, Mapping):
@@ -339,8 +339,6 @@ def project(
         return canonical
     if name == "agent":
         projected = apply_survey_brief(canonical)
-        projected = enrich_search_leaf_context(projected)
-        projected = attach_ambiguity_hints(projected)
         return lightweight_result(projected)
     raise ValueError(f"unsupported projection profile: {profile!r}")
 
