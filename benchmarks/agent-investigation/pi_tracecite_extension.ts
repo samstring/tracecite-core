@@ -86,7 +86,7 @@ function projectForPi(text: string): string {
       outcome: payload.outcome,
       priority_action: priorityAction,
       priority_note: priorityAction
-        ? "Resolve this mechanical evidence/integrity gap before unrelated broadening. It is navigation, not a root-cause claim."
+        ? "Execute this action next to advance the current mechanical evidence/integrity gap. Earlier searches with the same text do not close this ordered step because the action was derived from the current result. This is navigation, not a root-cause claim."
         : undefined,
       evidence: payload.evidence,
       coverage: payload.coverage,
@@ -123,7 +123,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
     promptSnippet:
       "Use tracecite_search for bounded evidence discovery in large logs; treat its output as evidence/navigation, never as causal truth.",
     promptGuidelines: [
-      "When tracecite_search returns priority_action, resolve that mechanical evidence/integrity gap before unrelated broadening unless the exact action was already completed.",
+      "When tracecite_search returns priority_action, execute that action next before unrelated broadening. Treat the priority actions as an ordered mechanical gap-closure sequence; a same-text search performed before the current result does not satisfy the newly derived step.",
       "tracecite_search constraints protect evidence correlation; they do not prove a root cause.",
       "Expand decisive TraceCite hits before citing or semantically interpreting them.",
     ],
