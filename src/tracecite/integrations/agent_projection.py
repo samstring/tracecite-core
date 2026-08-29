@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Mapping, Union
 
+from tracecite.runtime.evidence_ambiguity import scoped_identity_fanout_hints
+
 DEFAULT_AGENT_MAX_OUTPUT_CHARS = 12_000
 DEFAULT_FILTER_MAX_LINE_CHARS = 1024
 DEFAULT_AGENT_MAX_EVIDENCE = 30
@@ -95,6 +97,33 @@ def apply_survey_brief(payload: Mapping[str, Any]) -> dict[str, Any]:
         evidence.append(row)
     result["evidence"] = evidence
     result["coverage"] = dedupe_survey_coverage(result.get("coverage") or {})
+    return result
+
+
+def attach_ambiguity_hints(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Surface domain-neutral scope fan-out already present in raw evidence.
+
+    The canonical result is left untouched.  The hint is navigation metadata,
+    not Evidence and not a diagnosis: it only tells the Agent that several
+    generated sibling names coexist under one scope, so scope should stay
+    attached to identifiers until uniqueness has actually been established.
+    """
+
+    result = copy.deepcopy(dict(payload))
+    data = dict(result.get("data") or {})
+    text = data.get("text")
+    if not isinstance(text, str) or not text:
+        return result
+    hints = scoped_identity_fanout_hints(text)
+    if not hints:
+        return result
+    data["ambiguity_hints"] = hints
+    data["ambiguity_hint_note"] = (
+        "Navigation only: multiple sibling scoped entities are visible in this raw evidence. "
+        "Keep scope attached to identifiers and verify uniqueness before correlating them; "
+        "this hint does not identify a root cause."
+    )
+    result["data"] = data
     return result
 
 
@@ -308,7 +337,9 @@ def project(
     if name == "full":
         return canonical
     if name == "agent":
-        return lightweight_result(apply_survey_brief(canonical))
+        projected = apply_survey_brief(canonical)
+        projected = attach_ambiguity_hints(projected)
+        return lightweight_result(projected)
     raise ValueError(f"unsupported projection profile: {profile!r}")
 
 
@@ -350,6 +381,7 @@ __all__ = [
     "Projection",
     "ProjectionProfile",
     "apply_survey_brief",
+    "attach_ambiguity_hints",
     "compact_filter_payload",
     "dedupe_evidence_labels",
     "dedupe_survey_coverage",
