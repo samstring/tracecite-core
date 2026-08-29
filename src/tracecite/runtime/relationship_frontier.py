@@ -1,8 +1,16 @@
+"""Bounded extraction of reference-like facts from materialized Evidence.
+
+This module does not create a retrieval frontier. It only reports key/value
+references that are literally visible in an already-materialized Evidence
+range. The Agent remains responsible for deciding whether any observed
+reference matters and what, if anything, to do next.
+"""
+
 from __future__ import annotations
 
 import copy
 import re
-from typing import Any, Mapping
+from typing import Any
 
 from .agent_api import RetrievalResult
 
@@ -33,19 +41,13 @@ _IGNORED_VALUES = frozenset(
 )
 
 
-def _key_score(key: str) -> int:
+def _reference_like_key(key: str) -> bool:
     normalized = re.sub(r"[^a-z0-9]", "", str(key or "").casefold())
     if not normalized:
-        return 0
-    if normalized.endswith(("uuid", "uid")):
-        return 6
-    if normalized.endswith("id"):
-        return 5
-    if normalized.endswith(("ref", "reference")):
-        return 4
-    if normalized.endswith("key"):
-        return 3
-    if any(
+        return False
+    if normalized.endswith(("uuid", "uid", "id", "ref", "reference", "key")):
+        return True
+    return any(
         token in normalized
         for token in (
             "target",
@@ -59,9 +61,7 @@ def _key_score(key: str) -> int:
             "trace",
             "span",
         )
-    ):
-        return 2
-    return 0
+    )
 
 
 def _line_for_offset(text: str, offset: int) -> int | None:
@@ -76,12 +76,7 @@ def _line_for_offset(text: str, offset: int) -> int | None:
 
 
 def relationship_candidates(text: str, *, limit: int = 6) -> list[dict[str, Any]]:
-    """Extract bounded reference-like key/value candidates from visible Evidence.
-
-    This is lexical navigation only. It does not decide that a field is an
-    identity key, that two records refer to the same entity, or that a relation
-    is causal. The returned values are merely good exact-search frontiers.
-    """
+    """Return bounded observed reference facts in source-occurrence order."""
 
     if limit < 1:
         raise ValueError("relationship candidate limit must be positive")
@@ -89,55 +84,34 @@ def relationship_candidates(text: str, *, limit: int = 6) -> list[dict[str, Any]
         return []
 
     found: dict[tuple[str, str], dict[str, Any]] = {}
-    for ordinal, match in enumerate(_KEY_VALUE_RE.finditer(text), start=1):
+    order: list[tuple[str, str]] = []
+    for match in _KEY_VALUE_RE.finditer(text):
         key = match.group("key")
         value = match.group("value").rstrip(".,;:)]}")
-        score = _key_score(key)
-        if score <= 0:
+        if not _reference_like_key(key):
             continue
         if len(value) < 4 or value.casefold() in _IGNORED_VALUES or value.isdigit():
             continue
         identity = (key.casefold(), value)
-        row = found.get(identity)
         line = _line_for_offset(text, match.start())
+        row = found.get(identity)
         if row is None:
-            found[identity] = {
-                "kind": "reference_candidate",
+            if len(order) >= limit:
+                continue
+            row = {
+                "kind": "observed_reference",
                 "key": key,
                 "value": value,
-                "visible_lines": [line] if line is not None else [],
-                "visible_occurrences": 1,
-                "navigation_score": score,
-                "ordinal": ordinal,
+                "visible_lines": [],
+                "visible_occurrences": 0,
             }
-        else:
-            row["visible_occurrences"] = int(row["visible_occurrences"]) + 1
-            if line is not None and line not in row["visible_lines"]:
-                row["visible_lines"].append(line)
+            found[identity] = row
+            order.append(identity)
+        row["visible_occurrences"] = int(row["visible_occurrences"]) + 1
+        if line is not None and line not in row["visible_lines"]:
+            row["visible_lines"].append(line)
 
-    ordered = sorted(
-        found.values(),
-        key=lambda item: (
-            -int(item["navigation_score"]),
-            -int(item["visible_occurrences"]),
-            int(item["ordinal"]),
-            str(item["key"]),
-            str(item["value"]),
-        ),
-    )[:limit]
-    for item in ordered:
-        item.pop("ordinal", None)
-        item["recommended_action"] = {
-            "operation": "search",
-            "query": item["value"],
-            "purpose": "resolve_reference_occurrences",
-            "reference_key": item["key"],
-        }
-        item["note"] = (
-            "Lexical relationship frontier only. Search this exact observed value to resolve "
-            "where else it occurs; do not treat the field name or co-occurrence as identity or causality proof."
-        )
-    return ordered
+    return [found[key] for key in order]
 
 
 def attach_relationship_frontier(
@@ -145,7 +119,7 @@ def attach_relationship_frontier(
     *,
     limit: int = 6,
 ) -> RetrievalResult:
-    """Attach relation-navigation candidates to materialized expand results."""
+    """Compatibility name: attach observed references, never a next action."""
 
     if not isinstance(result, RetrievalResult):
         raise TypeError("attach_relationship_frontier requires RetrievalResult")
@@ -154,16 +128,16 @@ def attach_relationship_frontier(
     canonical = copy.deepcopy(dict(result.canonical_result))
     data = copy.deepcopy(dict(canonical.get("data") or {}))
     text = data.get("text")
-    candidates = relationship_candidates(text, limit=limit) if isinstance(text, str) else []
-    if not candidates:
+    observed = relationship_candidates(text, limit=limit) if isinstance(text, str) else []
+    if not observed:
         return result
 
-    data["relationship_frontier"] = candidates
-    data["relationship_frontier_note"] = (
-        "Mechanical reference navigation only. These observed key/value pairs are candidates "
-        "for exact occurrence resolution, not semantic or causal conclusions."
+    data["observed_references"] = observed
+    data["observed_references_note"] = (
+        "Literal reference-like fields observed in this materialized Evidence range. "
+        "They are evidence facts only: no identity, causality, importance, or next action "
+        "is implied."
     )
-    data["relationship_action"] = dict(candidates[0]["recommended_action"])
     canonical["data"] = data
     return RetrievalResult(
         operation=result.operation,
