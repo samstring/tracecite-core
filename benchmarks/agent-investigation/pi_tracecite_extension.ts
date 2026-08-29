@@ -16,16 +16,12 @@ const SESSION =
 
 async function runBridge(args: string[], cwd: string, signal?: AbortSignal): Promise<string> {
   try {
-    const { stdout, stderr } = await execFileAsync(
-      "python",
-      [BRIDGE, "--session", SESSION, ...args],
-      {
-        cwd,
-        encoding: "utf8",
-        maxBuffer: MAX_BUFFER,
-        signal,
-      },
-    );
+    const { stdout, stderr } = await execFileAsync("python", [BRIDGE, "--session", SESSION, ...args], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: MAX_BUFFER,
+      signal,
+    });
     const out = String(stdout || "").trim();
     const err = String(stderr || "").trim();
     if (out && err) return `${out}\n@STDERR ${err}`;
@@ -38,9 +34,7 @@ async function runBridge(args: string[], cwd: string, signal?: AbortSignal): Pro
       `@TRACECITE_ERROR ${message}`,
       stdout ? `@STDOUT ${stdout}` : "",
       stderr ? `@STDERR ${stderr}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    ].filter(Boolean).join("\n");
   }
 }
 
@@ -115,10 +109,19 @@ function projectForPi(text: string): string {
   }
 
   if (operation === "expand") {
+    const priorityAction = data.relationship_action ?? null;
+    const frontier = Array.isArray(data.relationship_frontier)
+      ? data.relationship_frontier.slice(0, 6)
+      : [];
     return JSON.stringify({
       operation: payload.operation,
       status: payload.status,
       outcome: payload.outcome,
+      priority_action: priorityAction,
+      priority_note: priorityAction
+        ? "This is a mechanical reference-resolution step derived from the materialized evidence. Searching the exact observed value may reveal what the record points to; it does not prove identity or causality."
+        : undefined,
+      relationship_frontier: frontier.length ? frontier : undefined,
       evidence: payload.evidence,
       coverage: payload.coverage,
       progress: data.progress,
@@ -139,7 +142,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
     promptSnippet:
       "Use tracecite_search for bounded evidence discovery in large logs; treat its output as evidence/navigation, never as causal truth.",
     promptGuidelines: [
-      "When tracecite_search returns priority_action, execute that action next before unrelated broadening. Treat the priority actions as an ordered mechanical gap-closure sequence; a same-text search performed before the current result does not satisfy the newly derived step.",
+      "When tracecite_search returns priority_action, execute that action next before unrelated broadening. Treat priority actions as ordered mechanical gap closure, not root-cause recommendations.",
       "A search hit is an observation, not support for a causal hypothesis.",
       "TraceCite correlation constraints protect evidence identity; they do not prove a root cause.",
       "Expand decisive TraceCite hits before citing or semantically interpreting them.",
@@ -148,18 +151,10 @@ export default function traceciteTools(pi: ExtensionAPI) {
       file: Type.String({ description: "Path to the local source file, relative to the current working directory or absolute." }),
       query: Type.String({ description: "Literal or regex query." }),
       regex: Type.Optional(Type.Boolean({ description: "Interpret query as a regular expression." })),
-      max_evidence: Type.Optional(
-        Type.Integer({ minimum: 1, maximum: 50, description: "Maximum evidence rows to return; default 20." }),
-      ),
+      max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, description: "Maximum evidence rows to return; default 20." })),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const args = [
-        "search",
-        params.file,
-        params.query,
-        "--max-evidence",
-        String(params.max_evidence ?? 20),
-      ];
+      const args = ["search", params.file, params.query, "--max-evidence", String(params.max_evidence ?? 20)];
       if (params.regex) args.push("--regex");
       const text = projectForPi(await runBridge(args, ctx.cwd, signal));
       return {
@@ -179,31 +174,21 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_expand",
     label: "TraceCite Expand",
     description:
-      "Materialize bounded source context through TraceCite's canonical retrieval contract around a specific line. Use it before citing or interpreting a decisive compact hit. It returns evidence and coverage, not causal judgement.",
+      "Materialize bounded source context through TraceCite's canonical retrieval contract around a specific line. It can also expose reference-like key/value frontiers found in that exact context. These are navigation candidates, not causal judgements.",
     promptSnippet: "Expand important TraceCite hits before citing or interpreting them.",
     promptGuidelines: [
       "Use tracecite_expand to materialize exact source context for evidence that matters to the final explanation.",
+      "When tracecite_expand returns priority_action, resolve that exact observed reference with tracecite_search before unrelated broadening when the relation matters to the investigation.",
+      "Relationship-frontier fields are lexical navigation only; co-occurrence does not prove identity or causality.",
     ],
     parameters: Type.Object({
       file: Type.String({ description: "Path to the same local source file." }),
       line: Type.Integer({ minimum: 1, description: "1-based anchor line." }),
-      radius: Type.Optional(
-        Type.Integer({ minimum: 0, maximum: 30, description: "Context lines before and after the anchor; default 8." }),
-      ),
-      sha256: Type.Optional(
-        Type.String({ description: "Optional expected source SHA-256 from a prior TraceCite result." }),
-      ),
+      radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30, description: "Context lines before and after the anchor; default 8." })),
+      sha256: Type.Optional(Type.String({ description: "Optional expected source SHA-256 from a prior TraceCite result." })),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const args = [
-        "expand",
-        params.file,
-        String(params.line),
-        "--radius",
-        String(params.radius ?? 8),
-        "--max-chars",
-        "16000",
-      ];
+      const args = ["expand", params.file, String(params.line), "--radius", String(params.radius ?? 8), "--max-chars", "16000"];
       if (params.sha256) args.push("--sha256", params.sha256);
       const text = projectForPi(await runBridge(args, ctx.cwd, signal));
       return {
@@ -215,6 +200,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
           radius: params.radius ?? 8,
           canonical_retrieve: true,
           independent_retrieval_session: true,
+          relationship_frontier: true,
         },
       };
     },

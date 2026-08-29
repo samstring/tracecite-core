@@ -9,6 +9,7 @@ from .evidence_identity import file_source_version, pointer_source_key
 from .evidence_progress import EvidenceProgressTracker, StopReason
 from .evidence_routing import EvidenceRoutingPolicy
 from .provider_identity import namespace_provider_request
+from .relationship_frontier import attach_relationship_frontier
 from .retrieval_guidance import prioritize_actionable_retrieval
 from .retrieval_session import (
     DEFAULT_MAX_SEEN_EVIDENCE,
@@ -141,8 +142,10 @@ def retrieve_with_session(
         )
 
     normalized = namespace_provider_request(request)
-    base = prioritize_actionable_retrieval(
-        _retrieve_contract(normalized, routing_policy=routing_policy)
+    base = attach_relationship_frontier(
+        prioritize_actionable_retrieval(
+            _retrieve_contract(normalized, routing_policy=routing_policy)
+        )
     )
     canonical = dict(base.canonical_result)
     evidence = tuple(
