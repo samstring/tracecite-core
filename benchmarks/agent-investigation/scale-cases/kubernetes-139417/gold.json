@@ -1,0 +1,42 @@
+{
+  "root_cause_schema_version": 1,
+  "root_cause": {
+    "failure_localization": {
+      "patterns": ["(?:DynamicResources.{0,180}(?:PreBind|claim)|PreBind.{0,180}DynamicResources|PodScheduled.{0,120}(?:False|not scheduled))"]
+    },
+    "immediate_failure_mechanism": {
+      "patterns": ["(?:claim.{0,180}got allocated elsewhere in the meantime|PodScheduled.{0,180}False.{0,180}(?:scheduled|nodeName)|SchedulerError.{0,180}allocated elsewhere)"]
+    },
+    "upstream_contributor": {
+      "patterns": ["(?:(?:race|stale).{0,220}(?:status|PodScheduled).{0,220}(?:bind|binding)|asynchronous bind.{0,220}(?:patch|status).{0,220}(?:retry|success)|PodScheduled=False.{0,220}(?:overwrite|overwrote).{0,220}PodScheduled=True)"]
+    },
+    "fix_alignment": {
+      "patterns": ["(?:resourceVersion.{0,220}(?:patch|conflict)|(?:patch|status update).{0,220}resourceVersion.{0,180}(?:conflict|stale))"]
+    }
+  },
+  "evidence_sufficiency": {
+    "failure_localization": "supported",
+    "immediate_failure_mechanism": "supported",
+    "upstream_contributor": "unsupported_from_log",
+    "fix_alignment": "unsupported_from_log"
+  },
+  "evidence_markers": [
+    "got allocated elsewhere in the meantime",
+    "Pod my-pod-1 should have been scheduled",
+    "plugin=\"DynamicResources\""
+  ],
+  "unsupported_claims": [],
+  "contradictions": [],
+  "root_cause_thresholds": {
+    "dimension_recall": 0.5,
+    "supported_dimension_recall": 0.5,
+    "citation_accuracy": 0.5,
+    "evidence_marker_recall": 0.6667,
+    "max_unsupported_claim_hits": 0,
+    "max_contradiction_hits": 0
+  },
+  "leak_terms": [
+    "resourceVersion",
+    "status-patch race"
+  ]
+}
