@@ -48,11 +48,13 @@ def _string_list(payload: Mapping[str, Any], key: str) -> tuple[str, ...]:
 def _append_unique(previous: tuple[str, ...], values: Iterable[str], limit: int) -> tuple[tuple[str, ...], bool]:
     if limit < 1:
         raise ValueError("retrieval session seen-state limits must be at least 1")
+    additions = tuple(str(raw or "").strip() for raw in values if str(raw or "").strip())
+    if not additions:
+        return previous, False
     order = list(previous)
     seen = set(previous)
-    for raw in values:
-        value = str(raw or "").strip()
-        if value and value not in seen:
+    for value in additions:
+        if value not in seen:
             seen.add(value)
             order.append(value)
     if len(order) <= limit:
@@ -130,7 +132,13 @@ class RetrievalSessionState:
         max_seen_groups: int = DEFAULT_MAX_SEEN_GROUPS,
         max_seen_relations: int = DEFAULT_MAX_SEEN_RELATIONS,
     ) -> tuple["RetrievalSessionState", bool]:
-        """Advance bounded seen-state once while preserving unrelated dimensions."""
+        """Advance bounded seen-state once while preserving unrelated dimensions.
+
+        A dimension is re-bounded only when the current projection actually
+        observes identities for that dimension. This prevents a search-only
+        projection from pruning groups/relations owned by another compatibility
+        view that was configured with a different bound.
+        """
 
         seen_evidence, p1 = _append_unique(self.seen_evidence, evidence, max_seen_evidence)
         seen_results, p2 = _append_unique(self.seen_results, results, max_seen_results)
