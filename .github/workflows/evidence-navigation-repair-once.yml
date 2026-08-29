@@ -1,0 +1,163 @@
+name: Evidence Navigation Repair Once
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/evidence-navigation-repair-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/evidence-intelligence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply generic coverage repairs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('benchmarks/agent-investigation/gmi_canonical_host.py')
+          s = p.read_text()
+          s = s.replace(
+              '_MAX_GET_RADIUS = 8\n',
+              '_MAX_GET_RADIUS = 12\n_MIN_GET_RADIUS = 12\n',
+              1,
+          )
+          s = s.replace(
+              '_ACTION_PROMPT_MARKER = "TRACECITE_ACTION_REQUIRED"\n',
+              '_ACTION_PROMPT_MARKER = "TRACECITE_ACTION_REQUIRED"\n_NAVIGATION_PROMPT_MARKER = "TRACECITE_COVERAGE_REQUIRED"\n',
+              1,
+          )
+
+          anchor = '''def _tool_call_signature(call: Mapping[str, Any]) -> tuple[str, str, str] | None:\n'''
+          insert = '''def _original_question_text(messages: Sequence[Mapping[str, Any]]) -> str:\n    parts: list[str] = []\n    for message in messages:\n        if str(message.get("role") or "") != "user":\n            continue\n        content = str(message.get("content") or "")\n        if not content:\n            continue\n        if _ACTION_PROMPT_MARKER in content or _NAVIGATION_PROMPT_MARKER in content:\n            continue\n        if "Evidence acquisition has stopped" in content or "previous assistant response hit" in content:\n            continue\n        parts.append(content)\n    return "\\n".join(parts)\n\n\ndef _question_aligned_navigation_from_tool_output(\n    output: Any,\n    question_text: str,\n) -> dict[str, Any] | None:\n    \"\"\"Turn a truncated search's question-aligned next query into one coverage action.\n\n    This is lexical coverage control only. It does not rank a root cause: the\n    candidate must already be emitted by Runtime and must literally occur in\n    the user's investigation question.\n    \"\"\"\n\n    payload = _tool_output_payload(output)\n    if payload is None:\n        return None\n    coverage = payload.get("coverage") or {}\n    if not isinstance(coverage, Mapping) or not bool(coverage.get("evidence_truncated")):\n        return None\n    data = payload.get("data") or {}\n    if not isinstance(data, Mapping):\n        return None\n    evidence_source = data.get("evidence_source") or {}\n    if not isinstance(evidence_source, Mapping):\n        return None\n    source_path = str(evidence_source.get("path") or "").strip()\n    if not source_path:\n        return None\n    source = Path(source_path).name\n    question_folded = question_text.casefold()\n    if not question_folded:\n        return None\n    for raw in payload.get("next_queries") or []:\n        query = str(raw or "").strip()\n        if len(query) < 3:\n            continue\n        folded = query.casefold()\n        if folded not in question_folded:\n            continue\n        return {\n            "operation": "search",\n            "source": source,\n            "query": query,\n            "purpose": "cover_question_aligned_truncated_branch",\n            "gap_kind": "truncated_question_coverage",\n        }\n    return None\n\n\n'''
+          if anchor not in s:
+              raise SystemExit('host insertion anchor not found')
+          s = s.replace(anchor, insert + anchor, 1)
+
+          anchor = '''def _action_prompt(action: Mapping[str, Any]) -> str:\n'''
+          insert = '''def _pending_question_navigation(messages: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:\n    attempted: set[tuple[str, str, str]] = set()\n    pending: dict[str, Any] | None = None\n    question_text = _original_question_text(messages)\n    for message in messages:\n        role = str(message.get("role") or "")\n        if role == "assistant":\n            for raw_call in message.get("tool_calls") or []:\n                if not isinstance(raw_call, Mapping):\n                    continue\n                signature = _tool_call_signature(raw_call)\n                if signature is not None:\n                    attempted.add(signature)\n                    if pending is not None and signature == _action_signature(pending):\n                        pending = None\n            continue\n        if role != "tool":\n            continue\n        action = _question_aligned_navigation_from_tool_output(\n            message.get("content") or "", question_text\n        )\n        if action is not None and _action_signature(action) not in attempted:\n            pending = action\n    return pending\n\n\ndef _navigation_prompt(action: Mapping[str, Any]) -> str:\n    signature = "|".join(_action_signature(action))\n    return (\n        f"{_NAVIGATION_PROMPT_MARKER} {signature}\\n"\n        "The latest canonical search was truncated and Runtime exposed a next-query branch that is also "\n        "explicitly named in the investigation question. Before concluding, cover that branch once: "\n        f"tracecite_search(file={action['source']!r}, query={action['query']!r}, regex=false). "\n        "This is lexical evidence-coverage completion only; it is not a causal or root-cause recommendation."\n    )\n\n\n'''
+          if anchor not in s:
+              raise SystemExit('action prompt anchor not found')
+          s = s.replace(anchor, insert + anchor, 1)
+
+          old = '''    action = _pending_action(messages)\n    if action is None:\n        return request, None\n\n    action_signature = _action_signature(action)\n    signature = "|".join(action_signature)\n    marker = f"{_ACTION_PROMPT_MARKER} {signature}"\n    already_prompted = action_signature in _PROMPTED_ACTIONS or any(\n        str(item.get("role") or "") == "user" and marker in str(item.get("content") or "")\n        for item in messages\n    )\n    if already_prompted:\n        return request, None\n\n    # Record before provider dispatch. If the synthetic user prompt is not\n    # persisted into the host's conversation history, the next request still\n    # cannot re-inject it and repeatedly defer the normal safety cap.\n    _PROMPTED_ACTIONS.add(action_signature)\n    messages.append({"role": "user", "content": _action_prompt(action)})\n    request["messages"] = messages\n    return request, {\n        "type": "protocol",\n        "event": "prioritize_actionable_retrieval",\n        "operation": action["operation"],\n        "source": action["source"],\n        "query": action["query"],\n        "purpose": action.get("purpose") or "",\n        "gap_kind": action.get("gap_kind") or "",\n    }\n'''
+          new = '''    action = _pending_action(messages)\n    event_name = "prioritize_actionable_retrieval"\n    prompt_builder = _action_prompt\n    marker_prefix = _ACTION_PROMPT_MARKER\n    if action is None:\n        action = _pending_question_navigation(messages)\n        event_name = "prioritize_question_aligned_coverage"\n        prompt_builder = _navigation_prompt\n        marker_prefix = _NAVIGATION_PROMPT_MARKER\n    if action is None:\n        return request, None\n\n    action_signature = _action_signature(action)\n    signature = "|".join(action_signature)\n    marker = f"{marker_prefix} {signature}"\n    already_prompted = action_signature in _PROMPTED_ACTIONS or any(\n        str(item.get("role") or "") == "user" and marker in str(item.get("content") or "")\n        for item in messages\n    )\n    if already_prompted:\n        return request, None\n\n    # Record before provider dispatch. If the synthetic user prompt is not\n    # persisted into the host's conversation history, the next request still\n    # cannot re-inject it and repeatedly defer the normal safety cap.\n    _PROMPTED_ACTIONS.add(action_signature)\n    messages.append({"role": "user", "content": prompt_builder(action)})\n    request["messages"] = messages\n    return request, {\n        "type": "protocol",\n        "event": event_name,\n        "operation": action["operation"],\n        "source": action["source"],\n        "query": action["query"],\n        "purpose": action.get("purpose") or "",\n        "gap_kind": action.get("gap_kind") or "",\n    }\n'''
+          if old not in s:
+              raise SystemExit('apply action policy target not found')
+          s = s.replace(old, new, 1)
+
+          old = '''        radius = min(requested_radius, _MAX_GET_RADIUS)\n        prefix = ""\n        if radius != requested_radius:\n            prefix = f"@NORMALIZE radius_clamped_from={requested_radius} radius={radius}"\n'''
+          new = '''        radius = (\n            0\n            if requested_radius == 0\n            else min(_MAX_GET_RADIUS, max(_MIN_GET_RADIUS, requested_radius))\n        )\n        prefix = ""\n        if radius != requested_radius:\n            direction = "expanded" if radius > requested_radius else "clamped"\n            prefix = f"@NORMALIZE radius_{direction}_from={requested_radius} radius={radius}"\n'''
+          if old not in s:
+              raise SystemExit('radius target block not found')
+          s = s.replace(old, new, 1)
+
+          s = s.replace(
+              '"Recover exact line-addressable context around a known line through the canonical Runtime. radius is bounded to 0-8; "',
+              '"Recover exact line-addressable context around a known line through the canonical Runtime. radius=0 is exact-line; any positive radius is normalized to a 12-line evidence neighborhood for fidelity. "',
+              1,
+          )
+          p.write_text(s)
+
+          p = Path('tests/test_gmi_canonical_host.py')
+          s = p.read_text()
+          s = s.replace(
+              "assert 'radius_clamped_from=10 radius=8' in clamped",
+              "assert 'radius_expanded_from=10 radius=12' in clamped",
+              1,
+          )
+          marker = 'def test_question_aligned_truncated_navigation_is_required_once'
+          if marker not in s:
+              s += r'''
+
+
+def test_question_aligned_truncated_navigation_is_required_once(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "host._PROMPTED_ACTIONS.clear()\n"
+        "tool_payload = {\n"
+        " 'status':'ok',\n"
+        " 'coverage':{'evidence_truncated':True},\n"
+        " 'data':{'evidence_source':{'path':'/tmp/inputs/crash-report.txt'}},\n"
+        " 'next_queries':['dylib','Flutter','framework'],\n"
+        "}\n"
+        "messages = [\n"
+        " {'role':'system','content':'s'},\n"
+        " {'role':'user','content':'Identify the Flutter engine subsystem from this crash report.'},\n"
+        " {'role':'assistant','content':'','tool_calls':[{'id':'1','type':'function','function':{'name':'tracecite_search','arguments':'{\\\"file\\\":\\\"crash-report.txt\\\",\\\"query\\\":\\\"^Thread \\\",\\\"regex\\\":true}'}}]},\n"
+        " {'role':'tool','tool_call_id':'1','content':json.dumps(tool_payload)},\n"
+        "]\n"
+        "request, event = host._apply_action_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
+        "assert event is not None and event['event'] == 'prioritize_question_aligned_coverage'\n"
+        "assert event['query'] == 'Flutter'\n"
+        "assert 'TRACECITE_COVERAGE_REQUIRED search|crash-report.txt|Flutter' in request['messages'][-1]['content']\n"
+        "assert 'root-cause recommendation' in request['messages'][-1]['content']\n"
+        "second, second_event = host._apply_action_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
+        "assert second_event is None\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
+def test_question_aligned_navigation_does_not_invent_unmentioned_branch(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "host._PROMPTED_ACTIONS.clear()\n"
+        "tool_payload = {'status':'ok','coverage':{'evidence_truncated':True},'data':{'evidence_source':{'path':'/tmp/inputs/runtime.log'}},'next_queries':['database','network']}\n"
+        "messages = [\n"
+        " {'role':'user','content':'Why did the cache checksum fail?'},\n"
+        " {'role':'assistant','content':'','tool_calls':[{'id':'1','type':'function','function':{'name':'tracecite_search','arguments':'{\\\"file\\\":\\\"runtime.log\\\",\\\"query\\\":\\\"ERROR\\\",\\\"regex\\\":false}'}}]},\n"
+        " {'role':'tool','tool_call_id':'1','content':json.dumps(tool_payload)},\n"
+        "]\n"
+        "assert host._pending_question_navigation(messages) is None\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
+def test_positive_get_radius_expands_to_fidelity_neighborhood(tmp_path: Path) -> None:
+    input_root = tmp_path / 'inputs'
+    scratch = tmp_path / 'scratch'
+    input_root.mkdir()
+    scratch.mkdir()
+    (input_root / 'runtime.log').write_text(''.join(f'line-{i}\\n' for i in range(1, 40)), encoding='utf-8')
+    output = _run_host_script(
+        tmp_path,
+        "runtime = host.CanonicalRuntime(mode='tracecite', input_root=tmp/'inputs', scratch=tmp/'scratch', context_id='')\n"
+        "expanded = runtime._tracecite_get({'file':'runtime.log','line':20,'radius':5})\n"
+        "assert 'radius_expanded_from=5 radius=12' in expanded\n"
+        "assert 'runtime.log:8 line-8' in expanded\n"
+        "assert 'runtime.log:32 line-32' in expanded\n"
+        "exact = runtime._tracecite_get({'file':'runtime.log','line':20,'radius':0})\n"
+        "assert '@NORMALIZE' not in exact\n"
+        "assert 'runtime.log:20 line-20' in exact\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == 'ok'
+'''
+          p.write_text(s)
+          PY
+      - name: Run deterministic host and routing tests
+        run: |
+          python -m pip install -e '.[dev]'
+          pytest -q tests/test_gmi_canonical_host.py tests/test_retrieval_guidance.py tests/test_evidence_routing.py tests/test_signal_hint_routing.py
+          python scripts/check_architecture.py
+      - name: Commit repairs and remove one-shot workflow
+        run: |
+          rm .github/workflows/evidence-navigation-repair-once.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add benchmarks/agent-investigation/gmi_canonical_host.py tests/test_gmi_canonical_host.py .github/workflows/evidence-navigation-repair-once.yml
+          git commit -m 'fix(benchmark): close truncated question-aligned coverage gaps'
+          git push origin HEAD:experiment/evidence-intelligence
