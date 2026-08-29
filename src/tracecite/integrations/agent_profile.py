@@ -7,6 +7,7 @@ falls back to a portable JSON profile rather than silently dropping evidence.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
@@ -127,23 +128,35 @@ def _clean_cell(value: Any) -> str:
     return str(value if value is not None else "").replace("\t", " ").replace("\n", " ")
 
 
+def _json_cell(value: Any) -> str:
+    """Encode structured frame metadata without inventing a second schema."""
+
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def render_frame(payload: Mapping[str, Any]) -> str:
     """Render a compact search or expand-many view as a readable TCF frame.
 
     The frame is a transport encoding, not a new canonical schema. It carries
-    the same columnar rows and Coverage as the JSON view, and can always fall
-    back to JSON for hosts that do not declare ``text_frame`` support.
+    the same columnar rows and Coverage as the JSON view and must also preserve
+    decision-critical Evidence metadata such as actionable retrieval gaps,
+    correlation constraints, integrity observations, progress and routing.
+    Hosts that do not declare ``text_frame`` support fall back to JSON.
     """
 
     operation = str(payload.get("operation") or "unknown")
     status = str(payload.get("status") or "error")
     outcome = str(payload.get("outcome") or "unknown")
     lines = [f"@TCF 1 {operation} status={status} outcome={outcome}"]
-    result_id = str((payload.get("data") or {}).get("result_id") or payload.get("result_id") or "")
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        data = {}
+
+    result_id = str(data.get("result_id") or payload.get("result_id") or "")
     if result_id:
         lines.append(f"@R {result_id}")
 
-    source = (payload.get("data") or {}).get("evidence_source") or {}
+    source = data.get("evidence_source") or {}
     if isinstance(source, Mapping) and source.get("uri_base"):
         lines.append(f"@SRC {_clean_cell(source['uri_base'])}")
 
@@ -156,6 +169,24 @@ def render_frame(payload: Mapping[str, Any]) -> str:
         ]
         if scalar_coverage:
             lines.append("@COV " + " ".join(scalar_coverage))
+
+    # Compact frame transport must never hide a Runtime-declared evidence or
+    # integrity obligation.  These remain structured JSON fragments so the
+    # frame is only an encoding choice; it does not reinterpret their meaning.
+    frame_metadata = (
+        ("@ACT", data.get("actionable_retrieval")),
+        ("@CONSTRAINT", data.get("correlation_constraints")),
+        ("@INTEGRITY", data.get("evidence_integrity")),
+        ("@PROGRESS", data.get("progress")),
+        ("@ROUTE", data.get("routing")),
+        ("@SIGNAL", data.get("signal_hints")),
+        ("@GAP", payload.get("missing_evidence")),
+        ("@NEXT", payload.get("next_queries")),
+        ("@VERIFY", payload.get("verification")),
+    )
+    for marker, value in frame_metadata:
+        if value not in (None, "", [], {}, ()):
+            lines.append(f"{marker} {_json_cell(value)}")
 
     evidence = payload.get("evidence") or {}
     if isinstance(evidence, Mapping):
