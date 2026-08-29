@@ -24,7 +24,6 @@ _CITATION_PATTERNS = (
     re.compile(r"#L(?P<line>\d+)\b", re.IGNORECASE),
     re.compile(r"\bL(?P<line>\d+)\b", re.IGNORECASE),
     re.compile(r"\bline\s+(?P<line>\d+)\b", re.IGNORECASE),
-    re.compile(r"\b[\w.\-/]+:(?P<line>\d+)\b"),
 )
 # ``cat -n`` and ``nl`` render line-addressable evidence as ``N<TAB>text``.
 # This pattern is intentionally tool-output-only: applying it to the final
@@ -168,9 +167,38 @@ def _negative_results(answer: str, gold: Mapping[str, Any], field: str) -> list[
     return results
 
 
-def _line_refs(text: str) -> set[int]:
+def _evidence_filenames(case: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return evidence basenames that may legitimately qualify ``path:line`` refs."""
+
+    names: list[str] = []
+    for item in case.get("inputs") or []:
+        if not isinstance(item, Mapping):
+            continue
+        filename = str(item.get("filename") or "").strip()
+        if filename:
+            names.append(Path(filename).name)
+    for item in case.get("local_inputs") or []:
+        if not isinstance(item, Mapping):
+            continue
+        path = str(item.get("path") or "").strip()
+        if path:
+            names.append(Path(path).name)
+    return tuple(dict.fromkeys(name for name in names if name))
+
+
+def _path_line_refs(text: str, evidence_filenames: Iterable[str]) -> set[int]:
     result: set[int] = set()
-    for pattern in _CITATION_PATTERNS:
+    for filename in evidence_filenames:
+        name = Path(str(filename or "")).name
+        if not name:
+            continue
+        # Match either ``basename:line`` or a path ending in that basename.
+        # Arbitrary source positions such as ``kubeletconfig.go:186`` are not
+        # citations unless that file is itself one of the benchmark inputs.
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9_.-])(?:[A-Za-z0-9_.\-/]*/)?{re.escape(name)}:(?P<line>\d+)\b",
+            re.IGNORECASE,
+        )
         for match in pattern.finditer(text):
             try:
                 line = int(match.group("line"))
@@ -181,8 +209,22 @@ def _line_refs(text: str) -> set[int]:
     return result
 
 
-def _tool_line_refs(text: str) -> set[int]:
-    result = _line_refs(text)
+def _line_refs(text: str, evidence_filenames: Iterable[str] = ()) -> set[int]:
+    result: set[int] = set()
+    for pattern in _CITATION_PATTERNS:
+        for match in pattern.finditer(text):
+            try:
+                line = int(match.group("line"))
+            except (TypeError, ValueError):
+                continue
+            if line > 0:
+                result.add(line)
+    result.update(_path_line_refs(text, evidence_filenames))
+    return result
+
+
+def _tool_line_refs(text: str, evidence_filenames: Iterable[str] = ()) -> set[int]:
+    result = _line_refs(text, evidence_filenames)
     for match in _TOOL_NUMBERED_LINE_PATTERN.finditer(text):
         try:
             line = int(match.group("line"))
@@ -193,16 +235,24 @@ def _tool_line_refs(text: str) -> set[int]:
     return result
 
 
-def _visible_line_refs(tool_outputs: Iterable[str]) -> set[int]:
+def _visible_line_refs(
+    tool_outputs: Iterable[str], evidence_filenames: Iterable[str] = ()
+) -> set[int]:
     visible: set[int] = set()
+    filenames = tuple(evidence_filenames)
     for output in tool_outputs:
-        visible.update(_tool_line_refs(output))
+        visible.update(_tool_line_refs(output, filenames))
     return visible
 
 
-def _citation_quality(answer: str, tool_outputs: list[str]) -> dict[str, Any]:
-    answer_refs = _line_refs(answer)
-    visible_refs = _visible_line_refs(tool_outputs)
+def _citation_quality(
+    answer: str,
+    tool_outputs: list[str],
+    evidence_filenames: Iterable[str] = (),
+) -> dict[str, Any]:
+    filenames = tuple(evidence_filenames)
+    answer_refs = _line_refs(answer, filenames)
+    visible_refs = _visible_line_refs(tool_outputs, filenames)
     valid = answer_refs & visible_refs
     invalid = answer_refs - visible_refs
     accuracy = len(valid) / len(answer_refs) if answer_refs else 0.0
@@ -230,6 +280,7 @@ def _dimension_evidence_support(
     answer: str,
     gold: Mapping[str, Any],
     tool_outputs: list[str],
+    evidence_filenames: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
     """Bind each root-cause rubric hit to valid evidence cited in that block.
 
@@ -240,8 +291,9 @@ def _dimension_evidence_support(
     model actually saw in tool output.
     """
 
+    filenames = tuple(evidence_filenames)
     rubric = gold["root_cause"]
-    visible = _visible_line_refs(tool_outputs)
+    visible = _visible_line_refs(tool_outputs, filenames)
     blocks = _answer_blocks(answer)
     results: list[dict[str, Any]] = []
     for dimension in ROOT_CAUSE_DIMENSIONS:
@@ -249,7 +301,7 @@ def _dimension_evidence_support(
         matching = [block for block in blocks if _hit(block, pats)]
         refs: set[int] = set()
         for block in matching:
-            refs.update(_line_refs(block) & visible)
+            refs.update(_line_refs(block, filenames) & visible)
         results.append(
             {
                 "id": dimension,
@@ -279,6 +331,7 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
     validate_case(case_dir)
     case, _, gold_path = legacy._case_paths(case_dir)
     gold = _read_json(gold_path)
+    evidence_filenames = _evidence_filenames(case)
     events = list(_iter_transcript(transcript_path))
     tool_events = [event for event in events if event.get("type") == "tool"]
     model_events = [event for event in events if event.get("type") == "model"]
@@ -311,7 +364,9 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
 
     dimensions = _dimension_results(answer, gold)
     dimension_recall = sum(1 for item in dimensions if item["hit"]) / len(dimensions)
-    dimension_support = _dimension_evidence_support(answer, gold, tool_outputs)
+    dimension_support = _dimension_evidence_support(
+        answer, gold, tool_outputs, evidence_filenames
+    )
     supported_dimension_recall = (
         sum(1 for item in dimension_support if item["supported"])
         / len(dimension_support)
@@ -320,7 +375,7 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
     contradictions = _negative_results(answer, gold, "contradictions")
     unsupported_hits = sum(1 for item in unsupported if item["hit"])
     contradiction_hits = sum(1 for item in contradictions if item["hit"])
-    citations = _citation_quality(answer, tool_outputs)
+    citations = _citation_quality(answer, tool_outputs, evidence_filenames)
 
     evidence_text = "\n".join(tool_outputs + [answer])
     marker_results = [
