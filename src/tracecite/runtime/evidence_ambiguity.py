@@ -1,16 +1,9 @@
 """Domain-neutral scoped-identity navigation and verification.
 
-The detector is deliberately mechanical and conservative. It observes raw
-evidence and may report:
-
-1. sibling scoped entity fan-out;
-2. a local-looking ``...ID`` near a structured scoped entity whose uniqueness
-   is not yet established;
-3. a bounded source-wide verification showing which scoped entities actually
-   carry that identifier value.
-
-None of these observations is a root-cause claim. They exist to prevent an
-Agent from silently correlating records by a locally-scoped identifier alone.
+This module performs mechanical evidence-integrity checks only. It may surface
+that a local-looking identifier is attached to a scoped entity and that sibling
+entities from the same scope/family coexist in the same source. It never claims
+that siblings reuse the identifier and never declares a root cause.
 """
 
 from __future__ import annotations
@@ -120,11 +113,7 @@ def _scope_uniqueness_hints(
     member_limit: int,
     proximity_lines: int,
 ) -> list[dict[str, Any]]:
-    """Find local IDs near *structured* scoped entities in visible evidence.
-
-    Requiring a structured entity field (for example ``name: scope/member``)
-    avoids treating dates and source-code paths as identity scopes.
-    """
+    """Find local IDs near structured scoped entities in visible evidence."""
 
     scoped = _structured_entities(text)
     identifiers: list[tuple[int, str, str]] = []
@@ -139,9 +128,8 @@ def _scope_uniqueness_hints(
         nearby = [row for row in scoped if abs(row[0] - id_line) <= proximity_lines]
         if not nearby:
             continue
-        identity = (key.lower(), value)
         slot = grouped.setdefault(
-            identity,
+            (key.lower(), value),
             {
                 "identifier_key": key,
                 "identifier_value": value,
@@ -177,9 +165,9 @@ def _scope_uniqueness_hints(
                     "purpose": "verify_identifier_uniqueness_across_scopes",
                 },
                 "verification": (
-                    "Search this identifier value across the source and compare nearby "
-                    "scoped entities. Do not correlate records by this identifier alone "
-                    "until uniqueness across relevant scopes/entities is verified."
+                    "Verify this identifier across the source and compare nearby scoped "
+                    "entities. Do not correlate records by this identifier alone until "
+                    "uniqueness across relevant scopes/entities is established."
                 ),
             }
         )
@@ -213,7 +201,6 @@ def scoped_identity_fanout_hints(
         member_limit=member_limit,
         proximity_lines=proximity_lines,
     )
-
     groups: dict[tuple[str, str], set[str]] = defaultdict(set)
     for match in _SCOPED_TOKEN_RE.finditer(text):
         scope = match.group("scope")
@@ -251,6 +238,19 @@ def _fingerprint(stat: os.stat_result) -> tuple[int, int, int, int, int]:
     return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
 
 
+def _target_families(hint: dict[str, Any]) -> set[tuple[str, str]]:
+    families: set[tuple[str, str]] = set()
+    for entity in hint.get("scoped_entities") or []:
+        value = str(entity)
+        if "/" not in value:
+            continue
+        scope, member = value.split("/", 1)
+        family = _family(member)
+        if scope and family:
+            families.add((scope, family))
+    return families
+
+
 def verify_scoped_identity_gaps(
     source_path: str | Path,
     visible_text: str,
@@ -261,12 +261,11 @@ def verify_scoped_identity_gaps(
     entity_limit: int = DEFAULT_VERIFICATION_ENTITY_LIMIT,
     reference_limit: int = DEFAULT_VERIFICATION_REFERENCE_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Mechanically verify local-ID uniqueness across a stable local source.
+    """Verify scoped-ID correlation constraints from one stable local source.
 
-    Only IDs that already triggered ``scope_uniqueness_unverified`` in the
-    caller-visible range are scanned. The source is hashed and scanned through
-    one stable file descriptor. Output is bounded; the whole source is never
-    returned to the Agent.
+    The scan reports direct identifier-to-entity associations when visible. It
+    also reports sibling entities in the same scope/name family as the visible
+    entity. Sibling fan-out is an evidence gap, not proof of identifier reuse.
     """
 
     if limit < 1 or proximity_lines < 0 or entity_limit < 1 or reference_limit < 1:
@@ -286,17 +285,19 @@ def verify_scoped_identity_gaps(
     path = Path(source_path).expanduser().resolve()
     digest = hashlib.sha256()
     recent_entities: deque[tuple[int, str, str]] = deque()
-    state: dict[tuple[str, str], dict[str, Any]] = {
-        key: {
+    state: dict[tuple[str, str], dict[str, Any]] = {}
+    for key, hint in targets.items():
+        state[key] = {
             "identifier_key": hint["identifier_key"],
             "identifier_value": hint["identifier_value"],
             "identifier_occurrences_seen": 0,
             "associated_occurrences": 0,
             "entities": {},
             "entity_overflow": False,
+            "families": _target_families(hint),
+            "siblings": {},
+            "sibling_overflow": False,
         }
-        for key, hint in targets.items()
-    }
 
     with path.open("rb") as binary:
         opened = os.fstat(binary.fileno())
@@ -311,10 +312,41 @@ def verify_scoped_identity_gaps(
             for number, line in enumerate(handle, start=1):
                 while recent_entities and number - recent_entities[0][0] > proximity_lines:
                     recent_entities.popleft()
+
                 for match in _STRUCTURED_SCOPED_ENTITY_RE.finditer(line):
                     scope = match.group("scope")
                     member = match.group("member").rstrip(".,;:)]}")
                     recent_entities.append((number, f"{scope}/{member}", f"{scope}/"))
+
+                scoped_tokens: list[tuple[str, str]] = []
+                for match in _SCOPED_TOKEN_RE.finditer(line):
+                    scope = match.group("scope")
+                    member = match.group("member").rstrip(".,;:)]}")
+                    scoped_tokens.append((scope, member))
+                for slot in state.values():
+                    families = slot["families"]
+                    siblings = slot["siblings"]
+                    for scope, member in scoped_tokens:
+                        family = _family(member)
+                        if (scope, family) not in families:
+                            continue
+                        entity = f"{scope}/{member}"
+                        if entity not in siblings:
+                            if len(siblings) >= _INTERNAL_ENTITY_SCAN_CAP:
+                                slot["sibling_overflow"] = True
+                                continue
+                            siblings[entity] = {
+                                "entity": entity,
+                                "scope": f"{scope}/",
+                                "occurrence_count": 0,
+                                "references": [],
+                                "first_line": number,
+                            }
+                        row = siblings[entity]
+                        row["occurrence_count"] += 1
+                        if len(row["references"]) < reference_limit:
+                            row["references"].append(f"{path.name}:{number}")
+
                 for match in _IDENTIFIER_PAIR_RE.finditer(line):
                     key = match.group("key")
                     value = match.group("value").rstrip(".,;:)]}")
@@ -340,9 +372,8 @@ def verify_scoped_identity_gaps(
                         }
                     row = entities[entity]
                     row["occurrence_count"] += 1
-                    refs = row["references"]
-                    if len(refs) < reference_limit:
-                        refs.append(
+                    if len(row["references"]) < reference_limit:
+                        row["references"].append(
                             {
                                 "entity_ref": f"{path.name}:{entity_line}",
                                 "identifier_ref": f"{path.name}:{number}",
@@ -352,6 +383,7 @@ def verify_scoped_identity_gaps(
             current_path = path.stat()
         finally:
             handle.detach()
+
     if _fingerprint(opened) != _fingerprint(read_complete) or _fingerprint(opened) != _fingerprint(current_path):
         raise OSError("source changed during scoped-identity verification")
 
@@ -361,23 +393,38 @@ def verify_scoped_identity_gaps(
             slot["entities"].values(),
             key=lambda row: (int(row["first_line"]), str(row["entity"])),
         )
+        siblings = sorted(
+            slot["siblings"].values(),
+            key=lambda row: (int(row["first_line"]), str(row["entity"])),
+        )
         entity_count = len(ordered)
+        sibling_count = len(siblings)
         if entity_count >= 2:
             status = "multiple_scoped_entities_observed"
             finding = (
                 "The same identifier value is directly associated with multiple scoped "
-                "entities in this source. The identifier value alone is not source-unique; "
-                "preserve entity/scope when correlating records."
+                "entities in this source. The identifier alone is not source-unique; "
+                "preserve the relevant scope/entity when correlating records."
+            )
+        elif sibling_count >= 2:
+            status = "uniqueness_unverified_with_sibling_scope_fanout"
+            finding = (
+                "This local identifier is observed inside a scoped entity, while multiple "
+                "sibling entities from the same scope/name family coexist in the source. "
+                "The scan does not prove that those siblings reuse the identifier, so "
+                "identifier-only correlation remains unverified rather than safe."
             )
         elif entity_count == 1:
             status = "single_scoped_entity_observed"
             finding = (
-                "Only one scoped entity was observed for this identifier in the scanned "
-                "source; this does not prove global uniqueness outside this source."
+                "Only one direct scoped-entity association was observed for this identifier "
+                "and no sibling family fan-out was found in this source. This still does not "
+                "prove global uniqueness outside the source."
             )
         else:
             status = "unresolved"
-            finding = "The identifier was not associated with a structured scoped entity during the bounded verification."
+            finding = "The identifier could not be bound to a structured scoped entity during verification."
+
         verified.append(
             {
                 "kind": "scoped_identifier_verification",
@@ -393,10 +440,26 @@ def verify_scoped_identity_gaps(
                     {key: value for key, value in row.items() if key != "first_line"}
                     for row in ordered[:entity_limit]
                 ],
-                "truncated": bool(slot["entity_overflow"] or entity_count > entity_limit),
+                "sibling_entity_count_observed": sibling_count,
+                "sibling_entities": [
+                    {key: value for key, value in row.items() if key != "first_line"}
+                    for row in siblings[:entity_limit]
+                ],
+                "truncated": bool(
+                    slot["entity_overflow"]
+                    or slot["sibling_overflow"]
+                    or entity_count > entity_limit
+                    or sibling_count > entity_limit
+                ),
                 "finding": finding,
+                "correlation_requirement": (
+                    "Until uniqueness is established, any lookup/correlation using this "
+                    "identifier should be checked for the relevant scope/entity key instead "
+                    "of assuming the identifier is sufficient by itself."
+                ),
                 "causal_note": (
-                    "Identity/correlation verification only; this observation does not by itself identify a root cause."
+                    "Identity/correlation verification only; sibling fan-out does not prove "
+                    "identifier reuse and this observation does not by itself identify a root cause."
                 ),
             }
         )
