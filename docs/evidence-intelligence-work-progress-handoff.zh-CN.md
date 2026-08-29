@@ -16,10 +16,13 @@
 - Phase C grouping entity-diversity：`85a08179ce66373f2b4272bfe1b89de2e6a1608d`
 - Phase C provider namespace：`08a57547b38bb8f462ec7c43b4088f3848438955`
 - Phase C relation-strength / reducer gate HEAD：`d722a1f31e4b55250625cdf5dd6be10d52ef000b`
+- Phase D canonical RetrievalSession：`76dd2566a80571c83d47495d61c692ea7d5cfe9e`
+- Phase D shared Context ownership：`83940d0e3f95c31ee56c0fcd5f4f9cf224220c8b`
+- Phase D retrieval progress ownership gate HEAD：`08fb8f1a2b77ca8740e7327f52481cc5ab5f150c`
 - 未经明确确认，不合并到基础分支。
 - Core 稳定前，不改 Mobile / MCP 上层业务设计。
 
-当前阶段：**Phase C deterministic 已完成，进入 Phase D — State simplification。**
+当前阶段：**Phase D — Retrieval/context state ownership deterministic 已闭合；继续 SourceSession schema / projection owner 收敛。**
 
 ### 1.1 Focused gate 豁免说明
 
@@ -142,15 +145,15 @@ DIRECT -> BOUNDED -> INVESTIGATE
 - Provider record identity 已在 public Runtime boundary namespaced；
 - grouping 已保留 exact entity identity；
 - weak relation 与 exact identity relation 已在 retention path 中区分；
-- reducer score 已明确标注为 retention priority，不是 cause likelihood。
+- reducer score 已明确标注为 retention priority，不是 cause likelihood；
+- ContextEngine / EvidenceContextEngine 不再分别拥有独立 seen-state；
+- retrieval novelty / covered ranges 不再以 InvestigationState executions 作为主状态 owner。
 
 ### Phase D 仍要处理的 P1
 
-1. seen/context state owner 过多；
-2. Agent compact/projection 路径过多；
-3. investigate facade 重复；
-4. SourceSession monkey-patch / 动态状态扩展长期过重；
-5. RetrievalSession 尚未成为唯一 retrieval/context state owner。
+1. Agent compact/projection 路径过多；
+2. investigate facade 重复；
+3. SourceSession monkey-patch / 动态状态扩展长期过重。
 
 长期状态 owner 目标只有：
 
@@ -298,17 +301,76 @@ Phase C deterministic 完成。
 
 ## 8. Phase D — State simplification
 
-状态：**CURRENT / 进行中。**
+状态：**CURRENT；retrieval/context state ownership deterministic 已闭合，继续剩余收敛。**
 
-目标：
+### 8.1 RetrievalSession / context ownership — COMPLETE
 
-1. 收敛 RetrievalSession；
-2. 合并 ContextEngine / EvidenceContextEngine 的重复 seen/context ownership；
-3. InvestigationState 只保留 reasoning/audit state；
-4. SourceSession 正式 schema 化，减少 monkey-patch/dynamic ownership；
-5. 收敛重复 Agent compact/projection owner；
-6. deterministic gate；
-7. 更新本文档。
+已建立 Runtime-owned：
+
+```text
+RetrievalSessionState
+RetrievalSessionStore
+```
+
+作为 bounded retrieval/context seen-state 的唯一 owner，当前统一管理：
+
+```text
+revision
+seen_evidence
+seen_results
+seen_groups
+seen_relations
+covered_ranges
+source_complete
+```
+
+迁移结果：
+
+- `ContextEngine` 和 `EvidenceContextEngine` 仍保留 compatibility projection surface，但不再各自拥有独立 state schema；
+- 两个 projection engine 共用 canonical `_contexts/<id>.json`；
+- 旧 `_evidence_contexts/<id>.json` 可读取，并在后续 save 时迁移；
+- 一个 projection 看到过的 Evidence，另一个 projection 会立即识别为 repeated；
+- 更新某一维 seen-state 不会擦掉另一 projection 已保存的 results/groups/relations；
+- Retrieval progress 的 `seen Evidence + immutable covered ranges` 已从 InvestigationState execution replay 拆出；
+- InvestigationState executions 继续保留 audit/reproducibility，不再作为未来 retrieval novelty 的主状态；
+- 旧 investigation 没有 progress sidecar 时允许从 executions 回放一次并迁移；
+- 即使 audit executions 后续不参与恢复，sidecar 仍可独立识别 repeated Evidence 与 covered range。
+
+Gate HEAD：`08fb8f1a2b77ca8740e7327f52481cc5ab5f150c`
+
+```text
+Core CI run 33247711104: PASS
+Evidence Intelligence benchmark run 33247711129: PASS
+```
+
+因此 Phase D 的 retrieval/context state ownership 子阶段 deterministic 已完成。
+
+### 8.2 SourceSession schema — NEXT
+
+当前 `source_session.py` 仍通过 import-time monkey patch 扩展：
+
+```text
+InvestigationState.to_dict / from_dict
+InvestigationStore.register/get/list/inspect/update/invalidate/refresh_source_session
+```
+
+下一步：
+
+1. 去掉动态 monkey patch；
+2. 让 SourceSession 成为正式、可验证、向后兼容的 schema/state contract；
+3. 保持旧 v1 文档没有 SourceSession 时可按空状态读取；
+4. 不引入第三套长期 state owner；
+5. 运行 source-session tests + Core CI + deterministic benchmark。
+
+### 8.3 后续 Phase D
+
+SourceSession schema 收敛后继续：
+
+1. 收敛重复 Agent compact/projection owner；
+2. 检查/减少 investigate facade 重复；
+3. deterministic gate；
+4. 更新本文档；
+5. 再进入 Final Gate 准备。
 
 设计约束：
 
@@ -375,4 +437,4 @@ retrieve / investigate / project / capability
 
 ## 11. 当前一句话结论
 
-> **Phase A Runtime evidence semantics、Phase B public entry convergence、Phase C identity/grouping/relation-strength 已完成 deterministic 收敛；focused correctness 仍有 Flutter / 140268 未闭合，但按用户明确决策暂不阻塞实验阶段推进。当前进入 Phase D，开始收敛 retrieval/context state ownership；Final Gate 仍保留完整 correctness/no-harm 要求。**
+> **Phase A Runtime evidence semantics、Phase B public entry convergence、Phase C identity/grouping/relation-strength 已完成 deterministic 收敛；Phase D 的 RetrievalSession/context state ownership 也已在 HEAD `08fb8f1a...` 通过 Core CI 与 deterministic benchmark。focused correctness 仍有 Flutter / 140268 未闭合，但按用户明确决策暂不阻塞实验阶段推进。当前继续 Phase D SourceSession schema 与 projection owner 收敛；Final Gate 仍保留完整 correctness/no-harm 要求。**
