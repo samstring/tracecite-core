@@ -1,4 +1,5 @@
 name: Evidence Failure Focused Rerun
+# Validate scoped-correlation repair after deterministic gates pass.
 
 on:
   push:
