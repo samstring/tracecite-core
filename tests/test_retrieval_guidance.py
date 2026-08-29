@@ -167,9 +167,24 @@ def test_scoped_entity_search_advances_to_observed_sibling_family() -> None:
     }
 
 
-def test_scoped_family_search_finishes_without_dropping_scope() -> None:
+def test_scoped_family_search_advances_to_unscoped_member_family() -> None:
     guided = prioritize_actionable_retrieval(
         _result(_identity_case("vendor.example/device-run-"))
+    )
+    gap = guided.canonical_result["missing_evidence"][0]
+    assert gap["actionable"] is True
+    action = guided.canonical_result["data"]["actionable_retrieval"]
+    assert action["query"] == "device-run-"
+    assert action["purpose"] == "trace_unscoped_sibling_member_family_references"
+    assert guided.canonical_result["next_queries"][0] == "device-run-"
+    constraint = guided.canonical_result["data"]["correlation_constraints"][0]
+    assert constraint["identifier_only_correlation_safe"] is False
+    assert "navigation evidence" in gap["detail"]
+
+
+def test_member_family_search_finishes_without_promoting_identity_safety() -> None:
+    guided = prioritize_actionable_retrieval(
+        _result(_identity_case("device-run-"))
     )
     gap = guided.canonical_result["missing_evidence"][0]
     assert gap["actionable"] is False
