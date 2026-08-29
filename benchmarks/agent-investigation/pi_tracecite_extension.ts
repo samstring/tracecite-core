@@ -56,10 +56,9 @@ function compactGap(value: any) {
   return {
     kind: value.kind,
     detail: value.detail,
-    actionable: value.actionable,
+    source: value.source,
     identifier_key: value.identifier_key,
     identifier_value: value.identifier_value,
-    recommended_action: value.recommended_action,
   };
 }
 
@@ -76,25 +75,17 @@ function projectForPi(text: string): string {
   const data = payload.data && typeof payload.data === "object" ? payload.data : {};
 
   if (operation === "search") {
-    const priorityAction = data.actionable_retrieval ?? null;
     const constraints = Array.isArray(data.correlation_constraints)
       ? data.correlation_constraints.map(compactConstraint)
       : [];
     const gaps = Array.isArray(payload.missing_evidence)
       ? payload.missing_evidence.map(compactGap)
       : [];
-    const signalHints = Array.isArray(data.signal_hints) ? data.signal_hints.slice(0, 5) : [];
-    const genericNext = Array.isArray(payload.next_queries) ? payload.next_queries.slice(0, 5) : [];
-    const nextQueries = priorityAction?.query ? [String(priorityAction.query)] : genericNext;
 
     return JSON.stringify({
       operation: payload.operation,
       status: payload.status,
       outcome: payload.outcome,
-      priority_action: priorityAction,
-      priority_note: priorityAction
-        ? "Execute this action next to advance the current mechanical evidence/integrity gap. Earlier searches with the same text do not close this ordered step because the action was derived from the current result. This is navigation, not a root-cause claim."
-        : undefined,
       evidence: payload.evidence,
       coverage: payload.coverage,
       progress: data.progress,
@@ -102,31 +93,25 @@ function projectForPi(text: string): string {
       evidence_source: data.evidence_source,
       correlation_constraints: constraints.length ? constraints : undefined,
       missing_evidence: gaps.length ? gaps : undefined,
-      signal_hints: signalHints.length ? signalHints : undefined,
-      next_queries: nextQueries.length ? nextQueries : undefined,
       routing: data.routing,
     });
   }
 
   if (operation === "expand") {
-    const priorityAction = data.relationship_action ?? null;
-    const frontier = Array.isArray(data.relationship_frontier)
-      ? data.relationship_frontier.slice(0, 6)
+    const observedReferences = Array.isArray(data.observed_references)
+      ? data.observed_references.slice(0, 6)
       : [];
     return JSON.stringify({
       operation: payload.operation,
       status: payload.status,
       outcome: payload.outcome,
-      priority_action: priorityAction,
-      priority_note: priorityAction
-        ? "This is a mechanical reference-resolution step derived from the materialized evidence. Searching the exact observed value may reveal what the record points to; it does not prove identity or causality."
-        : undefined,
-      relationship_frontier: frontier.length ? frontier : undefined,
       evidence: payload.evidence,
       coverage: payload.coverage,
       progress: data.progress,
       stop_reason: data.stop_reason,
       text: data.text,
+      observed_references: observedReferences.length ? observedReferences : undefined,
+      observed_references_note: observedReferences.length ? data.observed_references_note : undefined,
     });
   }
 
@@ -138,18 +123,17 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_search",
     label: "TraceCite Search",
     description:
-      "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns bounded line-addressable evidence plus novelty, coverage, identity/correlation integrity, routing, and any mechanically actionable retrieval gap. It never decides root cause.",
+      "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns bounded line-addressable evidence, provenance/coverage state, novelty, and mechanical identity/correlation facts. It does not plan the investigation or decide root cause.",
     promptSnippet:
-      "Use tracecite_search for bounded evidence discovery in large logs; treat its output as evidence/navigation, never as causal truth.",
+      "tracecite_search returns evidence and evidence-state facts; you remain responsible for hypotheses, tool choice, investigation order, and conclusions.",
     promptGuidelines: [
-      "When tracecite_search returns priority_action, execute that action next before unrelated broadening. Treat priority actions as ordered mechanical gap closure, not root-cause recommendations.",
-      "A search hit is an observation, not support for a causal hypothesis.",
-      "TraceCite correlation constraints protect evidence identity; they do not prove a root cause.",
-      "Expand decisive TraceCite hits before citing or semantically interpreting them.",
+      "Treat a search hit as an observation, not support for a causal hypothesis by itself.",
+      "Treat correlation constraints as identity-safety facts, not root-cause claims or instructions.",
+      "Use materialized line context when making exact citations from compact evidence pointers.",
     ],
     parameters: Type.Object({
       file: Type.String({ description: "Path to the local source file, relative to the current working directory or absolute." }),
-      query: Type.String({ description: "Literal or regex query." }),
+      query: Type.String({ description: "Literal or regex query chosen by the Agent." }),
       regex: Type.Optional(Type.Boolean({ description: "Interpret query as a regular expression." })),
       max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, description: "Maximum evidence rows to return; default 20." })),
     }),
@@ -165,6 +149,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
           query: params.query,
           canonical_retrieve: true,
           independent_retrieval_session: true,
+          evidence_only: true,
         },
       };
     },
@@ -174,18 +159,17 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_expand",
     label: "TraceCite Expand",
     description:
-      "Materialize bounded source context through TraceCite's canonical retrieval contract around a specific line. It can also expose reference-like key/value frontiers found in that exact context. These are navigation candidates, not causal judgements.",
-    promptSnippet: "Expand important TraceCite hits before citing or interpreting them.",
+      "Materialize bounded source context through TraceCite's canonical retrieval contract around a line chosen by the Agent. Returns exact text, provenance/coverage state, and reference-like fields literally observed in that text; it does not recommend another action.",
+    promptSnippet:
+      "tracecite_expand materializes exact evidence context; observed references are facts from that context, not investigation instructions.",
     promptGuidelines: [
-      "Use tracecite_expand to materialize exact source context for evidence that matters to the final explanation.",
-      "When tracecite_expand returns priority_action, resolve that exact observed reference with tracecite_search before unrelated broadening when the relation matters to the investigation.",
-      "Relationship-frontier fields are lexical navigation only; co-occurrence does not prove identity or causality.",
+      "Treat observed_references as literal fields found in the materialized evidence only; they do not establish identity, importance, or causality.",
     ],
     parameters: Type.Object({
       file: Type.String({ description: "Path to the same local source file." }),
-      line: Type.Integer({ minimum: 1, description: "1-based anchor line." }),
+      line: Type.Integer({ minimum: 1, description: "1-based anchor line chosen by the Agent." }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30, description: "Context lines before and after the anchor; default 8." })),
-      sha256: Type.Optional(Type.String({ description: "Optional expected source SHA-256 from a prior TraceCite result." })),
+      sha256: Type.Optional(Type.String({ description: "Optional expected source SHA-256 from prior evidence." })),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const args = ["expand", params.file, String(params.line), "--radius", String(params.radius ?? 8), "--max-chars", "16000"];
@@ -200,7 +184,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
           radius: params.radius ?? 8,
           canonical_retrieve: true,
           independent_retrieval_session: true,
-          relationship_frontier: true,
+          evidence_only: true,
         },
       };
     },
