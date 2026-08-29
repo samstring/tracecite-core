@@ -1,0 +1,90 @@
+name: Phase D Investigate Facade Convergence
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/phase-d-investigate-facade.yml
+
+permissions:
+  contents: write
+
+jobs:
+  converge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/evidence-intelligence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Converge investigate facade
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          api_path = Path('src/tracecite/runtime/agent_api.py')
+          integration_path = Path('src/tracecite/integrations/investigator.py')
+          test_path = Path('tests/test_evidence_orchestrator.py')
+
+          api = api_path.read_text(encoding='utf-8')
+          api = api.replace(
+              'from typing import Any, Mapping, Sequence, Union',
+              'from typing import Any, Callable, Mapping, Sequence, Union',
+              1,
+          )
+          api = api.replace(
+              'from .evidence_identity import file_source_version, pointer_source_key\n',
+              'from .correlation import EvidenceNode\nfrom .evidence_identity import file_source_version, pointer_source_key\n',
+              1,
+          )
+
+          old = '''def investigate(\n    providers: Sequence[EvidenceProvider],\n    *,\n    seed_evidence_ids: Sequence[str] = (),\n    seed_entities: Sequence[EntityRef] = (),\n    exploration_policy: ExplorationPolicy | None = None,\n    reduction_policy: ReductionPolicy | None = None,\n    temporal_window_seconds: float | None = None,\n) -> CanonicalInvestigationResult:\n    """Run deterministic mechanical exploration; never infer a root cause."""\n\n    investigation = investigate_evidence(\n        providers,\n        seed_evidence_ids=seed_evidence_ids,\n        seed_entities=seed_entities,\n        exploration_policy=exploration_policy,\n        reduction_policy=reduction_policy,\n        temporal_window_seconds=temporal_window_seconds,\n    )\n'''
+          new = '''def investigate(\n    providers: Sequence[EvidenceProvider],\n    *,\n    seed_nodes: Sequence[EvidenceNode] = (),\n    seed_evidence_ids: Sequence[str] = (),\n    seed_entities: Sequence[EntityRef] = (),\n    exploration_policy: ExplorationPolicy | None = None,\n    reduction_policy: ReductionPolicy | None = None,\n    temporal_window_seconds: float | None = None,\n    clock: Callable[[], float] | None = None,\n) -> CanonicalInvestigationResult:\n    """Run deterministic mechanical exploration; never infer a root cause.\n\n    ``seed_nodes`` and ``clock`` are mechanical orchestration inputs exposed\n    here so compatibility adapters never need to bypass the public Runtime\n    facade to reach ``investigate_evidence`` directly.\n    """\n\n    kwargs: dict[str, Any] = {\n        "seed_nodes": seed_nodes,\n        "seed_evidence_ids": seed_evidence_ids,\n        "seed_entities": seed_entities,\n        "exploration_policy": exploration_policy,\n        "reduction_policy": reduction_policy,\n        "temporal_window_seconds": temporal_window_seconds,\n    }\n    if clock is not None:\n        kwargs["clock"] = clock\n    investigation = investigate_evidence(providers, **kwargs)\n'''
+          if old not in api:
+              raise SystemExit('public investigate facade source mismatch')
+          api = api.replace(old, new, 1)
+          api_path.write_text(api, encoding='utf-8')
+
+          integration = integration_path.read_text(encoding='utf-8')
+          integration = integration.replace(
+              'from tracecite.runtime.correlation import EvidenceNode\nfrom tracecite.runtime.frontier import ExplorationPolicy\nfrom tracecite.runtime.orchestrator import EvidenceInvestigation, investigate_evidence\n',
+              'from tracecite.runtime import investigate as runtime_investigate\nfrom tracecite.runtime.correlation import EvidenceNode\nfrom tracecite.runtime.frontier import ExplorationPolicy\nfrom tracecite.runtime.orchestrator import EvidenceInvestigation\n',
+              1,
+          )
+          integration = integration.replace(
+              '    investigation = investigate_evidence(providers, **kwargs)\n    package = build_evidence_package(\n        investigation.graph,\n        investigation.grouping,\n        investigation.reduction,\n',
+              '    canonical = runtime_investigate(providers, **kwargs)\n    investigation = canonical.investigation\n    package = build_evidence_package(\n        investigation.graph,\n        investigation.grouping,\n        investigation.reduction,\n',
+              1,
+          )
+          integration_path.write_text(integration, encoding='utf-8')
+
+          tests = test_path.read_text(encoding='utf-8')
+          tests += '''\n\ndef test_integration_investigator_delegates_public_runtime_facade(monkeypatch) -> None:\n    import tracecite.integrations.investigator as facade\n    from types import SimpleNamespace\n\n    providers = _providers()\n    canonical = investigate_evidence(\n        providers,\n        seed_evidence_ids=("crash:C123",),\n        exploration_policy=ExplorationPolicy(max_retrievals=20, max_no_growth_rounds=3),\n    )\n    calls = []\n\n    def fake_runtime_investigate(selected, **kwargs):\n        calls.append((tuple(selected), kwargs))\n        return SimpleNamespace(investigation=canonical)\n\n    monkeypatch.setattr(facade, "runtime_investigate", fake_runtime_investigate)\n    result = facade.investigate(\n        providers,\n        seed_evidence_ids=("crash:C123",),\n        exploration_policy=ExplorationPolicy(max_retrievals=20, max_no_growth_rounds=3),\n        max_tokens=2400,\n    )\n\n    assert len(calls) == 1\n    assert calls[0][1]["seed_evidence_ids"] == ("crash:C123",)\n    assert result.investigation is canonical\n    assert result.package.evidence\n\n\ndef test_integration_investigator_does_not_import_orchestrator_function() -> None:\n    import inspect\n    import tracecite.integrations.investigator as facade\n\n    source = inspect.getsource(facade)\n    assert "investigate_evidence(" not in source\n    assert "runtime_investigate(" in source\n'''
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+      - name: Install development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run facade gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/check_architecture.py
+          python -m pytest -W error::DeprecationWarning \
+            tests/test_evidence_orchestrator.py \
+            tests/test_runtime_agent_api.py \
+            tests/test_evidence_investigation_loop_benchmark.py
+      - name: Commit convergence and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/phase-d-investigate-facade.yml
+          git config user.name "tracecite-phase-d-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/tracecite/runtime/agent_api.py src/tracecite/integrations/investigator.py tests/test_evidence_orchestrator.py .github/workflows/phase-d-investigate-facade.yml
+          git commit -m "refactor(runtime): converge investigate facade"
+          git push origin HEAD:experiment/evidence-intelligence
