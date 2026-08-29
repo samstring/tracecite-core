@@ -18,12 +18,14 @@ from tracecite.runtime import (
     latest_test_assessments,
     retrieve,
 )
+from tracecite.runtime.test_assessment import confirm_test_evidence
 
 
 _CLOSURE_TOOL_NAMES = frozenset(
     {
         "tracecite_hypothesis",
         "tracecite_test",
+        "tracecite_confirm_evidence",
         "tracecite_assess_test",
         "tracecite_finding",
         "tracecite_state",
@@ -32,7 +34,9 @@ _CLOSURE_TOOL_NAMES = frozenset(
 _EPISTEMIC_CLOSURE_PROMPT = (
     "Mechanical evidence acquisition has reached its configured limit, but the investigation "
     "does not yet contain a Finding. Do not retrieve more evidence. Use the remaining "
-    "investigation-state tools to account for the hypothesis and declared Tests. A decisive "
+    "investigation-state tools to account for the hypothesis and declared Tests. Evidence "
+    "observed before a Test was declared must first be explicitly bound with "
+    "tracecite_confirm_evidence before it can support a decisive Test assessment. A decisive "
     "Finding is allowed only when every declared Test has an evidence-backed assessment; "
     "otherwise record an unknown Finding. Never upgrade retrieval exhaustion into proof."
 )
@@ -47,14 +51,40 @@ def _investigation_path() -> Path | None:
     return Path(scratch).resolve() / "canonical-investigation.json"
 
 
-def _state_has_finding() -> bool:
+def _findings() -> list[Mapping[str, Any]]:
     path = _investigation_path()
     if path is None or not path.is_file():
-        return False
+        return []
     try:
-        return bool(InvestigationStore(path).load().findings)
+        return [
+            item
+            for item in InvestigationStore(path).load().findings
+            if isinstance(item, Mapping)
+        ]
     except Exception:
-        return False
+        return []
+
+
+def _state_has_finding() -> bool:
+    return bool(_findings())
+
+
+def _state_has_decisive_finding() -> bool:
+    return any(
+        str(item.get("outcome") or "").strip().lower() in {"supported", "contradicted"}
+        for item in _findings()
+    )
+
+
+def _unknown_finding_answer() -> str:
+    return (
+        "## Investigation result: unknown\n\n"
+        "TraceCite did not validate a decisive root-cause Finding. The declared Test/evidence "
+        "contract remained unresolved or insufficient, so the available evidence does not "
+        "justify presenting a specific causal mechanism, intermittent upstream condition, or "
+        "corrective change as confirmed. Any such explanation remains a hypothesis and must "
+        "not be stated as the root cause."
+    )
 
 
 def _tool_name(tool: Mapping[str, Any]) -> str:
@@ -98,11 +128,63 @@ def _closure_only_stop_policy(
     return request, replacement
 
 
+def _enforce_unknown_finding_ceiling(response: Mapping[str, Any]) -> dict[str, Any]:
+    """Prevent an unknown InvestigationState from becoming a decisive prose answer.
+
+    The model remains free to reason and may continue calling tools. The ceiling
+    is applied only to a no-tool final response after the persisted investigation
+    contains Findings but none of them is decisive.
+    """
+
+    if not _state_has_finding() or _state_has_decisive_finding():
+        return dict(response)
+
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return dict(response)
+    first = choices[0]
+    if not isinstance(first, Mapping):
+        return dict(response)
+    message = first.get("message")
+    if not isinstance(message, Mapping):
+        return dict(response)
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        return dict(response)
+
+    replaced = dict(response)
+    copied_choices = [dict(item) if isinstance(item, Mapping) else item for item in choices]
+    copied_first = dict(copied_choices[0])
+    copied_message = dict(message)
+    copied_message["content"] = _unknown_finding_answer()
+    copied_first["message"] = copied_message
+    copied_first["finish_reason"] = "stop"
+    copied_choices[0] = copied_first
+    replaced["choices"] = copied_choices
+
+    transcript_value = os.environ.get("TRACECITE_BENCH_TRANSCRIPT", "").strip()
+    if transcript_value:
+        common._append_event(
+            Path(transcript_value),
+            {
+                "type": "protocol",
+                "event": "enforce_unknown_finding_ceiling",
+                "finding_outcomes": [
+                    str(item.get("outcome") or "unknown") for item in _findings()
+                ],
+            },
+        )
+    return replaced
+
+
 def _required_tool_transport(payload: Mapping[str, Any]) -> dict[str, Any]:
     request = dict(payload)
     if request.get("tools") and not _state_has_finding():
         request["tool_choice"] = "required"
-    return _ORIGINAL_TRANSPORT(request)
+    response = _ORIGINAL_TRANSPORT(request)
+    if not isinstance(response, Mapping):
+        return response
+    return _enforce_unknown_finding_ceiling(response)
 
 
 canonical._apply_stop_policy = _closure_only_stop_policy
@@ -183,6 +265,19 @@ class EvidenceContractRuntime(canonical.CanonicalRuntime):
             expected_observation=expected,
             contradicting_observation=contradicting,
             test_id=test_id,
+        )
+        return json.dumps(row, ensure_ascii=False, sort_keys=True)
+
+    def _tracecite_confirm_evidence(self, args: Mapping[str, Any]) -> str:
+        test_id = str(args.get("test_id") or "").strip()
+        raw_refs = args.get("evidence_refs") or []
+        if isinstance(raw_refs, (str, bytes)) or not isinstance(raw_refs, Sequence):
+            raise ValueError("evidence_refs must be an array")
+        refs = [str(item).strip() for item in raw_refs if str(item).strip()]
+        row = confirm_test_evidence(
+            self._store,
+            test_id,
+            evidence_refs=refs,
         )
         return json.dumps(row, ensure_ascii=False, sort_keys=True)
 
@@ -351,6 +446,8 @@ class EvidenceContractRuntime(canonical.CanonicalRuntime):
                 return self._tracecite_hypothesis(args)
             if name == "tracecite_test":
                 return self._tracecite_test(args)
+            if name == "tracecite_confirm_evidence":
+                return self._tracecite_confirm_evidence(args)
             if name == "tracecite_assess_test":
                 return self._tracecite_assess_test(args)
             if name == "tracecite_finding":
@@ -415,8 +512,17 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
             ],
         ),
         common._function_tool(
+            "tracecite_confirm_evidence",
+            "Explicitly bind exact @EVIDENCE_REF values observed during earlier free exploration to a declared Test. This does not decide whether the evidence semantically proves the Test; it mechanically re-checks provenance, coverage, and integrity and records a Test-linked confirmation execution.",
+            {
+                "test_id": {"type": "string"},
+                "evidence_refs": {"type": "array", "items": {"type": "string"}},
+            },
+            ["test_id", "evidence_refs"],
+        ),
+        common._function_tool(
             "tracecite_assess_test",
-            "Assess one declared Test. supported/contradicted require an exact @EVIDENCE_REF produced by a retrieval linked to the same Test; use unknown when evidence is insufficient.",
+            "Assess one declared Test. supported/contradicted require an exact @EVIDENCE_REF formally linked to the same Test; if the ref was discovered before the Test existed, call tracecite_confirm_evidence first. Use unknown when evidence is insufficient.",
             {
                 "test_id": {"type": "string"},
                 "outcome": {
@@ -429,7 +535,7 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
         ),
         common._function_tool(
             "tracecite_finding",
-            "Record the epistemic Finding for a hypothesis. Runtime rejects a decisive supported/contradicted Finding when declared Tests are unassessed, unknown, contradictory to the requested outcome, or not evidence-backed. Record unknown when the investigation cannot close.",
+            "Record the epistemic Finding for a hypothesis. Runtime rejects a decisive supported/contradicted Finding when declared Tests are unassessed, unknown, contradictory to the requested outcome, or not evidence-backed. Record unknown when the investigation cannot close; an unknown Finding also caps the final prose answer at unknown.",
             {
                 "hypothesis_id": {"type": "string"},
                 "outcome": {
