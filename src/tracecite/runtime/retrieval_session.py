@@ -1,10 +1,10 @@
 """Canonical persisted retrieval/context state for Agent sessions.
 
 ``RetrievalSessionState`` is the single owner for mechanical retrieval memory:
-seen Evidence identities, covered immutable-source ranges, and bounded transport
-identities used by compatibility projections. It deliberately does not own
-hypotheses, findings, causal conclusions, or audit decisions; those remain
-InvestigationState responsibilities.
+seen Evidence identities, covered source-version ranges, append-only source
+observations, and bounded transport identities used by compatibility projections.
+It deliberately does not own hypotheses, findings, causal conclusions, or audit
+decisions; those remain InvestigationState responsibilities.
 
 The canonical transport location remains ``_contexts/<id>.json`` for public CLI
 compatibility. Legacy ``_evidence_contexts/<id>.json`` files are accepted on
@@ -48,10 +48,14 @@ def _string_list(payload: Mapping[str, Any], key: str) -> tuple[str, ...]:
     return tuple(raw)
 
 
-def _append_unique(previous: tuple[str, ...], values: Iterable[str], limit: int) -> tuple[tuple[str, ...], bool]:
+def _append_unique(
+    previous: tuple[str, ...], values: Iterable[str], limit: int
+) -> tuple[tuple[str, ...], bool]:
     if limit < 1:
         raise ValueError("retrieval session seen-state limits must be at least 1")
-    additions = tuple(str(raw or "").strip() for raw in values if str(raw or "").strip())
+    additions = tuple(
+        str(raw or "").strip() for raw in values if str(raw or "").strip()
+    )
     if not additions:
         return previous, False
     order = list(previous)
@@ -83,7 +87,9 @@ def _normalize_ranges(values: Iterable[tuple[int, int]]) -> tuple[tuple[int, int
     return tuple(merged)
 
 
-def _covered_ranges_from_dict(payload: Mapping[str, Any]) -> dict[str, tuple[tuple[int, int], ...]]:
+def _covered_ranges_from_dict(
+    payload: Mapping[str, Any],
+) -> dict[str, tuple[tuple[int, int], ...]]:
     raw = payload.get("covered_ranges") or {}
     if not isinstance(raw, Mapping):
         raise ValueError("RetrievalSessionState covered_ranges must be an object")
@@ -100,6 +106,30 @@ def _covered_ranges_from_dict(payload: Mapping[str, Any]) -> dict[str, tuple[tup
     return result
 
 
+def _source_observations_from_dict(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    raw = payload.get("source_observations") or {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("RetrievalSessionState source_observations must be an object")
+    result: dict[str, dict[str, Any]] = {}
+    for source, item in raw.items():
+        if not isinstance(source, str) or not isinstance(item, Mapping):
+            raise ValueError("RetrievalSessionState source_observations is malformed")
+        generation = str(item.get("generation") or "").strip()
+        if not generation:
+            raise ValueError("source observation requires generation")
+        values = {
+            "generation": generation,
+            "device": int(item.get("device") or 0),
+            "inode": int(item.get("inode") or 0),
+            "size": int(item.get("size") or 0),
+            "mtime_ns": int(item.get("mtime_ns") or 0),
+        }
+        if values["size"] < 0:
+            raise ValueError("source observation size cannot be negative")
+        result[source] = values
+    return result
+
+
 @dataclass(frozen=True)
 class RetrievalSessionState:
     """Mechanical retrieval/context memory for one session."""
@@ -111,6 +141,7 @@ class RetrievalSessionState:
     seen_groups: tuple[str, ...] = ()
     seen_relations: tuple[str, ...] = ()
     covered_ranges: Mapping[str, tuple[tuple[int, int], ...]] = field(default_factory=dict)
+    source_observations: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     schema_version: int = RETRIEVAL_SESSION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -131,6 +162,10 @@ class RetrievalSessionState:
                 raise ValueError("covered range source cannot be empty")
             normalized_ranges[source_key] = _normalize_ranges(ranges)
         object.__setattr__(self, "covered_ranges", normalized_ranges)
+        normalized_observations = _source_observations_from_dict(
+            {"source_observations": dict(self.source_observations)}
+        )
+        object.__setattr__(self, "source_observations", normalized_observations)
 
     @property
     def session_id(self) -> str:
@@ -151,6 +186,10 @@ class RetrievalSessionState:
                 source: [[start, end] for start, end in ranges]
                 for source, ranges in sorted(self.covered_ranges.items())
             },
+            "source_observations": {
+                source: dict(values)
+                for source, values in sorted(self.source_observations.items())
+            },
         }
 
     @classmethod
@@ -168,6 +207,7 @@ class RetrievalSessionState:
             seen_groups=_string_list(payload, "seen_groups"),
             seen_relations=_string_list(payload, "seen_relations"),
             covered_ranges=_covered_ranges_from_dict(payload),
+            source_observations=_source_observations_from_dict(payload),
             schema_version=schema_version,
         )
 
@@ -179,6 +219,7 @@ class RetrievalSessionState:
         groups: Iterable[str] = (),
         relations: Iterable[str] = (),
         covered_ranges: Mapping[str, Iterable[tuple[int, int]]] | None = None,
+        source_observations: Mapping[str, Mapping[str, Any]] | None = None,
         max_seen_evidence: int = DEFAULT_MAX_SEEN_EVIDENCE,
         max_seen_results: int = DEFAULT_MAX_SEEN_RESULTS,
         max_seen_groups: int = DEFAULT_MAX_SEEN_GROUPS,
@@ -198,6 +239,14 @@ class RetrievalSessionState:
             merged_ranges[source_key] = _normalize_ranges(
                 [*merged_ranges.get(source_key, ()), *tuple(ranges)]
             )
+        merged_observations = {
+            source: dict(values) for source, values in self.source_observations.items()
+        }
+        for source, values in dict(source_observations or {}).items():
+            source_key = str(source or "").strip()
+            if not source_key:
+                raise ValueError("source observation source cannot be empty")
+            merged_observations[source_key] = dict(values)
         return (
             RetrievalSessionState(
                 context_id=self.context_id,
@@ -207,6 +256,7 @@ class RetrievalSessionState:
                 seen_groups=seen_groups,
                 seen_relations=seen_relations,
                 covered_ranges=merged_ranges,
+                source_observations=merged_observations,
             ),
             p1 or p2 or p3 or p4,
         )
