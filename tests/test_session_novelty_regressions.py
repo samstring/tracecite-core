@@ -93,6 +93,67 @@ def test_overlapping_expand_projects_only_lines_not_already_exposed(tmp_path: Pa
     assert second["data"]["repeated_text_suppressed"] is False
 
 
+def test_append_only_growth_keeps_generation_and_only_projects_new_overlap(tmp_path: Path) -> None:
+    source = tmp_path / "live.log"
+    source.write_text(
+        "".join(f"line-{index}\n" for index in range(1, 21)),
+        encoding="utf-8",
+    )
+    store = _store(tmp_path)
+
+    first = retrieve_with_session(
+        EvidenceRequest(RangeTarget(source, 18, before=2, after=2)),
+        store,
+    ).to_dict()
+    first_version = first["data"]["source_version"]
+    assert "16: line-16" in first["data"]["new_text"]
+    assert "20: line-20" in first["data"]["new_text"]
+
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write("line-21\nline-22\nline-23\n")
+
+    second = retrieve_with_session(
+        EvidenceRequest(RangeTarget(source, 20, before=2, after=3)),
+        store,
+    ).to_dict()
+
+    assert second["data"]["source_version"] == first_version
+    assert second["data"]["unseen_ranges"] == [[21, 23]]
+    assert "21: line-21" in second["data"]["new_text"]
+    assert "23: line-23" in second["data"]["new_text"]
+    assert "20: line-20" not in second["data"]["new_text"]
+
+
+def test_truncate_or_recreate_rolls_generation_and_does_not_hide_new_content(tmp_path: Path) -> None:
+    source = tmp_path / "live.log"
+    source.write_text(
+        "".join(f"old-{index}\n" for index in range(1, 21)),
+        encoding="utf-8",
+    )
+    store = _store(tmp_path)
+
+    first = retrieve_with_session(
+        EvidenceRequest(RangeTarget(source, 3, before=2, after=2)),
+        store,
+    ).to_dict()
+    old_version = first["data"]["source_version"]
+    assert "3: old-3" in first["data"]["new_text"]
+
+    source.write_text(
+        "".join(f"new-{index}\n" for index in range(1, 6)),
+        encoding="utf-8",
+    )
+
+    second = retrieve_with_session(
+        EvidenceRequest(RangeTarget(source, 3, before=2, after=2)),
+        store,
+    ).to_dict()
+
+    assert second["data"]["source_version"] != old_version
+    assert "3: new-3" in second["data"]["new_text"]
+    assert second["status"] != "no_new_evidence"
+
+
 def test_parallel_retrievals_merge_session_state_without_lost_updates(tmp_path: Path) -> None:
     source = tmp_path / "runtime.log"
     count = 24
