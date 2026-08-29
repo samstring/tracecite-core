@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "suite_id": "agent-evidence-moderate-v1",
+  "policy": {
+    "target_case_count": 6,
+    "small_case_count": 2,
+    "medium_case_count": 4,
+    "small_max_bytes_exclusive": 1048576,
+    "medium_min_bytes_inclusive": 1048576,
+    "medium_max_bytes_inclusive": 26214400,
+    "synthetic_padding_allowed": false,
+    "correctness_rule": "Only cases whose required gold dimensions are supportable from the supplied evidence universe enter the primary correctness aggregate. Partial cases remain diagnostic controls."
+  },
+  "candidates": [
+    {
+      "id": "doublecmd-2264",
+      "role": "small",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/doublecmd-2264.txt",
+      "case_path": "benchmarks/agent-investigation/cases/doublecmd-2264",
+      "evidence_sufficiency": "closed",
+      "main_correctness_eligible": true,
+      "needles": ["EFCreateError", "/usr/share/doublecmd/settings/wfx.ini"]
+    },
+    {
+      "id": "prometheus-18018",
+      "role": "small",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/e241300fead5ebd0edaf493a19fb6d6d1301ec3f/benchmarks/agent-investigation/fixtures/real-world-10/prometheus-18018.txt",
+      "case_path": "benchmarks/agent-investigation/cases/prometheus-18018",
+      "evidence_sufficiency": "closed",
+      "main_correctness_eligible": true,
+      "needles": ["index out of range [0]", "funcPredictLinear"]
+    },
+    {
+      "id": "kubernetes-140039-runc-5347",
+      "role": "medium",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-containerd-e2e-ubuntu-gce/2070389396091179008/artifacts/bootstrap-e2e-master/containerd.log",
+      "case_path": "benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347",
+      "evidence_sufficiency": "audit_required",
+      "main_correctness_eligible": false,
+      "needles": ["runc", "failed to create shim task"]
+    },
+    {
+      "id": "kubernetes-140848",
+      "role": "medium",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-kubelet-containerd-resource-managers/2079792906901655552/artifacts/n2d-standard-32-cos-125-19216-532-25-913c732d/kubelet.log",
+      "case_path": "benchmarks/agent-investigation/scale-cases/kubernetes-140848",
+      "evidence_sufficiency": "audit_required",
+      "main_correctness_eligible": false,
+      "needles": ["failed to merge global and in-flight KubeletConfiguration while setting defaults", "PodLevelResourcesFixDefaulting is enabled", "disabled: [PodLevelResources]"]
+    },
+    {
+      "id": "kubernetes-140268",
+      "role": "medium_control",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-containerd/2074205743732494336/build-log.txt",
+      "case_path": "benchmarks/agent-investigation/scale-cases/kubernetes-140268",
+      "evidence_sufficiency": "partial",
+      "main_correctness_eligible": false,
+      "needles": ["device-plugin-failures-3083", "device-plugin-failures-5477", "resourceID: testdevice"]
+    },
+    {
+      "id": "kubernetes-140887",
+      "role": "medium_candidate",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-containerd-alpha-features/2079839944150355968/build-log.txt",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/140887",
+      "fix_reference": "https://github.com/kubernetes/test-infra/pull/37526",
+      "evidence_sufficiency": "audit_required",
+      "main_correctness_eligible": false,
+      "needles": []
+    },
+    {
+      "id": "kubernetes-139417",
+      "role": "medium_candidate",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/pr-logs/pull/139129/pull-kubernetes-integration/2061373559082586112/build-log.txt",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/139417",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/139602",
+      "evidence_sufficiency": "audit_required",
+      "main_correctness_eligible": false,
+      "needles": ["got allocated elsewhere in the meantime", "Pod my-pod-1 should have been scheduled"]
+    },
+    {
+      "id": "kubernetes-140924",
+      "role": "medium_candidate",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/pr-logs/pull/140855/pull-kubernetes-unit-windows-master/2080738822861099008/build-log.txt",
+      "source_issue": "https://github.com/kubernetes/kubernetes/issues/140924",
+      "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140925",
+      "evidence_sufficiency": "audit_required",
+      "main_correctness_eligible": false,
+      "needles": []
+    }
+  ]
+}
