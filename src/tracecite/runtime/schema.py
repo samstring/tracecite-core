@@ -13,6 +13,13 @@ SCENARIO_SCHEMA_VERSION = 2
 RESULT_SCHEMA_VERSION = 1
 RESULT_STATUSES = frozenset({"ok", "no_match", "partial", "error"})
 RESULT_OUTCOMES = frozenset({"supported", "contradicted", "unknown", "not_assessed"})
+# These operations only acquire/materialize evidence. A successful match or
+# expansion is not itself an assessment of any hypothesis. Keep this invariant
+# at the shared Result boundary so CLI, Python, MCP and host integrations cannot
+# accidentally reinterpret retrieval success as semantic support.
+NON_ASSESSING_OPERATIONS = frozenset(
+    {"probe", "search", "survey", "probe_format", "sample", "expand"}
+)
 MAX_RESULT_EVIDENCE = 100
 
 
@@ -98,6 +105,11 @@ class AgentResult:
             raise ValueError(f"未知 Agent result status: {self.status!r}")
         if self.outcome not in RESULT_OUTCOMES:
             raise ValueError(f"未知 Agent result outcome: {self.outcome!r}")
+        if self.operation in NON_ASSESSING_OPERATIONS and self.outcome in {
+            "supported",
+            "contradicted",
+        }:
+            self.outcome = "not_assessed"
         if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence 必须在 0 到 1 之间")
 
