@@ -24,7 +24,7 @@ from typing import Any, Mapping, Sequence
 from tracecite.runtime import EvidenceRequest, QueryTarget, RangeTarget, retrieve
 
 from . import cli
-from .agent_projection import prefer_smaller_agent_view
+from .agent_projection import prefer_smaller_agent_view, project
 from .context_engine import ContextEngine
 
 
@@ -205,7 +205,6 @@ def main(
     operation = arguments[0] if arguments else "unknown"
     original_search = cli.search
     original_expand = cli.expand
-    original_compact = cli._compact_search_result
     runtime_search, runtime_expand = _runtime_adapters(original_search, original_expand)
 
     try:
@@ -222,12 +221,14 @@ def main(
             raise ValueError("--context-id requires --ledger-dir")
         profile_name = _read_option(forwarded, "--agent-profile") or "agent"
 
-        def context_compact(payload, *, max_output_chars=None):
-            # Compute the ordinary view first so Context optimization has a
-            # same-budget baseline. The Runtime-owned canonical Result has
-            # already been stored in the private Ledger at this point.
-            baseline = original_compact(
+        def context_project(
+            payload, *, profile="agent", max_output_chars=None
+        ):
+            # Compute the ordinary structural view first so Context optimization
+            # has a same-budget baseline. Canonical truth is already in Ledger.
+            baseline = project(
                 payload,
+                profile=profile,
                 max_output_chars=max_output_chars,
             )
             data = dict(payload.get("data") or {})
@@ -238,8 +239,9 @@ def main(
                 payload,
                 result_id=result_id,
             )
-            delta = original_compact(
+            delta = project(
                 projected,
+                profile=profile,
                 max_output_chars=max_output_chars,
             )
             return _prefer_for_transport(
@@ -248,8 +250,11 @@ def main(
                 profile_name=profile_name,
             )
 
-        cli._compact_search_result = context_compact
-        return cli.main(forwarded, prog=prog)
+        return cli.main(
+            forwarded,
+            prog=prog,
+            search_projector=context_project,
+        )
     except Exception as exc:
         payload = cli._error_payload(operation, exc)
         cli._print_payload(payload)
@@ -257,7 +262,6 @@ def main(
     finally:
         cli.search = original_search
         cli.expand = original_expand
-        cli._compact_search_result = original_compact
 
 
 __all__ = ["main"]

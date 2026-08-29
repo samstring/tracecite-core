@@ -248,3 +248,35 @@ def test_project_accepts_custom_upper_layer_projection() -> None:
     )
 
     assert view == {"status": "ok", "evidence_count": 1}
+
+
+def test_named_transport_profiles_share_project_owner() -> None:
+    digest = "a" * 64
+    payload = {
+        "operation": "search",
+        "status": "ok",
+        "outcome": "not_assessed",
+        "evidence": [{
+            "uri": f"evidence://sha256/{digest}#L7",
+            "source_path": "/tmp/runtime.log",
+            "sha256": digest,
+            "start_line": 7,
+            "end_line": 7,
+            "label": "timeout",
+        }],
+        "coverage": {"match_records": 1, "evidence_returned": 1},
+        "data": {},
+    }
+
+    for name in ("agent", "portable-json", "strict-json", "stateful-index", "frame"):
+        view = project(payload, profile=name, max_output_chars=12_000)
+        assert view["evidence"]["columns"][0] == "ref"
+        assert view["evidence"]["rows"][0][0] == "#L7"
+        assert payload["evidence"][0]["uri"].endswith("#L7")
+
+
+def test_cli_does_not_define_structural_projection_helpers() -> None:
+    from tracecite.integrations import cli
+
+    assert not hasattr(cli, "_compact_search_result")
+    assert not hasattr(cli, "_fit_expand_many_result")

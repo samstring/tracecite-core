@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from tracecite.integrations import cli
+from tracecite.integrations.agent_projection import project
 
 
 def _payload(status: str = "ok", operation: str = "search") -> dict[str, object]:
@@ -242,7 +243,7 @@ def test_search_compact_keeps_full_identity_when_sources_are_not_shared() -> Non
     second["sha256"] = "b" * 64
     second["uri"] = f"evidence://sha256/{'b' * 64}#L2"
 
-    compact = cli._compact_search_result(payload)
+    compact = project(payload, profile="portable-json")
 
     assert "evidence_source" not in compact["data"]
     columns = compact["evidence"]["columns"]

@@ -42,10 +42,8 @@ from .agent_projection import (
     DEFAULT_AGENT_MAX_EVIDENCE,
     DEFAULT_AGENT_MAX_OUTPUT_CHARS,
     DEFAULT_FILTER_MAX_LINE_CHARS,
-    apply_survey_brief,
-    dedupe_evidence_labels,
     encoded_json,
-    lightweight_result,
+    project,
 )
 from .evidence_ledger import EvidenceLedger, expand_many as expand_many_from_ledger
 
@@ -624,250 +622,6 @@ def _encoded_json(payload: Any) -> str:
     return encoded_json(payload)
 
 
-def _primary_artifact(artifacts: Any) -> list[dict[str, Any]]:
-    rows = [dict(item) for item in artifacts or [] if isinstance(item, Mapping)]
-    for role in ("matched_records", "filtered_log"):
-        selected = next((item for item in rows if item.get("role") == role), None)
-        if selected is not None:
-            return [selected]
-    return rows[:1]
-
-
-def _compact_search_result(
-    payload: Mapping[str, Any],
-    *,
-    max_output_chars: int | None = None,
-) -> dict[str, Any]:
-    """Project a canonical search Result into a bounded agent-facing view.
-
-    The canonical Runtime result, cache entry, investigation recording, and
-    artifacts remain unchanged. The projection removes repeated pointer fields,
-    hoists the immutable source and URI base once, trims descriptive coverage,
-    and only exposes an artifact path when it is needed to recover omitted
-    evidence.
-    """
-
-    result = copy.deepcopy(dict(payload))
-    if result.get("operation") != "search":
-        return result
-
-    original_evidence = [
-        dict(item)
-        for item in result.get("evidence") or []
-        if isinstance(item, Mapping)
-    ]
-    sources: set[tuple[str, str]] = set()
-    for item in original_evidence:
-        source_path = str(item.get("source_path") or "")
-        digest = str(item.get("sha256") or "")
-        if source_path and digest:
-            sources.add((source_path, digest))
-
-    shared_source = next(iter(sources)) if len(sources) == 1 else None
-    uri_base = (
-        f"evidence://sha256/{shared_source[1]}"
-        if shared_source is not None
-        else None
-    )
-    evidence_columns = (
-        ["ref", "start", "end", "label"]
-        if shared_source is not None
-        else ["uri", "source_path", "sha256", "start", "end", "label"]
-    )
-    evidence_rows: list[list[Any]] = []
-    for item in original_evidence:
-        uri = str(item.get("uri") or "")
-        if uri_base is not None and uri.startswith(f"{uri_base}#"):
-            identity = uri[len(uri_base) :]
-            row = [
-                identity,
-                item.get("start_line"),
-                item.get("end_line"),
-                item.get("label") or "",
-            ]
-        elif uri and shared_source is not None:
-            row = [
-                uri,
-                item.get("start_line"),
-                item.get("end_line"),
-                item.get("label") or "",
-            ]
-        elif uri:
-            identity = uri
-            row = [
-                identity,
-                item.get("source_path"),
-                item.get("sha256"),
-                item.get("start_line"),
-                item.get("end_line"),
-                item.get("label") or "",
-            ]
-        else:
-            continue
-        evidence_rows.append(row)
-
-    data = dict(result.get("data") or {})
-    data["view"] = "compact"
-    if shared_source is not None:
-        source_path, digest = shared_source
-        data["evidence_source"] = {
-            "path": source_path,
-            "sha256": digest,
-            "uri_base": uri_base,
-        }
-    result["data"] = data
-    result["evidence"] = {
-        "columns": evidence_columns,
-        "rows": evidence_rows,
-    }
-
-    original_coverage = dict(result.get("coverage") or {})
-    keep_coverage = (
-        "scoped_lines",
-        "match_records",
-        "match_lines",
-        "evidence_returned",
-        "evidence_truncated",
-    )
-    coverage = {
-        key: original_coverage[key]
-        for key in keep_coverage
-        if key in original_coverage
-    }
-    coverage["evidence_available"] = int(
-        original_coverage.get("match_records") or len(original_evidence)
-    )
-    coverage["evidence_returned"] = len(evidence_rows)
-    coverage["evidence_truncated"] = bool(
-        original_coverage.get("evidence_truncated", False)
-    )
-    label_index = evidence_columns.index("label") if "label" in evidence_columns else -1
-    if label_index >= 0:
-        dedupe_evidence_labels(evidence_rows, label_index=label_index, coverage=coverage)
-    result["coverage"] = coverage
-
-    original_artifacts = result.get("artifacts") or []
-    result["artifacts"] = (
-        _primary_artifact(original_artifacts)
-        if coverage["evidence_truncated"]
-        else []
-    )
-
-    if max_output_chars is None:
-        return result
-
-    if len(_encoded_json(result)) > max_output_chars:
-        # Budget trimming may omit labels or pointers. Account for the recovery
-        # artifact before trimming so the final fit calculation includes it.
-        result["artifacts"] = _primary_artifact(original_artifacts)
-
-    content_trimmed = False
-    label_index = evidence_columns.index("label")
-    while len(_encoded_json(result)) > max_output_chars:
-        labeled = next(
-            (row for row in reversed(evidence_rows) if row[label_index]),
-            None,
-        )
-        if labeled is None:
-            break
-        if not content_trimmed:
-            coverage["evidence_content_truncated"] = True
-            content_trimmed = True
-        labeled[label_index] = ""
-
-    if (
-        len(_encoded_json(result)) > max_output_chars
-        and all(not row[label_index] for row in evidence_rows)
-    ):
-        evidence_columns.pop(label_index)
-        for row in evidence_rows:
-            row.pop(label_index)
-
-    evidence_removed = False
-    while evidence_rows and len(_encoded_json(result)) > max_output_chars:
-        if not evidence_removed:
-            coverage["evidence_truncated"] = True
-            evidence_removed = True
-        evidence_rows.pop()
-        coverage["evidence_returned"] = len(evidence_rows)
-
-    while result.get("next_queries") and len(_encoded_json(result)) > max_output_chars:
-        coverage["next_queries_truncated"] = True
-        result["next_queries"].pop()
-
-    if len(_encoded_json(result)) > max_output_chars:
-        raise ValueError(
-            f"compact search result cannot fit within {max_output_chars} characters"
-        )
-    return result
-
-
-def _fit_expand_many_result(
-    payload: Mapping[str, Any],
-    *,
-    max_output_chars: int | None,
-) -> dict[str, Any]:
-    """Fit an expandable Ledger response without ever slicing serialized JSON."""
-
-    result = copy.deepcopy(dict(payload))
-    if max_output_chars is None or len(_encoded_json(result)) <= max_output_chars:
-        return result
-
-    coverage = dict(result.get("coverage") or {})
-    result["coverage"] = coverage
-    coverage["output_truncated"] = True
-    coverage["truncated"] = True
-    result["outcome"] = "unknown"
-    contexts = [dict(item) for item in result.get("contexts") or []]
-    result["contexts"] = contexts
-    evidence = dict(result.get("evidence") or {})
-    evidence_columns = list(evidence.get("columns") or [])
-    evidence_rows = [list(row) for row in evidence.get("rows") or []]
-    evidence = {"columns": evidence_columns, "rows": evidence_rows}
-    result["evidence"] = evidence
-
-    while len(_encoded_json(result)) > max_output_chars:
-        candidates = [item for item in contexts if str(item.get("text") or "")]
-        if not candidates:
-            break
-        item = max(candidates, key=lambda row: len(str(row.get("text") or "")))
-        text = str(item.get("text") or "")
-        over = len(_encoded_json(result)) - max_output_chars
-        item["text"] = text[: max(0, len(text) - max(1, over + 16))]
-        item["truncated"] = True
-
-    failed_refs = list(coverage.get("failed_refs") or [])
-    context_index = evidence_columns.index("context") if "context" in evidence_columns else -1
-    ref_index = evidence_columns.index("ref") if "ref" in evidence_columns else -1
-    while contexts and len(_encoded_json(result)) > max_output_chars:
-        removed = contexts.pop()
-        context_id = str(removed.get("id") or "")
-        retained_rows: list[list[Any]] = []
-        for row in evidence_rows:
-            if context_index >= 0 and str(row[context_index]) == context_id:
-                ref = str(row[ref_index]) if ref_index >= 0 else ""
-                if ref and ref not in failed_refs:
-                    failed_refs.append(ref)
-            else:
-                retained_rows.append(row)
-        evidence_rows[:] = retained_rows
-        coverage["failed_refs"] = failed_refs
-        coverage["returned"] = len(evidence_rows)
-        coverage["contexts"] = len(contexts)
-        coverage["merged_contexts"] = max(0, len(evidence_rows) - len(contexts))
-
-    coverage["text_chars"] = sum(
-        len(str(context.get("text") or "")) for context in contexts
-    )
-    if not evidence_rows:
-        result["status"] = "error"
-    if len(_encoded_json(result)) > max_output_chars:
-        raise ValueError(
-            f"expand-many result cannot fit within {max_output_chars} characters"
-        )
-    return result
-
-
 def _investigation_snapshot(store: InvestigationStore, result: Any = None) -> dict[str, Any]:
     payload = store.load().to_dict()
     if result is not None:
@@ -1149,6 +903,7 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     prog: str = "tracecite",
+    search_projector: Any = None,
 ) -> int:
     """Run the Agent CLI and return a process exit status.
 
@@ -1196,19 +951,22 @@ def main(
                 data["history_mode"] = "ledger"
             payload["data"] = data
         if args.command == "survey" and getattr(args, "brief", False):
-            payload = apply_survey_brief(payload)
+            payload = project(payload, profile="survey-brief")
         if args.command == "search" and compact:
-            payload = _compact_search_result(
+            projector = search_projector or project
+            payload = projector(
                 payload,
+                profile=profile.name,
                 max_output_chars=args.max_output_chars,
             )
         elif args.command == "expand-many":
-            payload = _fit_expand_many_result(
+            payload = project(
                 payload,
+                profile=profile.name,
                 max_output_chars=args.max_output_chars,
             )
         if getattr(args, "lightweight", False):
-            payload = lightweight_result(payload)
+            payload = project(payload, profile="lightweight")
         if frame and args.max_output_chars is not None:
             rendered = render_frame(payload)
             if len(rendered) > args.max_output_chars:
