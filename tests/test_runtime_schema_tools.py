@@ -71,7 +71,7 @@ def test_probe_search_expand_and_verify(tmp_path: Path) -> None:
 
     found = search(source, "target", output_path=tmp_path / "evidence.log")
     assert found["status"] == "ok"
-    assert found["outcome"] == "supported"
+    assert found["outcome"] == "not_assessed"
     assert found["coverage"]["match_records"] == 1
     pointer = found["evidence"][0]
     assert pointer["uri"].startswith("evidence://sha256/")
@@ -86,6 +86,7 @@ def test_probe_search_expand_and_verify(tmp_path: Path) -> None:
         after=1,
     )
     assert context["status"] == "ok"
+    assert context["outcome"] == "not_assessed"
     assert "target value" in context["data"]["text"]
 
     scenario_result = run(_scenario(source, tmp_path / "runs"), base_dir=tmp_path)
@@ -175,6 +176,7 @@ def test_expand_hashes_and_reads_through_one_stable_descriptor(
     result = expand(source, 1, expected_sha256=expected, before=0, after=0)
 
     assert result["status"] == "ok"
+    assert result["outcome"] == "not_assessed"
     assert result["data"]["text"] == "1: old\n"
     assert result["evidence"][0]["sha256"] == expected
 
