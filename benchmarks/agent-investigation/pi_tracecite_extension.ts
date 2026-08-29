@@ -135,6 +135,24 @@ function compactRelation(value: any) {
   };
 }
 
+function retrievalGuidance(status: string, coverage: any, progress: any): string | undefined {
+  if (progress?.stop?.recommended) {
+    return "STOP TraceCite retrieval for the current evidence scope: it is no longer producing new evidence. Use the evidence already collected to answer. Resume only for a materially new hypothesis with a narrower, explicit identity scope.";
+  }
+  if (status === "no_new_evidence") {
+    return "No new evidence was produced. Do not repeat or broadly rephrase this search/expansion; either answer from existing evidence or state that the deeper claim is not established.";
+  }
+  if (status === "no_match") {
+    return "No evidence matched. Do not automatically broaden the search just to find a deeper cause; only continue if a specific alternative hypothesis gives you a new scoped query.";
+  }
+  const matchLines = Number(coverage?.match_lines || 0);
+  const returned = Number(coverage?.evidence_returned || 0);
+  if (coverage?.evidence_truncated && returned > 0 && matchLines >= returned * 4) {
+    return "High-fanout search: returned rows may mix sibling tests, namespaces, pods, or claims. Narrow using a stable identifier from the target failure before making identity or causal inferences.";
+  }
+  return undefined;
+}
+
 function projectForPi(text: string): string {
   let payload: any;
   try {
@@ -147,6 +165,8 @@ function projectForPi(text: string): string {
   const operation = String(payload.operation || "");
   const data = payload.data && typeof payload.data === "object" ? payload.data : {};
   const status = String(payload.status || "");
+  const coverage = compactCoverage(payload.coverage);
+  const progress = compactProgress(data.progress);
 
   if (operation === "search") {
     const constraints = Array.isArray(data.correlation_constraints)
@@ -162,8 +182,9 @@ function projectForPi(text: string): string {
     return JSON.stringify({
       status,
       evidence,
-      coverage: compactCoverage(payload.coverage),
-      progress: compactProgress(data.progress),
+      coverage,
+      progress,
+      guidance: retrievalGuidance(status, coverage, progress),
       correlation_constraints: constraints.length ? constraints : undefined,
       missing_evidence: gaps.length ? gaps : undefined,
       stop_reason: status !== "ok" ? data.stop_reason : undefined,
@@ -183,8 +204,9 @@ function projectForPi(text: string): string {
     return JSON.stringify({
       status,
       evidence,
-      coverage: compactCoverage(payload.coverage),
-      progress: compactProgress(data.progress),
+      coverage,
+      progress,
+      guidance: retrievalGuidance(status, coverage, progress),
       text: data.text,
       observed_references: observedReferences.length ? observedReferences : undefined,
       observed_relations: observedRelations.length ? observedRelations : undefined,
@@ -205,11 +227,13 @@ export default function traceciteTools(pi: ExtensionAPI) {
     description:
       "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns compact line-addressable evidence plus provenance/coverage and mechanical identity-safety facts. It does not plan the investigation or decide root cause.",
     promptSnippet:
-      "tracecite_search returns compact evidence and evidence-state facts; you remain responsible for hypotheses, tool choice, investigation order, and conclusions.",
+      "tracecite_search returns compact evidence and evidence-state facts; you remain responsible for hypotheses, tool choice, investigation order, conclusions, and stopping when evidence stops growing.",
     promptGuidelines: [
       "Treat a search hit as an observation, not support for a causal hypothesis by itself.",
       "Treat correlation constraints and scoped entities as identity-safety facts, not root-cause claims or instructions.",
       "Use tracecite_expand or native read before making exact claims from a compact search preview.",
+      "When progress.stop.recommended is true, stop TraceCite retrieval for that scope. Do not keep broadening merely to discover a deeper cause; if the requested deeper contributor is not directly established, say so.",
+      "When a search has high fanout, narrow by the target test/namespace/pod/claim identifier before correlating sibling evidence.",
     ],
     parameters: Type.Object({
       file: Type.String({ description: "Path to the local source file, relative to the current working directory or absolute." }),
@@ -228,7 +252,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
           file: params.file,
           query: params.query,
           canonical_retrieve: true,
-          independent_retrieval_session: true,
+          persistent_retrieval_session: true,
           evidence_only: true,
           compact_agent_view: true,
         },
@@ -242,10 +266,11 @@ export default function traceciteTools(pi: ExtensionAPI) {
     description:
       "Materialize bounded exact source context around a line chosen by the Agent. Returns exact text plus literal reference and structural-relation facts; it does not recommend another action.",
     promptSnippet:
-      "tracecite_expand materializes exact evidence context; observed references and structural relations are evidence facts, not investigation instructions.",
+      "tracecite_expand materializes exact evidence context; observed references and structural relations are evidence facts, not investigation instructions. Stop expanding a scope when progress says evidence is no longer growing.",
     promptGuidelines: [
       "Treat observed_references as literal fields found in the materialized evidence only.",
       "Treat observed_relations as textual co-observation or structured-block membership only; they do not establish identity, importance, or causality.",
+      "When status is no_new_evidence or progress.stop.recommended is true, do not repeat overlapping expansions. Use the evidence already observed or state the evidence boundary.",
     ],
     parameters: Type.Object({
       file: Type.String({ description: "Path to the same local source file." }),
@@ -265,7 +290,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
           line: params.line,
           radius: params.radius ?? 8,
           canonical_retrieve: true,
-          independent_retrieval_session: true,
+          persistent_retrieval_session: true,
           evidence_only: true,
           compact_agent_view: true,
         },
