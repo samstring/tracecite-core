@@ -28,6 +28,7 @@ jobs:
           tests/test_evidence_investigation_loop_benchmark.py
           tests/test_agent_benchmark_evidence_modes.py
           tests/test_pi_ab_benchmark_policy.py
+          tests/test_pi_ab_runtime.py
       - name: Print correlation and reduction benchmark
         run: python -m tracecite.evidence_benchmarking
       - name: Print deterministic exploration benchmark
