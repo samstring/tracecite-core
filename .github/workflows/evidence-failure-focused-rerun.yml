@@ -1,5 +1,5 @@
 name: Evidence Failure Focused Rerun
-# Validate scoped-correlation repair after deterministic gates pass.
+# Validate evidence-contract closure on the two previously failing correctness cases.
 
 on:
   push:
@@ -7,6 +7,13 @@ on:
       - experiment/evidence-intelligence
     paths:
       - .github/workflows/evidence-failure-focused-rerun.yml
+      - benchmarks/agent-investigation/gmi_evidence_contract_host.py
+      - benchmarks/agent-investigation/gmi_canonical_host.py
+      - benchmarks/agent-investigation/run_paired_retry.py
+      - src/tracecite/runtime/**
+      - tests/test_gmi_evidence_contract_host.py
+      - tests/test_test_assessment.py
+      - tests/test_finding_validation.py
 
 permissions:
   contents: read
@@ -60,7 +67,7 @@ jobs:
           test -n "$PREPARED"
           echo "RESULT=$RESULT" >> "$GITHUB_ENV"
           echo "PREPARED=$PREPARED" >> "$GITHUB_ENV"
-      - name: Run repaired pair
+      - name: Run evidence-contract pair
         shell: bash
         run: |
           python benchmarks/agent-investigation/run_paired_retry.py \
@@ -69,6 +76,7 @@ jobs:
             --scorer "${{ matrix.scorer }}" \
             --model "$BENCH_MODEL" \
             --result-dir "$RESULT" \
+            --host-script benchmarks/agent-investigation/gmi_evidence_contract_host.py \
             --retry-delay-seconds 120 \
             --timeout-seconds 900
       - name: Upload result
