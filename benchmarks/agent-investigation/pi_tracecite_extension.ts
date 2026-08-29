@@ -59,6 +59,15 @@ function compactEvidence(value: any) {
   };
 }
 
+function sourceSha256(rows: any[]): string | undefined {
+  const values = Array.from(new Set(
+    rows
+      .map((value) => String(value?.sha256 || "").trim().toLowerCase())
+      .filter((value) => /^[0-9a-f]{64}$/.test(value)),
+  ));
+  return values.length === 1 ? values[0] : undefined;
+}
+
 function compactCoverage(value: any) {
   if (!value || typeof value !== "object") return undefined;
   const out: any = {};
@@ -71,6 +80,7 @@ function compactCoverage(value: any) {
     "truncated",
     "new_evidence",
     "repeated_evidence",
+    "replayed_evidence",
   ]) {
     if (value[key] !== undefined && value[key] !== null) out[key] = value[key];
   }
@@ -80,7 +90,7 @@ function compactCoverage(value: any) {
 function compactProgress(value: any) {
   if (!value || typeof value !== "object") return undefined;
   const delta = value.delta && typeof value.delta === "object" ? value.delta : undefined;
-  const out: any = {
+  return {
     delta: delta ? {
       new_evidence: delta.new_evidence,
       new_relations: delta.new_relations,
@@ -89,8 +99,6 @@ function compactProgress(value: any) {
     seen_evidence: value.seen_evidence,
     seen_lines: value.seen_lines,
   };
-  if (value.stop?.recommended) out.stop = value.stop;
-  return out;
 }
 
 function compactConstraint(value: any) {
@@ -135,20 +143,19 @@ function compactRelation(value: any) {
   };
 }
 
-function retrievalGuidance(status: string, coverage: any, progress: any): string | undefined {
-  if (progress?.stop?.recommended) {
-    return "STOP TraceCite retrieval for the current evidence scope: it is no longer producing new evidence. Use the evidence already collected to answer. Resume only for a materially new hypothesis with a narrower, explicit identity scope.";
-  }
-  if (status === "no_new_evidence") {
-    return "No new evidence was produced. Do not repeat or broadly rephrase this search/expansion; either answer from existing evidence or state that the deeper claim is not established.";
+function retrievalGuidance(status: string, coverage: any): string | undefined {
+  const added = Number(coverage?.new_evidence || 0);
+  const repeated = Number(coverage?.repeated_evidence || 0);
+  if (status === "no_new_evidence" || (added === 0 && repeated > 0)) {
+    return "This call exposed no new evidence; repeated content was suppressed. The Agent decides whether to change the query, use another tool, or explicitly replay known context.";
   }
   if (status === "no_match") {
-    return "No evidence matched. Do not automatically broaden the search just to find a deeper cause; only continue if a specific alternative hypothesis gives you a new scoped query.";
+    return "No evidence matched this query. This is a retrieval fact, not a conclusion about the investigation.";
   }
   const matchLines = Number(coverage?.match_lines || 0);
   const returned = Number(coverage?.evidence_returned || 0);
   if (coverage?.evidence_truncated && returned > 0 && matchLines >= returned * 4) {
-    return "High-fanout search: returned rows may mix sibling tests, namespaces, pods, or claims. Narrow using a stable identifier from the target failure before making identity or causal inferences.";
+    return "High-fanout search: only a bounded projection is visible. A narrower identity-scoped query may expose different evidence if the Agent needs it.";
   }
   return undefined;
 }
@@ -167,6 +174,8 @@ function projectForPi(text: string): string {
   const status = String(payload.status || "");
   const coverage = compactCoverage(payload.coverage);
   const progress = compactProgress(data.progress);
+  const rawEvidence = Array.isArray(payload.evidence) ? payload.evidence : [];
+  const source_sha256 = sourceSha256(rawEvidence);
 
   if (operation === "search") {
     const constraints = Array.isArray(data.correlation_constraints)
@@ -175,19 +184,18 @@ function projectForPi(text: string): string {
     const gaps = Array.isArray(payload.missing_evidence)
       ? payload.missing_evidence.map(compactGap)
       : [];
-    const evidence = Array.isArray(payload.evidence)
-      ? payload.evidence.map(compactEvidence)
-      : [];
+    const evidence = rawEvidence.map(compactEvidence);
 
     return JSON.stringify({
       status,
       evidence,
+      source_sha256,
       coverage,
       progress,
-      guidance: retrievalGuidance(status, coverage, progress),
+      guidance: retrievalGuidance(status, coverage),
       correlation_constraints: constraints.length ? constraints : undefined,
       missing_evidence: gaps.length ? gaps : undefined,
-      stop_reason: status !== "ok" ? data.stop_reason : undefined,
+      retrieval_reason: status !== "ok" ? data.stop_reason : undefined,
     });
   }
 
@@ -198,22 +206,27 @@ function projectForPi(text: string): string {
     const observedRelations = Array.isArray(data.observed_relations)
       ? data.observed_relations.slice(0, 8).map(compactRelation)
       : [];
-    const evidence = Array.isArray(payload.evidence)
-      ? payload.evidence.map(compactEvidence)
-      : [];
+    const evidence = rawEvidence.map(compactEvidence);
+    const projectedText = data.replayed
+      ? data.text
+      : (data.new_text !== undefined ? data.new_text : data.text);
     return JSON.stringify({
       status,
       evidence,
+      source_sha256,
       coverage,
       progress,
-      guidance: retrievalGuidance(status, coverage, progress),
-      text: data.text,
+      guidance: retrievalGuidance(status, coverage),
+      text: projectedText || undefined,
+      replayed: data.replayed || undefined,
+      unseen_ranges: Array.isArray(data.unseen_ranges) ? data.unseen_ranges : undefined,
+      repeated_text_suppressed: data.repeated_text_suppressed || undefined,
       observed_references: observedReferences.length ? observedReferences : undefined,
       observed_relations: observedRelations.length ? observedRelations : undefined,
       evidence_semantics: observedRelations.length
         ? "observed_relations describe literal textual structure only; Agent owns identity and causal interpretation"
         : undefined,
-      stop_reason: status !== "ok" ? data.stop_reason : undefined,
+      retrieval_reason: status !== "ok" ? data.stop_reason : undefined,
     });
   }
 
@@ -225,15 +238,15 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_search",
     label: "TraceCite Search",
     description:
-      "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns compact line-addressable evidence plus provenance/coverage and mechanical identity-safety facts. It does not plan the investigation or decide root cause.",
+      "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns only evidence not already exposed in this Pi retrieval session, plus counts for repeated evidence. It does not plan the investigation, decide root cause, or decide when the Agent should stop.",
     promptSnippet:
-      "tracecite_search returns compact evidence and evidence-state facts; you remain responsible for hypotheses, tool choice, investigation order, conclusions, and stopping when evidence stops growing.",
+      "tracecite_search returns session-scoped evidence novelty facts. Repeated evidence may be represented only by counts instead of duplicated previews; you remain responsible for hypotheses, tool choice, investigation order, conclusions, and stopping.",
     promptGuidelines: [
       "Treat a search hit as an observation, not support for a causal hypothesis by itself.",
       "Treat correlation constraints and scoped entities as identity-safety facts, not root-cause claims or instructions.",
       "Use tracecite_expand or native read before making exact claims from a compact search preview.",
-      "When progress.stop.recommended is true, stop TraceCite retrieval for that scope. Do not keep broadening merely to discover a deeper cause; if the requested deeper contributor is not directly established, say so.",
-      "When a search has high fanout, narrow by the target test/namespace/pod/claim identifier before correlating sibling evidence.",
+      "A zero-new-evidence result only says this retrieval added nothing new to the current session; you decide what to do next.",
+      "When a search has high fanout, an identity-scoped query can reduce repeated sibling evidence if that helps your investigation.",
     ],
     parameters: Type.Object({
       file: Type.String({ description: "Path to the local source file, relative to the current working directory or absolute." }),
@@ -264,23 +277,26 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_expand",
     label: "TraceCite Expand",
     description:
-      "Materialize bounded exact source context around a line chosen by the Agent. Returns exact text plus literal reference and structural-relation facts; it does not recommend another action.",
+      "Materialize bounded exact source context around a line. By default only line content not already exposed in this retrieval session is returned. Set replay=true to deliberately re-read known context; replayed text is not counted as new evidence.",
     promptSnippet:
-      "tracecite_expand materializes exact evidence context; observed references and structural relations are evidence facts, not investigation instructions. Stop expanding a scope when progress says evidence is no longer growing.",
+      "tracecite_expand returns new exact context by default. If you need to reconsider old context, explicitly replay it; replay is a re-read, not new evidence.",
     promptGuidelines: [
       "Treat observed_references as literal fields found in the materialized evidence only.",
       "Treat observed_relations as textual co-observation or structured-block membership only; they do not establish identity, importance, or causality.",
-      "When status is no_new_evidence or progress.stop.recommended is true, do not repeat overlapping expansions. Use the evidence already observed or state the evidence boundary.",
+      "When overlapping context was already exposed, TraceCite may return only unseen line ranges rather than repeating the whole window.",
+      "Use replay=true only when you intentionally need the old text again. Reuse source_sha256 when available so the replay is tied to the same immutable source version.",
     ],
     parameters: Type.Object({
       file: Type.String({ description: "Path to the same local source file." }),
       line: Type.Integer({ minimum: 1, description: "1-based anchor line chosen by the Agent." }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30, description: "Context lines before and after the anchor; default 8." })),
-      sha256: Type.Optional(Type.String({ description: "Optional expected source SHA-256 from prior evidence." })),
+      sha256: Type.Optional(Type.String({ description: "Expected source SHA-256 from prior evidence when available." })),
+      replay: Type.Optional(Type.Boolean({ description: "Explicitly re-read previously exposed context. Replayed content is not new evidence." })),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const args = ["expand", params.file, String(params.line), "--radius", String(params.radius ?? 8), "--max-chars", "12000"];
       if (params.sha256) args.push("--sha256", params.sha256);
+      if (params.replay) args.push("--replay");
       const text = projectForPi(await runBridge(args, ctx.cwd, signal));
       return {
         content: [{ type: "text", text }],
@@ -289,6 +305,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
           file: params.file,
           line: params.line,
           radius: params.radius ?? 8,
+          replay: Boolean(params.replay),
           canonical_retrieve: true,
           persistent_retrieval_session: true,
           evidence_only: true,
