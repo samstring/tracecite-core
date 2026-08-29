@@ -1,0 +1,71 @@
+name: Trigger Formal Pi A/B
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/trigger-formal-pi-ab.yml
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for matching TraceCite capability run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 90); do
+            json="$(gh api "repos/$REPO/actions/workflows/pi-tracecite-139417-capability.yml/runs?branch=experiment%2Fevidence-intelligence&per_page=20")"
+            row="$(python - "$SHA" <<'PY' <<<"$json"
+          import json, sys
+          wanted = sys.argv[1]
+          data = json.load(sys.stdin)
+          runs = [r for r in data.get('workflow_runs', []) if r.get('head_sha') == wanted]
+          if not runs:
+              print('')
+          else:
+              run = runs[0]
+              print(f"{run.get('id')}|{run.get('status')}|{run.get('conclusion') or ''}")
+          PY
+            )"
+            if [[ -z "$row" ]]; then
+              sleep 10
+              continue
+            fi
+            IFS='|' read -r run_id status conclusion <<<"$row"
+            echo "capability run=$run_id status=$status conclusion=$conclusion"
+            if [[ "$status" == "completed" ]]; then
+              if [[ "$conclusion" != "success" ]]; then
+                echo "Capability validation failed; formal A/B will not be dispatched."
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for capability validation."
+          exit 1
+
+      - name: Dispatch formal Pi A/B
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/$REPO/actions/workflows/pi-agent-moderate-suite.yml/dispatches" \
+            -f ref=experiment/evidence-intelligence
+          echo "Formal Pi A/B dispatched."
