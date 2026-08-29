@@ -13,6 +13,7 @@ from .relationship_frontier import attach_relationship_frontier
 from .retrieval_guidance import prioritize_actionable_retrieval
 from .retrieval_session import (
     DEFAULT_MAX_SEEN_EVIDENCE,
+    DEFAULT_MAX_SEEN_RELATIONS,
     RetrievalSessionState,
     RetrievalSessionStore,
 )
@@ -37,6 +38,22 @@ def _pointer_ids(evidence: tuple[Mapping[str, Any], ...]) -> tuple[str, ...]:
     )
 
 
+def _relation_ids(canonical: Mapping[str, Any]) -> tuple[str, ...]:
+    data = canonical.get("data") or {}
+    if not isinstance(data, Mapping):
+        return ()
+    rows = data.get("observed_relations") or []
+    if not isinstance(rows, list):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            str(item.get("relation_id") or "").strip()
+            for item in rows
+            if isinstance(item, Mapping) and str(item.get("relation_id") or "").strip()
+        )
+    )
+
+
 def _restore_tracker(state: RetrievalSessionState) -> EvidenceProgressTracker:
     tracker = EvidenceProgressTracker()
     tracker.restore(evidence_ids=state.seen_evidence)
@@ -50,19 +67,26 @@ def _persist(
     state: RetrievalSessionState,
     *,
     evidence_ids: tuple[str, ...],
+    relation_ids: tuple[str, ...] = (),
     source_key: str | None = None,
     line_ranges: tuple[tuple[int, int], ...] = (),
 ) -> None:
-    if not evidence_ids and not line_ranges:
+    if not evidence_ids and not relation_ids and not line_ranges:
         return
     evidence_limit = max(
         DEFAULT_MAX_SEEN_EVIDENCE,
         len(state.seen_evidence) + len(evidence_ids) + 1,
     )
+    relation_limit = max(
+        DEFAULT_MAX_SEEN_RELATIONS,
+        len(state.seen_relations) + len(relation_ids) + 1,
+    )
     next_state, _ = state.advance(
         evidence=evidence_ids,
+        relations=relation_ids,
         covered_ranges={source_key: line_ranges} if source_key and line_ranges else None,
         max_seen_evidence=evidence_limit,
+        max_seen_relations=relation_limit,
     )
     store.save(next_state)
 
@@ -160,10 +184,18 @@ def retrieve_with_session(
     )
     repeated = max(0, len(evidence) - len(new_rows))
 
+    relation_ids = _relation_ids(canonical)
+    prior_relations = set(state.seen_relations)
+    new_relation_ids = tuple(item for item in relation_ids if item not in prior_relations)
+
     source_key: str | None = None
     line_ranges: tuple[tuple[int, int], ...] = ()
     coverage = canonical.get("coverage") or {}
-    truncated = bool(coverage.get("truncated") or coverage.get("evidence_truncated")) if isinstance(coverage, Mapping) else False
+    truncated = (
+        bool(coverage.get("truncated") or coverage.get("evidence_truncated"))
+        if isinstance(coverage, Mapping)
+        else False
+    )
     if isinstance(request.target, RangeTarget) and evidence:
         source_key = pointer_source_key(evidence[0])
         if isinstance(coverage, Mapping) and not bool(coverage.get("truncated")):
@@ -182,11 +214,13 @@ def retrieve_with_session(
         source=source_key,
         evidence_ids=evidence_ids,
         line_ranges=line_ranges,
+        new_relations=len(new_relation_ids),
     )
     _persist(
         session,
         state,
         evidence_ids=evidence_ids,
+        relation_ids=relation_ids,
         source_key=source_key,
         line_ranges=line_ranges,
     )
@@ -197,6 +231,7 @@ def retrieve_with_session(
         str(canonical.get("status") or "").lower() not in {"error", "no_match"}
         and evidence
         and not new_rows
+        and not new_relation_ids
         and not truncated
     ):
         status = "no_new_evidence"
