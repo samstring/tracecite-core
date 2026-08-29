@@ -18,6 +18,7 @@ from .investigation import (
     InvestigationState,
     InvestigationStore,
 )
+from .test_assessment import latest_test_assessments
 
 _EVIDENCE_URI_RE = re.compile(
     r"^evidence://sha256/(?P<digest>[0-9a-fA-F]{64})"
@@ -38,6 +39,7 @@ class FindingValidationResult:
     hypothesis_id: str = ""
     test_ids: Sequence[str] = field(default_factory=tuple)
     execution_ids: Sequence[str] = field(default_factory=tuple)
+    test_assessments: Mapping[str, str] = field(default_factory=dict)
     supporting_evidence: Sequence[str] = field(default_factory=tuple)
     contradicting_evidence: Sequence[str] = field(default_factory=tuple)
 
@@ -50,6 +52,7 @@ class FindingValidationResult:
             "hypothesis_id": self.hypothesis_id,
             "test_ids": list(self.test_ids),
             "execution_ids": list(self.execution_ids),
+            "test_assessments": dict(self.test_assessments),
             "supporting_evidence": list(self.supporting_evidence),
             "contradicting_evidence": list(self.contradicting_evidence),
         }
@@ -107,10 +110,11 @@ def validate_finding(
 ) -> FindingValidationResult:
     """Validate whether a proposed Finding may be treated as decisive.
 
-    Decisive Findings must be grounded in at least one executed Test, cite only
-    immutable line-addressable Evidence produced by those executions, and have
-    no explicit execution/coverage gaps. ``unknown`` remains valid with less
-    evidence because uncertainty is the safe fallback.
+    Decisive Findings must be grounded in executed Tests, cite only immutable
+    line-addressable Evidence produced by those executions, have no explicit
+    execution/coverage gaps, and have an evidence-backed terminal assessment
+    for every declared Test. ``unknown`` remains valid with less evidence
+    because uncertainty is the safe fallback.
     """
 
     state = store_or_state.load() if isinstance(store_or_state, InvestigationStore) else store_or_state
@@ -137,6 +141,12 @@ def validate_finding(
                 if execution_id in by_id:
                     linked_executions.append(by_id[execution_id])
 
+    latest_assessments = latest_test_assessments(state, hypothesis_id)
+    assessment_outcomes = {
+        test_id: str(execution.get("outcome") or "unknown").strip().lower()
+        for test_id, execution in latest_assessments.items()
+    }
+
     reasons: List[str] = []
     decisive = requested_outcome in _DECISIVE_OUTCOMES
     required_refs = support if requested_outcome == "supported" else contradiction
@@ -151,6 +161,26 @@ def validate_finding(
         reasons.append("missing_contradicting_evidence")
 
     if decisive:
+        for test_id in test_ids:
+            assessment = latest_assessments.get(test_id)
+            if assessment is None:
+                reasons.append("test_not_assessed")
+                continue
+            assessment_outcome = assessment_outcomes.get(test_id, "unknown")
+            if assessment_outcome == "unknown":
+                reasons.append("test_assessment_unknown")
+            elif assessment_outcome not in _DECISIVE_OUTCOMES:
+                reasons.append("invalid_test_assessment_outcome")
+
+        if requested_outcome == "supported" and any(
+            value == "contradicted" for value in assessment_outcomes.values()
+        ):
+            reasons.append("test_contradicts_supported_finding")
+        if requested_outcome == "contradicted" and tests and not any(
+            assessment_outcomes.get(test_id) == "contradicted" for test_id in test_ids
+        ):
+            reasons.append("no_contradicting_test_assessment")
+
         for ref in required_refs:
             match = _EVIDENCE_URI_RE.match(ref)
             if not match:
@@ -204,6 +234,7 @@ def validate_finding(
         hypothesis_id=hypothesis_id,
         test_ids=tuple(test_ids),
         execution_ids=tuple(execution_ids),
+        test_assessments=assessment_outcomes,
         supporting_evidence=tuple(support),
         contradicting_evidence=tuple(contradiction),
     )
