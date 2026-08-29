@@ -24,18 +24,19 @@ jobs:
       - name: Apply generic correlation repair
         shell: bash
         run: |
-          echo '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' | base64 -d | gzip -d > /tmp/patch.py
+          base64 -d scripts/_evidence_correlation_patch.b64 | gzip -d > /tmp/patch.py
           python /tmp/patch.py
       - name: Validate deterministic repair
         run: |
           python -m pip install -e '.[dev]'
           pytest -q tests/test_retrieval_guidance.py tests/test_gmi_canonical_host.py
           python scripts/check_architecture.py
-      - name: Commit repair and remove workflow
+      - name: Commit repair and remove temporary files
         run: |
           rm .github/workflows/evidence-correlation-repair-once.yml
+          rm scripts/_evidence_correlation_patch.b64
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/tracecite/runtime/retrieval_guidance.py benchmarks/agent-investigation/gmi_canonical_host.py tests/test_retrieval_guidance.py tests/test_gmi_canonical_host.py .github/workflows/evidence-correlation-repair-once.yml
+          git add -A
           git commit -m 'fix(evidence): require scoped correlation constraint review'
           git push origin HEAD:experiment/evidence-intelligence
