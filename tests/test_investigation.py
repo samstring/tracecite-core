@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from tracecite import InvestigationError, InvestigationStore, search
-from tracecite.runtime import tools
+from tracecite.runtime import assess_test, tools
 from tracecite.integrations import cli
 
 
@@ -47,6 +47,13 @@ def test_investigation_lifecycle_persists_version_and_links(tmp_path: Path) -> N
         hypothesis_id="H1",
         test_id="T1",
     )
+    assessment = assess_test(
+        store,
+        "T1",
+        "supported",
+        evidence_refs=[VALID_REF],
+        coverage={"complete": True},
+    )
     finding = store.add_finding(
         "H1",
         "supported",
@@ -58,15 +65,18 @@ def test_investigation_lifecycle_persists_version_and_links(tmp_path: Path) -> N
 
     payload = json.loads(store.path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1
-    assert payload["revision"] == 5
+    assert payload["revision"] == 6
     assert payload["status"] == "completed"
     assert payload["stop_reason"]["kind"] == "completed"
     assert payload["hypotheses"][0]["test_ids"] == [test["id"]]
-    assert payload["tests"][0]["execution_ids"] == [execution["id"]]
+    assert payload["tests"][0]["execution_ids"] == [
+        execution["id"],
+        assessment["execution_id"],
+    ]
     assert payload["findings"][0]["id"] == finding["id"]
     assert "data" not in payload["executions"][0]
     assert "raw" not in json.dumps(payload["executions"][0], ensure_ascii=False)
-    assert completed.revision == 5
+    assert completed.revision == 6
 
     with pytest.raises(InvestigationError, match="不能继续修改"):
         store.add_hypothesis("another claim")
