@@ -131,7 +131,13 @@ def _enrich_identity_contracts(
 def _common_instance_family(values: list[str]) -> str | None:
     """Return a deterministic family prefix from observed instance-like values."""
 
-    values = list(dict.fromkeys(str(value or "").strip() for value in values if str(value or "").strip()))
+    values = list(
+        dict.fromkeys(
+            str(value or "").strip()
+            for value in values
+            if str(value or "").strip()
+        )
+    )
     if len(values) < 2:
         return None
     original = os.path.commonprefix(values)
@@ -168,7 +174,9 @@ def _member_family_query(verification: Mapping[str, Any]) -> str | None:
 
     A scoped entity can later appear in logs as a namespace/member without its
     scope prefix. Searching the observed member family is therefore a mechanical
-    evidence-navigation step, not a domain or causal inference.
+    evidence-navigation step, not a domain or causal inference. The correlation
+    constraint remains in force: a member-family match is navigation evidence,
+    not proof that two scoped entities are the same object.
     """
 
     members: list[str] = []
@@ -184,10 +192,10 @@ def _finish_family_scan(gap: dict[str, Any]) -> dict[str, Any]:
     gap["actionable"] = False
     gap.pop("recommended_action", None)
     gap["detail"] = (
-        "The bounded sibling-family correlation scan has been completed. Identifier-only "
-        "correlation remains unsafe because uniqueness is still not established, but the "
-        "Runtime has no further deterministic identity retrieval action to require. Preserve "
-        "the scoped entity together with the local identifier when reasoning from the evidence."
+        "The bounded scoped-family and member-family correlation scans have been completed. "
+        "Identifier-only correlation remains unsafe because uniqueness is still not established, "
+        "but the Runtime has no further deterministic identity retrieval action to require. "
+        "Preserve the scoped entity together with the local identifier when reasoning from the evidence."
     )
     return gap
 
@@ -259,9 +267,23 @@ def _refine_scoped_gap_action(
         return gap
 
     if scoped_family and current_query == scoped_family:
-        # Stop while the scope is still explicit. Broadening to an unscoped
-        # member-family query discards the very correlation component this gap
-        # exists to protect and can flood large sources with unrelated siblings.
+        if member_family and member_family != scoped_family:
+            gap["detail"] = (
+                "The scoped sibling-family scan is complete, but the same observed entities may "
+                "appear elsewhere without their scope prefix (for example as a namespace or member). "
+                "Search only the Runtime-derived member family once to recover those alternate "
+                "representations. Keep the scoped correlation constraint in force; member-family "
+                "matches are navigation evidence, not identity proof."
+            )
+            gap["recommended_action"] = {
+                "operation": "search",
+                "query": member_family,
+                "purpose": "trace_unscoped_sibling_member_family_references",
+            }
+            return gap
+        return _finish_family_scan(gap)
+
+    if member_family and current_query == member_family:
         return _finish_family_scan(gap)
 
     return gap
