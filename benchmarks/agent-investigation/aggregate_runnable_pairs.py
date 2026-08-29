@@ -105,6 +105,37 @@ def aggregate(root: Path) -> dict[str, Any]:
     shell_tool = sum(int(row["free_shell_tool_output_chars"] or 0) for row in valid)
     trace_tool = sum(int(row["tracecite_tool_output_chars"] or 0) for row in valid)
 
+    # Correctness is a hard product boundary: if the baseline Agent can solve a
+    # case, TraceCite must not turn that success into a failed answer or host
+    # outcome.  Token/context improvements never compensate for this regression.
+    no_harm_regressions = [
+        {
+            "case_id": row["case_id"],
+            "free_shell_status": row["free_shell_status"],
+            "tracecite_status": row["tracecite_status"],
+            "tracecite_failure_reason": row["tracecite_failure_reason"],
+            "primary_quality_name": row["primary_quality_name"],
+            "free_shell_primary_quality": row["free_shell_primary_quality"],
+            "tracecite_primary_quality": row["tracecite_primary_quality"],
+        }
+        for row in comparisons
+        if row["free_shell_passed"] is True and row["tracecite_passed"] is not True
+    ]
+    quality_degradations = [
+        {
+            "case_id": row["case_id"],
+            "primary_quality_name": row["primary_quality_name"],
+            "free_shell_primary_quality": row["free_shell_primary_quality"],
+            "tracecite_primary_quality": row["tracecite_primary_quality"],
+        }
+        for row in valid
+        if row["free_shell_passed"] is True
+        and row["tracecite_passed"] is True
+        and _number(row["free_shell_primary_quality"]) is not None
+        and _number(row["tracecite_primary_quality"]) is not None
+        and float(row["tracecite_primary_quality"]) < float(row["free_shell_primary_quality"])
+    ]
+
     return {
         "schema_version": 1,
         "comparison": "16 unique runnable incidents; same model + same canonical agent loop + seed; provider_rate_limited/provider_unavailable retried every 120 seconds",
@@ -114,6 +145,10 @@ def aggregate(root: Path) -> dict[str, Any]:
         "observed_cases": len(pairs),
         "valid_paired_cases": len(valid),
         "all_16_valid": len(valid) == 16,
+        "no_harm_passed": not no_harm_regressions,
+        "no_harm_regression_count": len(no_harm_regressions),
+        "no_harm_regressions": no_harm_regressions,
+        "quality_degradations": quality_degradations,
         "total_provider_retries": sum(
             int(row.get("free_shell_provider_retries") or 0)
             + int(row.get("tracecite_provider_retries") or 0)
