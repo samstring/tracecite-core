@@ -121,6 +121,28 @@ def test_stop_policy_keeps_only_epistemic_closure_tools_without_finding(tmp_path
     assert output.strip() == "ok"
 
 
+def test_repeated_evidence_remains_referenceable_when_formal_test_starts_late(tmp_path: Path) -> None:
+    _setup(tmp_path)
+    output = _run_host_script(
+        tmp_path,
+        "runtime = host.EvidenceContractRuntime(mode='tracecite', input_root=tmp/'inputs', scratch=tmp/'scratch', context_id='')\n"
+        "explore = runtime.call('tracecite_search', {'file':'runtime.log','query':'checksum','regex':False,'hypothesis_id':None,'test_id':None})\n"
+        "assert '@EVIDENCE_REF ' in explore\n"
+        "runtime.call('tracecite_hypothesis', {'claim':'checksum failure caused request failure','hypothesis_id':'H1','rationale':''})\n"
+        "runtime.call('tracecite_test', {'hypothesis_id':'H1','intent':'inspect checksum failure','expected_observation':'checksum failure is present','contradicting_observation':'request has no checksum failure','test_id':'T1'})\n"
+        "linked = runtime.call('tracecite_search', {'file':'runtime.log','query':'checksum','regex':False,'hypothesis_id':'H1','test_id':'T1'})\n"
+        "import re\n"
+        "match = re.search(r'@EVIDENCE_REF (evidence://sha256/[0-9a-f]{64}#L\\d+(?:-L\\d+)?)', linked)\n"
+        "assert match, linked\n"
+        "ref = match.group(1)\n"
+        "runtime.call('tracecite_assess_test', {'test_id':'T1','outcome':'supported','evidence_refs':[ref]})\n"
+        "finding = json.loads(runtime.call('tracecite_finding', {'hypothesis_id':'H1','outcome':'supported','summary':'checksum failure observed','supporting_evidence':[ref],'contradicting_evidence':[],'limitations':[]}))\n"
+        "assert finding['outcome'] == 'supported'\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
 def test_transport_requires_tools_until_finding_exists(tmp_path: Path) -> None:
     _setup(tmp_path)
     output = _run_host_script(
@@ -131,6 +153,8 @@ def test_transport_requires_tools_until_finding_exists(tmp_path: Path) -> None:
         "first = host._required_tool_transport({'messages':[],'tools':[{'name':'tracecite_state'}],'tool_choice':'auto'})\n"
         "assert first['tool_choice'] == 'required'\n"
         "runtime.call('tracecite_hypothesis', {'claim':'unknown cause','hypothesis_id':'H1','rationale':''})\n"
+        "runtime.call('tracecite_test', {'hypothesis_id':'H1','intent':'determine cause','expected_observation':'evidence supports the proposed cause','contradicting_observation':'evidence contradicts or cannot establish the cause','test_id':'T1'})\n"
+        "runtime.call('tracecite_assess_test', {'test_id':'T1','outcome':'unknown','evidence_refs':[]})\n"
         "runtime.call('tracecite_finding', {'hypothesis_id':'H1','outcome':'unknown','summary':'insufficient evidence','supporting_evidence':[],'contradicting_evidence':[],'limitations':['not enough evidence']})\n"
         "second = host._required_tool_transport({'messages':[],'tools':[{'name':'tracecite_state'}],'tool_choice':'auto'})\n"
         "assert second['tool_choice'] == 'auto'\n"
