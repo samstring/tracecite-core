@@ -32,6 +32,8 @@ BUDGET_POLICY_SCHEMA_VERSION = 1
 INVESTIGATION_STATUSES = frozenset({"active", "completed"})
 HYPOTHESIS_STATUSES = frozenset({"open", "supported", "contradicted", "unknown"})
 FINDING_OUTCOMES = frozenset({"supported", "contradicted", "unknown"})
+SOURCE_SESSION_STATUSES = frozenset({"unknown", "known", "changed", "needs_revalidation"})
+MAX_SOURCE_SESSIONS = 100
 STOP_KINDS = frozenset(
     {
         "completed",
@@ -1145,6 +1147,87 @@ def _validate_list(raw: Any, *, field_name: str) -> List[Mapping[str, Any]]:
     return list(raw)
 
 
+def _source_session_confidence(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise InvestigationError("source_session.confidence 必须是 0 到 1 之间的数字")
+    resolved = float(value)
+    if not math.isfinite(resolved) or resolved < 0.0 or resolved > 1.0:
+        raise InvestigationError("source_session.confidence 必须是 0 到 1 之间的数字")
+    return resolved
+
+
+def _normalize_source_session(item: Mapping[str, Any], *, index: int = 0) -> Dict[str, Any]:
+    if not isinstance(item, Mapping):
+        raise InvestigationError(f"source_sessions[{index}] 必须是对象")
+    allowed = {
+        "id", "source_id", "identity", "fingerprint", "source_type",
+        "format", "segmenter", "extension", "recognition_status",
+        "confidence", "coverage", "invalidation_reason", "created_at", "updated_at",
+    }
+    unsupported = set(item) - allowed
+    if unsupported:
+        raise InvestigationError(
+            f"source_sessions[{index}] 含有不支持的字段: "
+            + ", ".join(sorted(str(value) for value in unsupported))
+        )
+    status = str(item.get("recognition_status") or "unknown").strip().lower()
+    if status not in SOURCE_SESSION_STATUSES:
+        raise InvestigationError(f"未知 source session status: {status!r}")
+    return {
+        "id": _validate_id(item.get("id"), field_name="source_session.id"),
+        "source_id": _required_text(item.get("source_id"), field_name="source_session.source_id", limit=512),
+        "identity": _json_object(item.get("identity") or {}, field_name="source_session.identity"),
+        "fingerprint": _optional_text(item.get("fingerprint"), field_name="source_session.fingerprint", limit=512),
+        "source_type": _optional_text(item.get("source_type"), field_name="source_session.source_type", limit=256),
+        "format": _optional_text(item.get("format"), field_name="source_session.format", limit=256),
+        "segmenter": _optional_text(item.get("segmenter"), field_name="source_session.segmenter", limit=256),
+        "extension": _optional_text(item.get("extension"), field_name="source_session.extension", limit=256),
+        "recognition_status": status,
+        "confidence": _source_session_confidence(item.get("confidence")),
+        "coverage": _json_object(item.get("coverage") or {}, field_name="source_session.coverage"),
+        "invalidation_reason": _optional_text(
+            item.get("invalidation_reason"), field_name="source_session.invalidation_reason"
+        ),
+        "created_at": _required_text(item.get("created_at"), field_name="source_session.created_at", limit=128),
+        "updated_at": _required_text(item.get("updated_at"), field_name="source_session.updated_at", limit=128),
+    }
+
+
+def _normalize_source_sessions(raw: Any) -> List[Dict[str, Any]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise InvestigationError("source_sessions 必须是数组")
+    if len(raw) > MAX_SOURCE_SESSIONS:
+        raise InvestigationError("source_sessions 数量超过限制")
+    result: List[Dict[str, Any]] = []
+    ids: set[str] = set()
+    source_ids: set[str] = set()
+    for index, item in enumerate(raw):
+        normalized = _normalize_source_session(item, index=index)
+        if normalized["id"] in ids:
+            raise InvestigationError(f"source session id 重复: {normalized['id']}")
+        if normalized["source_id"] in source_ids:
+            raise InvestigationError(f"source session source_id 重复: {normalized['source_id']}")
+        ids.add(normalized["id"])
+        source_ids.add(normalized["source_id"])
+        result.append(normalized)
+    return result
+
+
+def _source_sessions(state: "InvestigationState") -> List[Dict[str, Any]]:
+    return state.source_sessions
+
+
+def _find_source_session(state: "InvestigationState", session_id: str) -> Dict[str, Any]:
+    for item in state.source_sessions:
+        if item["id"] == session_id:
+            return item
+    raise InvestigationError(f"未知 source session: {session_id}")
+
+
 def _candidate_link_metadata(
     item: Mapping[str, Any],
     *,
@@ -1297,6 +1380,7 @@ def _validate_and_normalize(raw: Mapping[str, Any]) -> Dict[str, Any]:
     executions: List[Dict[str, Any]] = []
     findings: List[Dict[str, Any]] = []
     knowledge_candidates: List[Dict[str, Any]] = []
+    source_sessions = _normalize_source_sessions(raw.get("source_sessions"))
     all_ids: Dict[str, str] = {}
 
     def remember(identifier: str, kind: str) -> None:
@@ -1550,6 +1634,7 @@ def _validate_and_normalize(raw: Mapping[str, Any]) -> Dict[str, Any]:
         "findings": findings,
         "stop_reason": stop_reason,
         "knowledge_candidates": knowledge_candidates,
+        "source_sessions": source_sessions,
     }
 
 
@@ -1575,6 +1660,7 @@ class InvestigationState:
     findings: List[Dict[str, Any]] = field(default_factory=list)
     stop_reason: Optional[Dict[str, Any]] = None
     knowledge_candidates: List[Dict[str, Any]] = field(default_factory=list)
+    source_sessions: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def schema_version(self) -> int:
@@ -1604,6 +1690,7 @@ class InvestigationState:
         self.findings = checked["findings"]
         self.stop_reason = checked["stop_reason"]
         self.knowledge_candidates = checked["knowledge_candidates"]
+        self.source_sessions = checked["source_sessions"]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -1626,6 +1713,7 @@ class InvestigationState:
             "findings": copy.deepcopy(self.findings),
             "stop_reason": copy.deepcopy(self.stop_reason),
             "knowledge_candidates": copy.deepcopy(self.knowledge_candidates),
+            "source_sessions": copy.deepcopy(self.source_sessions),
         }
 
     @classmethod
@@ -1996,6 +2084,196 @@ class InvestigationStore:
                 return item
         raise InvestigationError(f"未知 finding: {finding_id}")
 
+
+    def register_source_session(
+        self,
+        source_id: str,
+        *,
+        identity: Optional[Mapping[str, Any]] = None,
+        fingerprint: str = "",
+        source_type: str = "",
+        format: str = "",
+        segmenter: str = "",
+        extension: str = "",
+        recognition_status: str = "known",
+        confidence: Optional[float] = None,
+        coverage: Optional[Mapping[str, Any]] = None,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Register reusable recognition for one logical source."""
+
+        now = _now_iso()
+        session = _normalize_source_session(
+            {
+                "id": session_id or f"S{uuid.uuid4().hex[:12]}",
+                "source_id": source_id,
+                "identity": dict(identity or {}),
+                "fingerprint": fingerprint,
+                "source_type": source_type,
+                "format": format,
+                "segmenter": segmenter,
+                "extension": extension,
+                "recognition_status": recognition_status,
+                "confidence": confidence,
+                "coverage": dict(coverage or {}),
+                "invalidation_reason": "",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+        def mutate(state: InvestigationState) -> None:
+            self._require_active(state)
+            existing = _source_sessions(state)
+            if len(existing) >= MAX_SOURCE_SESSIONS:
+                raise InvestigationError("source_sessions 数量超过限制")
+            if any(item["id"] == session["id"] for item in existing):
+                raise InvestigationError(f"source session id 已存在: {session['id']}")
+            if any(item["source_id"] == session["source_id"] for item in existing):
+                raise InvestigationError(f"source session source_id 已存在: {session['source_id']}")
+            existing.append(copy.deepcopy(session))
+
+        self._update(mutate)
+        return copy.deepcopy(session)
+
+    def get_source_session(self, session_id: str) -> Dict[str, Any]:
+        resolved = _validate_id(session_id, field_name="source_session.id")
+        return copy.deepcopy(_find_source_session(self.load(), resolved))
+
+    def list_source_sessions(self) -> List[Dict[str, Any]]:
+        return copy.deepcopy(self.load().source_sessions)
+
+    def inspect_source_session(
+        self,
+        session_id: str,
+        *,
+        identity: Optional[Mapping[str, Any]] = None,
+        fingerprint: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return reusable/changed state without choosing an Agent strategy."""
+
+        session = self.get_source_session(session_id)
+        reasons: List[str] = []
+        if identity is not None:
+            current_identity = _json_object(identity, field_name="source_session.identity")
+            if _canonical_json(current_identity) != _canonical_json(session["identity"]):
+                reasons.append("identity_changed")
+        if fingerprint is not None:
+            current_fingerprint = _optional_text(
+                fingerprint, field_name="source_session.fingerprint", limit=512
+            )
+            if current_fingerprint != session["fingerprint"]:
+                reasons.append("fingerprint_changed")
+        persisted_status = session["recognition_status"]
+        changed = bool(reasons) or persisted_status in {"changed", "needs_revalidation"}
+        return {
+            "session_id": session["id"],
+            "source_id": session["source_id"],
+            "status": "changed" if reasons else persisted_status,
+            "source_changed": changed,
+            "reuse": persisted_status == "known" and not changed,
+            "reasons": reasons
+            or ([session["invalidation_reason"]] if session["invalidation_reason"] else []),
+            "format": session["format"],
+            "segmenter": session["segmenter"],
+            "extension": session["extension"],
+            "confidence": session["confidence"],
+            "coverage": copy.deepcopy(session["coverage"]),
+        }
+
+    def update_source_session_coverage(
+        self, session_id: str, coverage: Mapping[str, Any]
+    ) -> Dict[str, Any]:
+        resolved = _validate_id(session_id, field_name="source_session.id")
+        resolved_coverage = _json_object(coverage, field_name="source_session.coverage")
+
+        def mutate(state: InvestigationState) -> Dict[str, Any]:
+            self._require_active(state)
+            session = _find_source_session(state, resolved)
+            session["coverage"] = copy.deepcopy(resolved_coverage)
+            session["updated_at"] = _now_iso()
+            return copy.deepcopy(session)
+
+        _, result = self._update(mutate)
+        return result
+
+    def invalidate_source_session(
+        self,
+        session_id: str,
+        reason: str,
+        *,
+        status: str = "needs_revalidation",
+    ) -> Dict[str, Any]:
+        resolved = _validate_id(session_id, field_name="source_session.id")
+        resolved_status = str(status or "").strip().lower()
+        if resolved_status not in {"changed", "needs_revalidation"}:
+            raise InvestigationError(
+                "invalidate_source_session status 必须是 changed / needs_revalidation"
+            )
+        resolved_reason = _required_text(
+            reason, field_name="source_session.invalidation_reason"
+        )
+
+        def mutate(state: InvestigationState) -> Dict[str, Any]:
+            self._require_active(state)
+            session = _find_source_session(state, resolved)
+            session["recognition_status"] = resolved_status
+            session["invalidation_reason"] = resolved_reason
+            session["updated_at"] = _now_iso()
+            return copy.deepcopy(session)
+
+        _, result = self._update(mutate)
+        return result
+
+    def refresh_source_session(
+        self,
+        session_id: str,
+        *,
+        identity: Optional[Mapping[str, Any]] = None,
+        fingerprint: Optional[str] = None,
+        source_type: Optional[str] = None,
+        format: Optional[str] = None,
+        segmenter: Optional[str] = None,
+        extension: Optional[str] = None,
+        confidence: Optional[float] = None,
+        coverage: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        resolved = _validate_id(session_id, field_name="source_session.id")
+
+        def mutate(state: InvestigationState) -> Dict[str, Any]:
+            self._require_active(state)
+            session = _find_source_session(state, resolved)
+            if identity is not None:
+                session["identity"] = _json_object(
+                    identity, field_name="source_session.identity"
+                )
+            if fingerprint is not None:
+                session["fingerprint"] = _optional_text(
+                    fingerprint, field_name="source_session.fingerprint", limit=512
+                )
+            for key, value in (
+                ("source_type", source_type),
+                ("format", format),
+                ("segmenter", segmenter),
+                ("extension", extension),
+            ):
+                if value is not None:
+                    session[key] = _optional_text(
+                        value, field_name=f"source_session.{key}", limit=256
+                    )
+            if confidence is not None:
+                session["confidence"] = _source_session_confidence(confidence)
+            if coverage is not None:
+                session["coverage"] = _json_object(
+                    coverage, field_name="source_session.coverage"
+                )
+            session["recognition_status"] = "known"
+            session["invalidation_reason"] = ""
+            session["updated_at"] = _now_iso()
+            return copy.deepcopy(session)
+
+        _, result = self._update(mutate)
+        return result
     def add_observation(
         self,
         text: str,
@@ -2720,6 +2998,7 @@ __all__ = [
     "BudgetReservation",
     "InvestigationCacheStore",
     "FINDING_OUTCOMES",
+    "SOURCE_SESSION_STATUSES",
     "HYPOTHESIS_STATUSES",
     "INVESTIGATION_SCHEMA_VERSION",
     "INVESTIGATION_STATUSES",

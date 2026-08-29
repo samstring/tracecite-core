@@ -137,3 +137,10 @@ def test_source_session_state_is_bounded_and_unique(tmp_path: Path) -> None:
         store.register_source_session("source-b", session_id="S2", confidence=2.0)
     with pytest.raises(InvestigationError, match="changed / needs_revalidation"):
         store.invalidate_source_session("S1", "changed", status="known")
+
+
+def test_source_session_contract_is_declared_not_import_time_monkey_patched() -> None:
+    assert InvestigationState.to_dict.__module__ == "tracecite.runtime.investigation"
+    assert InvestigationState.from_dict.__func__.__module__ == "tracecite.runtime.investigation"
+    assert InvestigationStore.register_source_session.__module__ == "tracecite.runtime.investigation"
+    assert InvestigationStore.inspect_source_session.__module__ == "tracecite.runtime.investigation"
