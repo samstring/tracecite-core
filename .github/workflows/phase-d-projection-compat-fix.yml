@@ -1,0 +1,129 @@
+name: Phase D Projection Compatibility Fix
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/phase-d-projection-compat-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/evidence-intelligence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Repair projection compatibility and benchmark hosts
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, got {count}')
+              return text.replace(old, new, 1)
+
+          proj_path = Path('src/tracecite/integrations/agent_projection.py')
+          cli_path = Path('src/tracecite/integrations/cli.py')
+          canonical_path = Path('benchmarks/agent-investigation/gmi_canonical_host.py')
+          scale_path = Path('benchmarks/agent-investigation/gmi_scale_host.py')
+          test_path = Path('tests/test_agent_projection.py')
+
+          proj = proj_path.read_text(encoding='utf-8')
+          old = '''    if name == "lightweight":\n        return lightweight_result(canonical)\n    if name in {"agent", "portable-json", "strict-json", "stateful-index", "frame"}:\n        operation = str(canonical.get("operation") or "")\n        if operation == "search":\n            return compact_search_result(canonical, max_output_chars=max_output_chars)\n        if operation == "expand_many":\n            return fit_expand_many_result(canonical, max_output_chars=max_output_chars)\n        if name == "agent":\n            return lightweight_result(apply_survey_brief(canonical))\n        return canonical\n'''
+          new = '''    if name == "lightweight":\n        return lightweight_result(canonical)\n    # ``agent`` is the long-standing generic Agent projection API. Preserve its\n    # canonical evidence-list shape; CLI transport profiles map their default\n    # columnar Agent profile to ``portable-json`` below the command boundary.\n    if name == "agent":\n        return lightweight_result(apply_survey_brief(canonical))\n    if name in {"portable-json", "strict-json", "stateful-index", "frame"}:\n        operation = str(canonical.get("operation") or "")\n        if operation == "search":\n            return compact_search_result(canonical, max_output_chars=max_output_chars)\n        if operation == "expand_many":\n            return fit_expand_many_result(canonical, max_output_chars=max_output_chars)\n        return canonical\n'''
+          proj = replace_once(proj, old, new, 'project agent compatibility')
+          proj_path.write_text(proj, encoding='utf-8')
+
+          cli = cli_path.read_text(encoding='utf-8')
+          cli = replace_once(
+              cli,
+              '''        if args.command == "search" and compact:\n            projector = search_projector or project\n            payload = projector(\n                payload,\n                profile=profile.name,\n                max_output_chars=args.max_output_chars,\n            )\n        elif args.command == "expand-many":\n            payload = project(\n                payload,\n                profile=profile.name,\n                max_output_chars=args.max_output_chars,\n            )\n''',
+              '''        transport_projection = (\n            "portable-json" if profile.name == "agent" else profile.name\n        )\n        if args.command == "search" and compact:\n            projector = search_projector or project\n            payload = projector(\n                payload,\n                profile=transport_projection,\n                max_output_chars=args.max_output_chars,\n            )\n        elif args.command == "expand-many":\n            payload = project(\n                payload,\n                profile=transport_projection,\n                max_output_chars=args.max_output_chars,\n            )\n''',
+              'CLI transport profile mapping',
+          )
+          cli_path.write_text(cli, encoding='utf-8')
+
+          canonical = canonical_path.read_text(encoding='utf-8')
+          canonical = canonical.replace('from tracecite.integrations import cli as trace_cli\n', '', 1)
+          canonical = replace_once(
+              canonical,
+              '''        view = project(payload, profile="agent")\n        if view.get("operation") == "search":\n            view = trace_cli._compact_search_result(\n                view,\n                max_output_chars=DEFAULT_AGENT_MAX_OUTPUT_CHARS,\n            )\n''',
+              '''        view = project(\n            payload,\n            profile="portable-json",\n            max_output_chars=DEFAULT_AGENT_MAX_OUTPUT_CHARS,\n        )\n''',
+              'canonical host projection',
+          )
+          canonical_path.write_text(canonical, encoding='utf-8')
+
+          scale = scale_path.read_text(encoding='utf-8')
+          scale = scale.replace(
+              'from tracecite.integrations import cli as trace_cli\n',
+              'from tracecite.integrations.agent_profile import render_frame\n'
+              'from tracecite.integrations.agent_projection import project\n',
+              1,
+          )
+          scale = replace_once(
+              scale,
+              '''        baseline = trace_cli._compact_search_result(canonical, max_output_chars=None)\n        baseline = trace_cli.lightweight_result(baseline)\n        baseline_frame = trace_cli.render_frame(baseline)\n''',
+              '''        baseline = project(canonical, profile="frame", max_output_chars=None)\n        baseline_frame = render_frame(baseline)\n''',
+              'scale baseline projection',
+          )
+          scale = replace_once(
+              scale,
+              '''            delta = trace_cli._compact_search_result(projected, max_output_chars=None)\n            delta = trace_cli.lightweight_result(delta)\n            delta_frame = trace_cli.render_frame(delta)\n''',
+              '''            delta = project(projected, profile="frame", max_output_chars=None)\n            delta_frame = render_frame(delta)\n''',
+              'scale delta projection',
+          )
+          scale_path.write_text(scale, encoding='utf-8')
+
+          tests = test_path.read_text(encoding='utf-8')
+          tests = tests.replace(
+              'for name in ("agent", "portable-json", "strict-json", "stateful-index", "frame"):',
+              'for name in ("portable-json", "strict-json", "stateful-index", "frame"): ',
+              1,
+          )
+          tests += '''\n\ndef test_generic_agent_projection_preserves_canonical_evidence_shape() -> None:\n    digest = "b" * 64\n    payload = {\n        "operation": "search",\n        "status": "ok",\n        "outcome": "not_assessed",\n        "evidence": [{\n            "uri": f"evidence://sha256/{digest}#L9",\n            "source_path": "/tmp/runtime.log",\n            "sha256": digest,\n            "start_line": 9,\n            "end_line": 9,\n            "label": "visible evidence",\n        }],\n        "coverage": {"match_records": 1, "evidence_returned": 1},\n        "data": {},\n    }\n\n    view = project(payload, profile="agent")\n    assert isinstance(view["evidence"], list)\n    assert view["evidence"][0]["label"] == "visible evidence"\n    assert payload["evidence"][0]["label"] == "visible evidence"\n'''
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+      - name: Install development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Assert private projection seams are gone
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R --line-number --exclude-dir=.git '_compact_search_result\|_fit_expand_many_result' src benchmarks; then
+            echo 'legacy private projection seam remains' >&2
+            exit 1
+          fi
+      - name: Run full deterministic Core gate before commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/check_architecture.py
+          python scripts/check_schema_compat.py >/tmp/schema-compat.json
+          python -m pytest -W error::DeprecationWarning
+      - name: Commit fix and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/phase-d-projection-compat-fix.yml
+          git config user.name "tracecite-phase-d-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            src/tracecite/integrations/agent_projection.py \
+            src/tracecite/integrations/cli.py \
+            benchmarks/agent-investigation/gmi_canonical_host.py \
+            benchmarks/agent-investigation/gmi_scale_host.py \
+            tests/test_agent_projection.py \
+            .github/workflows/phase-d-projection-compat-fix.yml
+          git commit -m "fix(projection): preserve agent fidelity across hosts"
+          git push origin HEAD:experiment/evidence-intelligence
