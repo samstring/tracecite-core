@@ -7,9 +7,10 @@ from typing import Any, Callable, Sequence
 
 from tracecite.extension.evidence import EntityRef
 from tracecite.extension.retrieval import EvidenceProvider
+from tracecite.runtime import investigate as runtime_investigate
 from tracecite.runtime.correlation import EvidenceNode
 from tracecite.runtime.frontier import ExplorationPolicy
-from tracecite.runtime.orchestrator import EvidenceInvestigation, investigate_evidence
+from tracecite.runtime.orchestrator import EvidenceInvestigation
 from tracecite.runtime.reducer import ReductionPolicy
 
 from .evidence_package import EvidencePackage, build_evidence_package
@@ -56,7 +57,8 @@ def investigate(
     }
     if clock is not None:
         kwargs["clock"] = clock
-    investigation = investigate_evidence(providers, **kwargs)
+    canonical = runtime_investigate(providers, **kwargs)
+    investigation = canonical.investigation
     package = build_evidence_package(
         investigation.graph,
         investigation.grouping,

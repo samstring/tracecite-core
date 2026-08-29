@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence, Union
+from typing import Any, Callable, Mapping, Sequence, Union
 
 from tracecite.extension.evidence import EntityRef
 from tracecite.extension.retrieval import (
@@ -27,6 +27,7 @@ from tracecite.extension.retrieval import (
 )
 
 from . import tools as _tools
+from .correlation import EvidenceNode
 from .evidence_identity import file_source_version, pointer_source_key
 from .evidence_progress import EvidenceProgressTracker, EvidenceReadiness, StopReason
 from .frontier import ExplorationPolicy
@@ -619,22 +620,32 @@ def retrieve(request: EvidenceRequest) -> RetrievalResult:
 def investigate(
     providers: Sequence[EvidenceProvider],
     *,
+    seed_nodes: Sequence[EvidenceNode] = (),
     seed_evidence_ids: Sequence[str] = (),
     seed_entities: Sequence[EntityRef] = (),
     exploration_policy: ExplorationPolicy | None = None,
     reduction_policy: ReductionPolicy | None = None,
     temporal_window_seconds: float | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> CanonicalInvestigationResult:
-    """Run deterministic mechanical exploration; never infer a root cause."""
+    """Run deterministic mechanical exploration; never infer a root cause.
 
-    investigation = investigate_evidence(
-        providers,
-        seed_evidence_ids=seed_evidence_ids,
-        seed_entities=seed_entities,
-        exploration_policy=exploration_policy,
-        reduction_policy=reduction_policy,
-        temporal_window_seconds=temporal_window_seconds,
-    )
+    ``seed_nodes`` and ``clock`` are mechanical orchestration inputs exposed
+    here so compatibility adapters never need to bypass the public Runtime
+    facade to reach ``investigate_evidence`` directly.
+    """
+
+    kwargs: dict[str, Any] = {
+        "seed_nodes": seed_nodes,
+        "seed_evidence_ids": seed_evidence_ids,
+        "seed_entities": seed_entities,
+        "exploration_policy": exploration_policy,
+        "reduction_policy": reduction_policy,
+        "temporal_window_seconds": temporal_window_seconds,
+    }
+    if clock is not None:
+        kwargs["clock"] = clock
+    investigation = investigate_evidence(providers, **kwargs)
     tracker = EvidenceProgressTracker()
     identities = tuple(
         dict.fromkeys(

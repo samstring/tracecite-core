@@ -191,3 +191,42 @@ def test_same_entity_correlation_and_grouping_scale_linearly() -> None:
     )
     assert len(reduced.selected_ids) <= 3
     assert reduced.omitted_non_representative >= 9_997
+
+
+def test_integration_investigator_delegates_public_runtime_facade(monkeypatch) -> None:
+    import tracecite.integrations.investigator as facade
+    from types import SimpleNamespace
+
+    providers = _providers()
+    canonical = investigate_evidence(
+        providers,
+        seed_evidence_ids=("crash:C123",),
+        exploration_policy=ExplorationPolicy(max_retrievals=20, max_no_growth_rounds=3),
+    )
+    calls = []
+
+    def fake_runtime_investigate(selected, **kwargs):
+        calls.append((tuple(selected), kwargs))
+        return SimpleNamespace(investigation=canonical)
+
+    monkeypatch.setattr(facade, "runtime_investigate", fake_runtime_investigate)
+    result = facade.investigate(
+        providers,
+        seed_evidence_ids=("crash:C123",),
+        exploration_policy=ExplorationPolicy(max_retrievals=20, max_no_growth_rounds=3),
+        max_tokens=2400,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1]["seed_evidence_ids"] == ("crash:C123",)
+    assert result.investigation is canonical
+    assert result.package.evidence
+
+
+def test_integration_investigator_does_not_import_orchestrator_function() -> None:
+    import inspect
+    import tracecite.integrations.investigator as facade
+
+    source = inspect.getsource(facade)
+    assert "investigate_evidence(" not in source
+    assert "runtime_investigate(" in source
