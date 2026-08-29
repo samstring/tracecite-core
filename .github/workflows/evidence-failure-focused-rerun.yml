@@ -78,3 +78,52 @@ jobs:
           name: focused-${{ matrix.id }}
           path: /tmp/focused-repair-${{ matrix.id }}/result
           if-no-files-found: warn
+      - name: Enforce focused correctness gate
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          pair_path = Path(os.environ["RESULT"]) / "pair.json"
+          if not pair_path.is_file():
+              raise SystemExit(f"missing focused result: {pair_path}")
+
+          payload = json.loads(pair_path.read_text(encoding="utf-8"))
+          outcomes = {
+              str(item.get("mode")): item
+              for item in payload.get("outcomes", [])
+              if isinstance(item, dict)
+          }
+          free_shell = outcomes.get("free_shell") or {}
+          tracecite = outcomes.get("tracecite") or {}
+
+          print(
+              "focused outcome:",
+              json.dumps(
+                  {
+                      "case_id": payload.get("case_id"),
+                      "free_shell": {
+                          "run_status": free_shell.get("run_status"),
+                          "passed": free_shell.get("passed"),
+                          "primary_quality": free_shell.get("primary_quality"),
+                      },
+                      "tracecite": {
+                          "run_status": tracecite.get("run_status"),
+                          "passed": tracecite.get("passed"),
+                          "primary_quality": tracecite.get("primary_quality"),
+                      },
+                  },
+                  sort_keys=True,
+              ),
+          )
+
+          if tracecite.get("run_status") not in {"ok", "incomplete"}:
+              raise SystemExit("TraceCite arm did not complete")
+          if tracecite.get("passed") is not True:
+              raise SystemExit("focused repair unresolved: TraceCite correctness is not PASS")
+          if free_shell.get("passed") is True and tracecite.get("passed") is not True:
+              raise SystemExit("no-harm regression: free-shell PASS while TraceCite is not PASS")
+          PY
