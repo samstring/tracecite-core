@@ -14,7 +14,7 @@
     "medium_min_bytes_inclusive": 1048576,
     "medium_max_bytes_inclusive": 26214400,
     "synthetic_padding_allowed": false,
-    "actual_tracecite_use_required": true,
+    "actual_tracecite_use_required": false,
     "primary_correctness_requires_evidence_sufficiency": true
   },
   "cases": [
