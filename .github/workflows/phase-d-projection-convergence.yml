@@ -29,9 +29,12 @@ jobs:
 
           cli_path = Path('src/tracecite/integrations/cli.py')
           proj_path = Path('src/tracecite/integrations/agent_projection.py')
-          test_path = Path('tests/test_agent_projection.py')
+          stateful_path = Path('src/tracecite/integrations/stateful_cli.py')
+          projection_test_path = Path('tests/test_agent_projection.py')
+          runtime_cli_test_path = Path('tests/test_runtime_cli.py')
           cli = cli_path.read_text(encoding='utf-8')
           proj = proj_path.read_text(encoding='utf-8')
+          stateful = stateful_path.read_text(encoding='utf-8')
 
           start = cli.index('def _primary_artifact(')
           end = cli.index('def _investigation_snapshot(', start)
@@ -54,7 +57,6 @@ jobs:
           if old_project not in proj:
               raise SystemExit('old project() body did not match expected source')
           proj = proj.replace(old_project, new_project, 1)
-
           proj = proj.replace(
               '    "compact_filter_payload",\n',
               '    "compact_filter_payload",\n    "compact_search_result",\n    "fit_expand_many_result",\n',
@@ -66,7 +68,6 @@ jobs:
           if old_import not in cli:
               raise SystemExit('CLI projection import block mismatch')
           cli = cli.replace(old_import, new_import, 1)
-
           cli = cli.replace(
               '            payload = apply_survey_brief(payload)',
               '            payload = project(payload, profile="survey-brief")',
@@ -74,7 +75,7 @@ jobs:
           )
           cli = cli.replace(
               '''            payload = _compact_search_result(\n                payload,\n                max_output_chars=args.max_output_chars,\n            )''',
-              '''            payload = project(\n                payload,\n                profile=profile.name,\n                max_output_chars=args.max_output_chars,\n            )''',
+              '''            projector = search_projector or project\n            payload = projector(\n                payload,\n                profile=profile.name,\n                max_output_chars=args.max_output_chars,\n            )''',
               1,
           )
           cli = cli.replace(
@@ -87,13 +88,44 @@ jobs:
               '            payload = project(payload, profile="lightweight")',
               1,
           )
+          old_main = '''def main(\n    argv: Sequence[str] | None = None,\n    *,\n    prog: str = "tracecite",\n) -> int:'''
+          new_main = '''def main(\n    argv: Sequence[str] | None = None,\n    *,\n    prog: str = "tracecite",\n    search_projector: Any = None,\n) -> int:'''
+          if old_main not in cli:
+              raise SystemExit('CLI main signature mismatch')
+          cli = cli.replace(old_main, new_main, 1)
+
+          stateful = stateful.replace(
+              'from .agent_projection import prefer_smaller_agent_view',
+              'from .agent_projection import prefer_smaller_agent_view, project',
+              1,
+          )
+          stateful = stateful.replace('    original_compact = cli._compact_search_result\n', '', 1)
+          old_context = '''        def context_compact(payload, *, max_output_chars=None):\n            # Compute the ordinary view first so Context optimization has a\n            # same-budget baseline. The Runtime-owned canonical Result has\n            # already been stored in the private Ledger at this point.\n            baseline = original_compact(\n                payload,\n                max_output_chars=max_output_chars,\n            )\n            data = dict(payload.get("data") or {})\n            result_id = str(data.get("result_id") or "")\n            if not result_id:\n                raise ValueError("context projection requires a stored result_id")\n            projected = ContextEngine(Path(ledger_dir), context_id).project_search(\n                payload,\n                result_id=result_id,\n            )\n            delta = original_compact(\n                projected,\n                max_output_chars=max_output_chars,\n            )\n            return _prefer_for_transport(\n                delta,\n                baseline,\n                profile_name=profile_name,\n            )\n\n        cli._compact_search_result = context_compact\n        return cli.main(forwarded, prog=prog)'''
+          new_context = '''        def context_project(\n            payload, *, profile="agent", max_output_chars=None\n        ):\n            # Compute the ordinary structural view first so Context optimization\n            # has a same-budget baseline. Canonical truth is already in Ledger.\n            baseline = project(\n                payload,\n                profile=profile,\n                max_output_chars=max_output_chars,\n            )\n            data = dict(payload.get("data") or {})\n            result_id = str(data.get("result_id") or "")\n            if not result_id:\n                raise ValueError("context projection requires a stored result_id")\n            projected = ContextEngine(Path(ledger_dir), context_id).project_search(\n                payload,\n                result_id=result_id,\n            )\n            delta = project(\n                projected,\n                profile=profile,\n                max_output_chars=max_output_chars,\n            )\n            return _prefer_for_transport(\n                delta,\n                baseline,\n                profile_name=profile_name,\n            )\n\n        return cli.main(\n            forwarded,\n            prog=prog,\n            search_projector=context_project,\n        )'''
+          if old_context not in stateful:
+              raise SystemExit('stateful context projection seam mismatch')
+          stateful = stateful.replace(old_context, new_context, 1)
+          stateful = stateful.replace('        cli._compact_search_result = original_compact\n', '', 1)
 
           cli_path.write_text(cli, encoding='utf-8')
           proj_path.write_text(proj, encoding='utf-8')
+          stateful_path.write_text(stateful, encoding='utf-8')
 
-          tests = test_path.read_text(encoding='utf-8')
-          tests += '''\n\ndef test_named_transport_profiles_share_project_owner() -> None:\n    digest = "a" * 64\n    payload = {\n        "operation": "search",\n        "status": "ok",\n        "outcome": "not_assessed",\n        "evidence": [{\n            "uri": f"evidence://sha256/{digest}#L7",\n            "source_path": "/tmp/runtime.log",\n            "sha256": digest,\n            "start_line": 7,\n            "end_line": 7,\n            "label": "timeout",\n        }],\n        "coverage": {"match_records": 1, "evidence_returned": 1},\n        "data": {},\n    }\n\n    for name in ("agent", "portable-json", "strict-json", "stateful-index", "frame"):\n        view = project(payload, profile=name, max_output_chars=12_000)\n        assert view["evidence"]["columns"][0] == "ref"\n        assert view["evidence"]["rows"][0][0] == "#L7"\n        assert payload["evidence"][0]["uri"].endswith("#L7")\n\n\ndef test_cli_no_longer_owns_structural_projection_helpers() -> None:\n    from tracecite.integrations import cli\n\n    assert not hasattr(cli, "_compact_search_result")\n    assert not hasattr(cli, "_fit_expand_many_result")\n'''
-          test_path.write_text(tests, encoding='utf-8')
+          tests = projection_test_path.read_text(encoding='utf-8')
+          tests += '''\n\ndef test_named_transport_profiles_share_project_owner() -> None:\n    digest = "a" * 64\n    payload = {\n        "operation": "search",\n        "status": "ok",\n        "outcome": "not_assessed",\n        "evidence": [{\n            "uri": f"evidence://sha256/{digest}#L7",\n            "source_path": "/tmp/runtime.log",\n            "sha256": digest,\n            "start_line": 7,\n            "end_line": 7,\n            "label": "timeout",\n        }],\n        "coverage": {"match_records": 1, "evidence_returned": 1},\n        "data": {},\n    }\n\n    for name in ("agent", "portable-json", "strict-json", "stateful-index", "frame"):\n        view = project(payload, profile=name, max_output_chars=12_000)\n        assert view["evidence"]["columns"][0] == "ref"\n        assert view["evidence"]["rows"][0][0] == "#L7"\n        assert payload["evidence"][0]["uri"].endswith("#L7")\n\n\ndef test_cli_does_not_define_structural_projection_helpers() -> None:\n    from tracecite.integrations import cli\n\n    assert not hasattr(cli, "_compact_search_result")\n    assert not hasattr(cli, "_fit_expand_many_result")\n'''
+          projection_test_path.write_text(tests, encoding='utf-8')
+
+          runtime_tests = runtime_cli_test_path.read_text(encoding='utf-8')
+          runtime_tests = runtime_tests.replace(
+              'from tracecite.integrations import cli\n',
+              'from tracecite.integrations import cli\nfrom tracecite.integrations.agent_projection import project\n',
+              1,
+          )
+          runtime_tests = runtime_tests.replace(
+              'compact = cli._compact_search_result(payload)',
+              'compact = project(payload, profile="portable-json")',
+          )
+          runtime_cli_test_path.write_text(runtime_tests, encoding='utf-8')
           PY
       - name: Install development dependencies
         run: python -m pip install -e ".[dev]"
@@ -115,6 +147,6 @@ jobs:
           rm .github/workflows/phase-d-projection-convergence.yml
           git config user.name "tracecite-phase-d-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add src/tracecite/integrations/agent_projection.py src/tracecite/integrations/cli.py tests/test_agent_projection.py .github/workflows/phase-d-projection-convergence.yml
+          git add src/tracecite/integrations/agent_projection.py src/tracecite/integrations/cli.py src/tracecite/integrations/stateful_cli.py tests/test_agent_projection.py tests/test_runtime_cli.py .github/workflows/phase-d-projection-convergence.yml
           git commit -m "refactor(projection): centralize agent transport shaping"
           git push origin HEAD:experiment/evidence-intelligence
