@@ -10,7 +10,7 @@ from tracecite.runtime import (
 )
 
 
-def test_truncated_search_exposes_late_panic_as_hint_until_get(tmp_path) -> None:
+def test_truncated_search_exposes_late_panic_as_hint_until_materialized(tmp_path) -> None:
     source = tmp_path / "kubelet.log"
     rows = [f"ERROR worker shard={index} failed transiently\n" for index in range(1, 41)]
     rows.append(
@@ -55,7 +55,7 @@ def test_truncated_search_exposes_late_panic_as_hint_until_get(tmp_path) -> None
     assert panic["ref"] == "kubelet.log:41"
     assert panic["severity"] == 4
     assert "PodLevelResourcesFixDefaulting" in panic["label"]
-    assert "call get" in payload["data"]["signal_hint_note"].lower()
+    assert "materialize" in payload["data"]["signal_hint_note"].lower()
 
     recovered = retrieve(
         EvidenceRequest(
