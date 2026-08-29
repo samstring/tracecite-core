@@ -7,13 +7,16 @@ on:
       - experiment/evidence-intelligence
     paths:
       - .github/workflows/evidence-no-harm-regression.yml
+      - src/tracecite/runtime/__init__.py
       - src/tracecite/runtime/evidence_routing.py
       - src/tracecite/runtime/retrieve_contract.py
+      - src/tracecite/runtime/retrieval_guidance.py
       - src/tracecite/runtime/evidence_ambiguity.py
       - src/tracecite/runtime/evidence_fidelity.py
       - src/tracecite/integrations/agent_projection.py
       - benchmarks/agent-investigation/gmi_canonical_host.py
       - benchmarks/agent-investigation/run_paired_retry.py
+      - tests/test_retrieval_guidance.py
       - tests/test_evidence_ambiguity.py
       - tests/test_evidence_fidelity.py
       - tests/test_identity_verification_retrieve.py
