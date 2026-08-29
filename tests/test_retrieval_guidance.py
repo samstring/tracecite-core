@@ -26,6 +26,9 @@ def _result(*, entity_count: int = 1) -> RetrievalResult:
                 "query": "device-run-3083",
             },
             "signal_hints": [{"line": 999, "label": "fatal"}],
+            "signal_hint_note": (
+                "Truncated-search high-signal candidates; materialize the referenced line before citing."
+            ),
             "evidence_integrity": {
                 "scoped_identity": [
                     {
@@ -85,7 +88,12 @@ def test_compatibility_layer_keeps_evidence_facts_but_strips_planner_fields() ->
     assert canonical["coverage"]["match_records"] == 2
     assert "next_queries" not in canonical
     assert "actionable_retrieval" not in data
-    assert "signal_hints" not in data
+
+    # A signal hint is a bounded line-addressable candidate already observed by
+    # retrieval, not an Agent action. It remains explicitly non-citable until
+    # materialized.
+    assert data["signal_hints"] == [{"line": 999, "label": "fatal"}]
+    assert "materialize" in data["signal_hint_note"].lower()
 
     constraint = data["correlation_constraints"][0]
     assert constraint["source_uniqueness"] == "unverified"
