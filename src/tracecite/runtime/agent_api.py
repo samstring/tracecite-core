@@ -5,6 +5,11 @@ The stable surface is intentionally smaller than the internal tool set:
 provider exploration, and the existing ``verify``/capability surfaces for
 integrity and extension discovery. Existing ``probe/search/expand`` functions
 remain compatibility/convenience wrappers and are not removed.
+
+Mechanical novelty and immutable-range coverage are owned by RetrievalSession.
+InvestigationState executions remain an audit log and are used only as a
+one-time migration source when an older investigation has no retrieval-session
+sidecar yet.
 """
 
 from __future__ import annotations
@@ -21,17 +26,18 @@ from tracecite.extension.retrieval import (
     RetrieveResult as ProviderRetrieveResult,
 )
 
+from . import tools as _tools
 from .evidence_identity import file_source_version, pointer_source_key
-from .evidence_progress import (
-    EvidenceProgressTracker,
-    EvidenceReadiness,
-    StopReason,
-)
+from .evidence_progress import EvidenceProgressTracker, EvidenceReadiness, StopReason
 from .frontier import ExplorationPolicy
 from .investigation import InvestigationStore
 from .orchestrator import EvidenceInvestigation, investigate_evidence
 from .reducer import ReductionPolicy
-from . import tools as _tools
+from .retrieval_session import (
+    DEFAULT_MAX_SEEN_EVIDENCE,
+    RetrievalSessionState,
+    RetrievalSessionStore,
+)
 
 
 @dataclass(frozen=True)
@@ -70,8 +76,8 @@ class RangeTarget:
     """Expand a bounded local Evidence range.
 
     Zero-read coverage hard stops are permitted only when ``expected_sha256``
-    proves that the current source version is the same immutable version that
-    prior InvestigationState executions covered.
+    proves that the current source version matches the immutable version already
+    covered in linked RetrievalSession state.
     """
 
     source: Union[str, Path]
@@ -135,8 +141,7 @@ class RetrievalResult:
 
     ``canonical_result`` preserves the complete underlying Runtime/Provider
     result for programmatic recovery. ``to_dict()`` returns the default Agent
-    projection and includes only evidence that is new to the linked
-    InvestigationState history.
+    projection and includes only evidence new to linked RetrievalSession state.
     """
 
     operation: str
@@ -202,10 +207,30 @@ def _pointer_ids(evidence: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
     )
 
 
-def _restore_progress(investigation_path: Union[str, Path, None]) -> EvidenceProgressTracker:
-    tracker = EvidenceProgressTracker()
+def _progress_store(investigation_path: Union[str, Path, None]) -> RetrievalSessionStore | None:
     if investigation_path is None:
-        return tracker
+        return None
+    return RetrievalSessionStore.for_investigation(investigation_path)
+
+
+def _restore_from_session(state: RetrievalSessionState) -> EvidenceProgressTracker:
+    tracker = EvidenceProgressTracker()
+    tracker.restore(evidence_ids=state.seen_evidence)
+    for source, ranges in state.covered_ranges.items():
+        tracker.restore(source=source, line_ranges=ranges)
+    return tracker
+
+
+def _legacy_progress_from_audit(
+    investigation_path: Union[str, Path],
+) -> tuple[EvidenceProgressTracker, RetrievalSessionState]:
+    """Replay legacy executions once, returning a migration snapshot."""
+
+    tracker = EvidenceProgressTracker()
+    store = RetrievalSessionStore.for_investigation(investigation_path)
+    seen_order: list[str] = []
+    seen_set: set[str] = set()
+    covered: dict[str, list[tuple[int, int]]] = {}
     state = InvestigationStore(investigation_path).load()
     for execution in state.executions:
         evidence = [item for item in execution.get("evidence") or [] if isinstance(item, Mapping)]
@@ -216,10 +241,13 @@ def _restore_progress(investigation_path: Union[str, Path, None]) -> EvidencePro
             )
         )
         tracker.restore(evidence_ids=evidence_ids)
+        for evidence_id in evidence_ids:
+            if evidence_id not in seen_set:
+                seen_set.add(evidence_id)
+                seen_order.append(evidence_id)
 
-        # Range coverage is only reconstructed from an expand operation whose
-        # returned context was not truncated. Search hits are evidence
-        # identities, not proof that every line between hits has been read.
+        # Only a complete expand context proves coverage of every line in the
+        # returned range. Search pointers never imply interval coverage.
         if str(execution.get("operation") or "") != "expand" or not evidence:
             continue
         coverage = execution.get("coverage") or {}
@@ -234,7 +262,55 @@ def _restore_progress(investigation_path: Union[str, Path, None]) -> EvidencePro
         source_key = pointer_source_key(evidence[0])
         if source_key:
             tracker.restore(source=source_key, line_ranges=((start, end),))
+            covered.setdefault(source_key, []).append((start, end))
+
+    migrated = RetrievalSessionState(
+        context_id=store.context_id,
+        revision=1 if seen_order or covered else 0,
+        seen_evidence=tuple(seen_order),
+        covered_ranges={key: tuple(value) for key, value in covered.items()},
+    )
+    return tracker, migrated
+
+
+def _restore_progress(investigation_path: Union[str, Path, None]) -> EvidenceProgressTracker:
+    if investigation_path is None:
+        return EvidenceProgressTracker()
+    store = RetrievalSessionStore.for_investigation(investigation_path)
+    if store.path.exists():
+        return _restore_from_session(store.load())
+
+    # Backward compatibility: old investigations encoded retrieval progress only
+    # indirectly in audit executions. Replay once, then persist the new owner.
+    tracker, migrated = _legacy_progress_from_audit(investigation_path)
+    store.save(migrated)
     return tracker
+
+
+def _persist_observation(
+    investigation_path: Union[str, Path, None],
+    *,
+    evidence_ids: Sequence[str],
+    source_key: str | None,
+    line_ranges: Sequence[tuple[int, int]],
+) -> None:
+    store = _progress_store(investigation_path)
+    if store is None:
+        return
+    state = store.load()
+    # Retrieval correctness must not silently forget novelty history. Transport
+    # sessions are bounded separately; investigation-linked mechanical progress
+    # therefore raises its bound to fit all identities observed so far.
+    evidence_limit = max(
+        DEFAULT_MAX_SEEN_EVIDENCE,
+        len(state.seen_evidence) + len(tuple(evidence_ids)) + 1,
+    )
+    next_state, _ = state.advance(
+        evidence=evidence_ids,
+        covered_ranges={source_key: tuple(line_ranges)} if source_key and line_ranges else None,
+        max_seen_evidence=evidence_limit,
+    )
+    store.save(next_state)
 
 
 def _observe_tool_result(
@@ -243,6 +319,7 @@ def _observe_tool_result(
     *,
     source_key: str | None = None,
     range_from_coverage: bool = False,
+    investigation_path: Union[str, Path, None] = None,
 ) -> tuple[EvidenceReadiness, tuple[Mapping[str, Any], ...], int]:
     evidence = tuple(item for item in result.get("evidence") or [] if isinstance(item, Mapping))
     prior = tracker.seen_evidence_ids
@@ -266,6 +343,12 @@ def _observe_tool_result(
         ):
             ranges = ((start, end),)
     readiness = tracker.observe(source=source_key, evidence_ids=ids, line_ranges=ranges)
+    _persist_observation(
+        investigation_path,
+        evidence_ids=ids,
+        source_key=source_key,
+        line_ranges=ranges,
+    )
     new_rows = tuple(
         item for item in evidence if str(item.get("uri") or "").strip() not in prior
     )
@@ -352,8 +435,13 @@ def _retrieve_provider(request: EvidenceRequest, tracker: EvidenceProgressTracke
             "coverage": {"providers_handled": len(provider_rows)},
             "data": {"provider_results": provider_rows},
         }
-    readiness, new_rows, repeated = _observe_tool_result(tracker, canonical)
+    readiness, new_rows, repeated = _observe_tool_result(
+        tracker,
+        canonical,
+        investigation_path=request.investigation_path,
+    )
     if request.investigation_path is not None:
+        # Keep executions for audit/reproducibility, not as retrieval state truth.
         InvestigationStore(request.investigation_path).record_execution(
             "retrieve",
             canonical,
@@ -378,12 +466,7 @@ def _retrieve_provider(request: EvidenceRequest, tracker: EvidenceProgressTracke
 
 
 def retrieve(request: EvidenceRequest) -> RetrievalResult:
-    """Execute one canonical evidence acquisition request.
-
-    Existing tool functions remain available. This wrapper centralizes target
-    dispatch and cross-tool novelty/coverage semantics so upper layers do not
-    need their own Agent loop bookkeeping.
-    """
+    """Execute one canonical evidence acquisition request."""
 
     if not isinstance(request, EvidenceRequest):
         raise TypeError("retrieve requires EvidenceRequest")
@@ -401,7 +484,11 @@ def retrieve(request: EvidenceRequest) -> RetrievalResult:
             test_id=request.test_id,
             cache=request.cache,
         )
-        readiness, new_rows, repeated = _observe_tool_result(tracker, result)
+        readiness, new_rows, repeated = _observe_tool_result(
+            tracker,
+            result,
+            investigation_path=request.investigation_path,
+        )
         return RetrievalResult(
             operation="probe",
             status=str(result.get("status") or "unknown"),
@@ -429,7 +516,11 @@ def retrieve(request: EvidenceRequest) -> RetrievalResult:
             test_id=request.test_id,
             cache=request.cache,
         )
-        readiness, new_rows, repeated = _observe_tool_result(tracker, result)
+        readiness, new_rows, repeated = _observe_tool_result(
+            tracker,
+            result,
+            investigation_path=request.investigation_path,
+        )
         stop = None
         status = str(result.get("status") or "unknown")
         evidence_count = len(result.get("evidence") or [])
@@ -454,9 +545,7 @@ def retrieve(request: EvidenceRequest) -> RetrievalResult:
         source_key: str | None = None
         if target.expected_sha256:
             expected = str(target.expected_sha256).lower()
-            # Hashing is a streaming identity check. It deliberately happens
-            # before the zero-read coverage stop; without immutable identity a
-            # mutable path must be read again by expand().
+            # Hashing proves immutable identity before a zero-read coverage stop.
             if path.is_file() and _sha256(path) == expected:
                 source_key = file_source_version(str(path), expected).key
                 if tracker.range_is_covered(source_key, context_start, context_end):
@@ -488,6 +577,7 @@ def retrieve(request: EvidenceRequest) -> RetrievalResult:
             result,
             source_key=source_key,
             range_from_coverage=True,
+            investigation_path=request.investigation_path,
         )
         stop = None
         status = str(result.get("status") or "unknown")
