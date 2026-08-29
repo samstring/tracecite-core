@@ -27,19 +27,23 @@ def test_official_agent_comparison_is_pi_ab_only() -> None:
     assert policy["native_baseline"] == "pi-native"
     assert policy["tracecite_arm"] == "pi-tracecite"
     assert policy["free_shell_allowed"] is False
-    assert policy["actual_tracecite_use_required"] is True
+    assert policy["actual_tracecite_use_required"] is False
 
 
-def test_pi_ab_keeps_the_agent_harness_symmetric() -> None:
+def test_pi_ab_keeps_the_agent_harness_symmetric_and_tracecite_optional() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
+    assert "workflow_dispatch:" in workflow
+    assert "\n  push:" not in workflow
     assert "Run Pi without TraceCite" in workflow
-    assert "Run Pi with actual TraceCite use" in workflow
+    assert "Run Pi with TraceCite available" in workflow
     assert "--tools read,bash,grep,find,ls" in workflow
     assert "--tools read,bash,grep,find,ls,tracecite_search,tracecite_expand" in workflow
     assert "--no-extensions" in workflow
     assert "pi_tracecite_extension.ts" in workflow
-    assert "tracecite_actual_use_valid" in workflow
+    assert "tracecite_actual_use_valid" not in workflow
+    assert "actually use tracecite_search at least once" not in workflow
+    assert "TraceCite tools are available, but you decide whether they are useful" in workflow
 
 
 def test_retired_free_shell_ab_entrypoints_do_not_return() -> None:
