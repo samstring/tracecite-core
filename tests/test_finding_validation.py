@@ -6,6 +6,7 @@ import pytest
 
 from tracecite.runtime.finding_validation import validate_finding
 from tracecite.runtime.investigation import InvestigationError, InvestigationStore
+from tracecite.runtime.test_assessment import assess_test
 
 
 DIGEST = "a" * 64
@@ -41,6 +42,16 @@ def _record_valid_execution(store: InvestigationStore) -> None:
     )
 
 
+def _assess_supported(store: InvestigationStore) -> None:
+    assess_test(
+        store,
+        "T1",
+        "supported",
+        evidence_refs=[EVIDENCE],
+        coverage={"complete": True},
+    )
+
+
 def test_supported_finding_requires_an_executed_test(tmp_path: Path) -> None:
     store = _store(tmp_path)
 
@@ -54,6 +65,7 @@ def test_supported_finding_requires_an_executed_test(tmp_path: Path) -> None:
     assert result.valid is False
     assert result.validated_outcome == "unknown"
     assert "test_not_executed" in result.reasons
+    assert "test_not_assessed" in result.reasons
 
 
 def test_decisive_finding_rejects_non_citable_evidence(tmp_path: Path) -> None:
@@ -127,6 +139,7 @@ def test_explicit_coverage_gap_downgrades_decisive_finding(tmp_path: Path) -> No
 def test_valid_supported_finding_passes_mechanical_validation(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _record_valid_execution(store)
+    _assess_supported(store)
 
     result = validate_finding(
         store,
@@ -140,7 +153,93 @@ def test_valid_supported_finding_passes_mechanical_validation(tmp_path: Path) ->
     assert result.validated_outcome == "supported"
     assert result.reasons == ()
     assert result.test_ids == ("T1",)
-    assert len(result.execution_ids) == 1
+    assert result.test_assessments == {"T1": "supported"}
+    assert len(result.execution_ids) == 2
+
+
+def test_supported_finding_requires_every_declared_test_assessed(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _record_valid_execution(store)
+    _assess_supported(store)
+    store.add_test(
+        "H1",
+        "check competing explanation",
+        expected_observation="competing explanation is absent",
+        contradicting_observation="competing explanation is observed",
+        test_id="T2",
+    )
+
+    result = validate_finding(
+        store,
+        "H1",
+        "supported",
+        supporting_evidence=[EVIDENCE],
+        coverage={"complete": True},
+    )
+
+    assert result.valid is False
+    assert result.validated_outcome == "unknown"
+    assert "test_not_assessed" in result.reasons
+
+
+def test_unknown_test_assessment_blocks_decisive_finding(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _record_valid_execution(store)
+    assess_test(store, "T1", "unknown")
+
+    result = validate_finding(
+        store,
+        "H1",
+        "supported",
+        supporting_evidence=[EVIDENCE],
+        coverage={"complete": True},
+    )
+
+    assert result.valid is False
+    assert result.validated_outcome == "unknown"
+    assert "test_assessment_unknown" in result.reasons
+
+
+def test_contradicting_test_blocks_supported_finding(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _record_valid_execution(store)
+    assess_test(
+        store,
+        "T1",
+        "contradicted",
+        evidence_refs=[EVIDENCE],
+        coverage={"complete": True},
+    )
+
+    result = validate_finding(
+        store,
+        "H1",
+        "supported",
+        supporting_evidence=[EVIDENCE],
+        coverage={"complete": True},
+    )
+
+    assert result.valid is False
+    assert result.validated_outcome == "unknown"
+    assert "test_contradicts_supported_finding" in result.reasons
+
+
+def test_contradicted_finding_requires_contradicting_test_assessment(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _record_valid_execution(store)
+    _assess_supported(store)
+
+    result = validate_finding(
+        store,
+        "H1",
+        "contradicted",
+        contradicting_evidence=[EVIDENCE],
+        coverage={"complete": True},
+    )
+
+    assert result.valid is False
+    assert result.validated_outcome == "unknown"
+    assert "no_contradicting_test_assessment" in result.reasons
 
 
 def test_unknown_is_safe_without_evidence_or_execution(tmp_path: Path) -> None:
@@ -173,6 +272,7 @@ def test_add_finding_rejects_unvalidated_decisive_outcome_without_mutation(tmp_p
 def test_add_finding_accepts_validated_decisive_outcome(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _record_valid_execution(store)
+    _assess_supported(store)
 
     finding = store.add_finding(
         "H1",
