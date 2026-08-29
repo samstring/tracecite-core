@@ -142,7 +142,21 @@ from .agent_api import (
     SourceTarget,
     investigate,
 )
-from .retrieve_contract import retrieve
+from .retrieve_contract import retrieve as _retrieve_contract
+from .retrieval_guidance import prioritize_actionable_retrieval
+
+
+def retrieve(
+    request: EvidenceRequest,
+    *,
+    routing_policy: EvidenceRoutingPolicy | None = None,
+) -> RetrievalResult:
+    """Execute canonical retrieval and prioritize any Runtime-owned Evidence gap action."""
+
+    return prioritize_actionable_retrieval(
+        _retrieve_contract(request, routing_policy=routing_policy)
+    )
+
 
 __all__ = [
     "CAPABILITY_KINDS",
@@ -254,6 +268,7 @@ __all__ = [
     "SourceTarget",
     "investigate",
     "retrieve",
+    "prioritize_actionable_retrieval",
     "probe",
     "probe_format",
     "sample",
