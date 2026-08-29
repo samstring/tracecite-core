@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "kubernetes-139417-scale",
+  "title": "DRA PodGroup scheduling flake leaves a successfully bound Pod marked unscheduled",
+  "source_issue": "https://github.com/kubernetes/kubernetes/issues/139417",
+  "fix_reference": "https://github.com/kubernetes/kubernetes/pull/139602",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "ci-build-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/pr-logs/pull/139129/pull-kubernetes-integration/2061373559082586112/build-log.txt",
+      "filename": "build-log.txt",
+      "sha256": "e98b45b6b3f7b430b7fd54222710a68abda87426ee92f04ed390bc0e20bcd168",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "kubernetes/kubernetes",
+    "public_log": true,
+    "evidence_bytes": 13492765,
+    "scale_bucket": "1-25MiB-medium",
+    "notes": "The Agent sees the original CI build log only. The maintainer-confirmed status-patch race and resourceVersion fix remain evaluator-only truth."
+  }
+}
