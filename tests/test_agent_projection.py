@@ -158,7 +158,7 @@ def test_attach_ambiguity_hints_is_navigation_only() -> None:
     assert projected["evidence"] == payload["evidence"]
 
 
-def test_agent_project_surfaces_scope_fanout_but_full_profile_stays_canonical() -> None:
+def test_agent_project_does_not_invent_scope_fanout() -> None:
     payload = {
         "operation": "expand",
         "status": "ok",
@@ -175,28 +175,34 @@ def test_agent_project_surfaces_scope_fanout_but_full_profile_stays_canonical() 
     agent = project(payload, profile="agent")
     full = project(payload, profile="full")
 
-    assert agent["data"]["ambiguity_hints"][0]["scope"] == "test.device/"
-    assert agent["data"]["ambiguity_hints"][0]["member_count"] == 3
+    assert "ambiguity_hints" not in agent["data"]
     assert "ambiguity_hints" not in full["data"]
     assert "ambiguity_hints" not in payload["data"]
 
 
-def test_ambiguity_projection_requires_real_fanout_not_two_siblings() -> None:
+def test_agent_project_preserves_runtime_integrity_observation() -> None:
     payload = {
         "operation": "expand",
         "status": "ok",
+        "missing_evidence": [
+            {
+                "kind": "scope_uniqueness_unverified",
+                "actionable": True,
+                "identifier_value": "device-a",
+            }
+        ],
         "data": {
-            "text": (
-                "1: resource.example/widget-1001\n"
-                "2: resource.example/widget-1002\n"
-            )
+            "evidence_integrity": {
+                "scoped_identity": [{"source": "runtime.log", "identity_verification": []}]
+            }
         },
-        "evidence": [{"source_path": "/tmp/runtime.log", "start_line": 1, "end_line": 2}],
+        "evidence": [],
     }
 
     agent = project(payload, profile="agent")
 
-    assert "ambiguity_hints" not in agent["data"]
+    assert agent["missing_evidence"] == payload["missing_evidence"]
+    assert agent["data"]["evidence_integrity"] == payload["data"]["evidence_integrity"]
 
 
 def test_apply_survey_brief_strips_template_text() -> None:
