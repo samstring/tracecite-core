@@ -8,7 +8,7 @@ from typing import Any, Mapping
 from tracecite_core.state_file import state_lock
 
 from .agent_api import EvidenceRequest, RangeTarget, RetrievalResult
-from .evidence_identity import file_source_version, pointer_source_key
+from .evidence_identity import SourceVersion, file_source_version, pointer_source_key
 from .evidence_progress import EvidenceProgressTracker, StopReason
 from .evidence_routing import EvidenceRoutingPolicy
 from .provider_identity import namespace_provider_request
@@ -113,25 +113,101 @@ def _filter_numbered_text(text: str, ranges: tuple[tuple[int, int], ...]) -> str
     return "\n".join(kept) + ("\n" if kept else "")
 
 
-def _already_covered_range(
+def _new_generation(path: Path, *, stat: Any, revision: int) -> str:
+    raw = (
+        f"{path}|{int(stat.st_dev)}|{int(stat.st_ino)}|{int(stat.st_size)}|"
+        f"{int(stat.st_mtime_ns)}|{revision}"
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _observe_append_source(
+    path: Path,
+    state: RetrievalSessionState,
+) -> tuple[str, dict[str, Any], bool]:
+    """Return a stable generation for an unchanged or append-grown local file.
+
+    A generation is preserved only when the same filesystem object is observed
+    with non-decreasing size. Inode replacement, truncation, or same-size
+    modification creates a new generation. This is mechanical source lifecycle
+    bookkeeping; it does not infer anything about the evidence semantics.
+    """
+
+    resolved = path.expanduser().resolve()
+    stat = resolved.stat()
+    source = str(resolved)
+    previous = state.source_observations.get(source)
+    append_compatible = False
+    generation = ""
+    if isinstance(previous, Mapping):
+        same_object = (
+            int(previous.get("device") or 0) == int(stat.st_dev)
+            and int(previous.get("inode") or 0) == int(stat.st_ino)
+        )
+        previous_size = int(previous.get("size") or 0)
+        previous_mtime = int(previous.get("mtime_ns") or 0)
+        append_compatible = bool(
+            same_object
+            and int(stat.st_size) >= previous_size
+            and (
+                int(stat.st_size) > previous_size
+                or int(stat.st_mtime_ns) == previous_mtime
+            )
+        )
+        if append_compatible:
+            generation = str(previous.get("generation") or "").strip()
+    if not generation:
+        generation = _new_generation(resolved, stat=stat, revision=state.revision)
+    observation = {
+        "generation": generation,
+        "device": int(stat.st_dev),
+        "inode": int(stat.st_ino),
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+    source_key = SourceVersion(
+        namespace="file",
+        source=source,
+        kind="generation",
+        value=generation,
+    ).key
+    return source_key, observation, append_compatible
+
+
+def _range_source_identity(
     request: EvidenceRequest,
-    tracker: EvidenceProgressTracker,
-) -> tuple[str, int, int] | None:
+    state: RetrievalSessionState,
+) -> tuple[str, dict[str, Any] | None] | None:
     target = request.target
-    if not isinstance(target, RangeTarget) or not target.expected_sha256:
+    if not isinstance(target, RangeTarget):
         return None
     path = Path(target.source).expanduser().resolve()
     if not path.is_file():
         return None
-    expected = str(target.expected_sha256).strip().lower()
-    if _sha256(path).lower() != expected:
+    if target.expected_sha256:
+        expected = str(target.expected_sha256).strip().lower()
+        if _sha256(path).lower() != expected:
+            return None
+        return file_source_version(str(path), expected).key, None
+    source_key, observation, _ = _observe_append_source(path, state)
+    return source_key, observation
+
+
+def _already_covered_range(
+    request: EvidenceRequest,
+    tracker: EvidenceProgressTracker,
+    state: RetrievalSessionState,
+) -> tuple[str, int, int, dict[str, Any] | None] | None:
+    target = request.target
+    identity = _range_source_identity(request, state)
+    if not isinstance(target, RangeTarget) or identity is None:
         return None
+    source_key, observation = identity
     selected_end = target.end_line or target.start_line
     start = max(1, target.start_line - max(0, target.before))
     end = selected_end + max(0, target.after)
-    source_key = file_source_version(str(path), expected).key
     if tracker.range_is_covered(source_key, start, end):
-        return source_key, start, end
+        return source_key, start, end, observation
     return None
 
 
@@ -141,6 +217,7 @@ def _commit_observation(
     evidence: tuple[Mapping[str, Any], ...],
     relation_ids: tuple[str, ...],
     source_key: str | None,
+    source_observation: tuple[str, Mapping[str, Any]] | None,
     line_ranges: tuple[tuple[int, int], ...],
 ) -> tuple[
     EvidenceProgressTracker,
@@ -150,13 +227,7 @@ def _commit_observation(
     tuple[str, ...],
     tuple[tuple[int, int], ...],
 ]:
-    """Atomically merge one retrieval result with the latest session state.
-
-    Pi and other Agents may issue multiple tool calls in one model turn.  The
-    complete read/compare/advance/write sequence therefore has to be serialized;
-    atomic file replacement alone is not enough because two processes can both
-    load the same old revision and then overwrite each other's observations.
-    """
+    """Atomically merge one retrieval result with the latest session state."""
 
     with state_lock(store.path):
         state = store.load()
@@ -187,7 +258,7 @@ def _commit_observation(
             new_relations=len(new_relation_ids),
         )
 
-        if evidence_ids or relation_ids or line_ranges:
+        if evidence_ids or relation_ids or line_ranges or source_observation:
             evidence_limit = max(
                 DEFAULT_MAX_SEEN_EVIDENCE,
                 len(state.seen_evidence) + len(evidence_ids) + 1,
@@ -196,10 +267,14 @@ def _commit_observation(
                 DEFAULT_MAX_SEEN_RELATIONS,
                 len(state.seen_relations) + len(relation_ids) + 1,
             )
+            observations = None
+            if source_observation is not None:
+                observations = {source_observation[0]: source_observation[1]}
             next_state, _ = state.advance(
                 evidence=evidence_ids,
                 relations=relation_ids,
                 covered_ranges={source_key: line_ranges} if source_key and line_ranges else None,
+                source_observations=observations,
                 max_seen_evidence=evidence_limit,
                 max_seen_relations=relation_limit,
             )
@@ -214,16 +289,7 @@ def retrieve_with_session(
     *,
     routing_policy: EvidenceRoutingPolicy | None = None,
 ) -> RetrievalResult:
-    """Execute canonical retrieval with independent mechanical session memory.
-
-    This API is for ordinary Agent/MCP retrieval that needs novelty and covered
-    range memory but does not need an InvestigationState. It intentionally owns
-    no hypotheses, Tests, Findings, causal conclusions, or audit decisions.
-
-    Investigation-linked requests keep using ``runtime.retrieve`` so audit and
-    budget semantics remain unchanged. A request cannot use both state owners at
-    once.
-    """
+    """Execute canonical retrieval with independent mechanical session memory."""
 
     if not isinstance(request, EvidenceRequest):
         raise TypeError("retrieve_with_session requires EvidenceRequest")
@@ -234,19 +300,24 @@ def retrieve_with_session(
     if request.hypothesis_id is not None or request.test_id is not None:
         raise ValueError("hypothesis_id/test_id require InvestigationState")
 
-    # The preflight is advisory only.  Concurrent calls may still both pass it;
-    # final novelty is recomputed atomically after retrieval in _commit_observation.
     with state_lock(session.path):
         state = session.load()
         tracker = _restore_tracker(state)
-        covered = _already_covered_range(request, tracker)
+        covered = _already_covered_range(request, tracker, state)
     if covered is not None:
-        source_key, _start, _end = covered
+        source_key, _start, _end, observation = covered
         readiness = tracker.observe(source=source_key)
+        if observation is not None:
+            with state_lock(session.path):
+                latest = session.load()
+                next_state, _ = latest.advance(
+                    source_observations={str(Path(request.target.source).expanduser().resolve()): observation}
+                )
+                session.save(next_state)
         stop = StopReason(
             "no_new_evidence",
             scope={"source_version": source_key},
-            basis=("immutable_source_identity", "requested_context_already_covered"),
+            basis=("source_generation", "requested_context_already_covered"),
         )
         return RetrievalResult(
             operation="expand",
@@ -257,7 +328,11 @@ def retrieve_with_session(
                 "outcome": "not_assessed",
                 "evidence": [],
                 "coverage": {},
-                "data": {"new_text": "", "unseen_ranges": []},
+                "data": {
+                    "new_text": "",
+                    "unseen_ranges": [],
+                    "source_version": source_key,
+                },
             },
             progress=readiness,
             stop_reason=stop,
@@ -276,6 +351,7 @@ def retrieve_with_session(
     relation_ids = _relation_ids(canonical)
 
     source_key: str | None = None
+    source_observation: tuple[str, Mapping[str, Any]] | None = None
     line_ranges: tuple[tuple[int, int], ...] = ()
     coverage = canonical.get("coverage") or {}
     truncated = (
@@ -284,10 +360,19 @@ def retrieve_with_session(
         else False
     )
     if isinstance(request.target, RangeTarget) and evidence:
-        source_key = pointer_source_key(evidence[0])
-        # Track what was actually delivered, including a truncated expand.  The
-        # visible numbered lines are safer than assuming the requested range was
-        # completely materialized.
+        if request.target.expected_sha256:
+            source_key = pointer_source_key(evidence[0])
+        else:
+            with state_lock(session.path):
+                latest = session.load()
+                identity = _range_source_identity(request, latest)
+            if identity is not None:
+                source_key, observation = identity
+                if observation is not None:
+                    source_observation = (
+                        str(Path(request.target.source).expanduser().resolve()),
+                        observation,
+                    )
         line_ranges = _visible_line_ranges(canonical)
 
     (
@@ -302,6 +387,7 @@ def retrieve_with_session(
         evidence=evidence,
         relation_ids=relation_ids,
         source_key=source_key,
+        source_observation=source_observation,
         line_ranges=line_ranges,
     )
 
@@ -311,6 +397,8 @@ def retrieve_with_session(
         data["new_text"] = _filter_numbered_text(full_text, unseen_ranges)
         data["unseen_ranges"] = [[start, end] for start, end in unseen_ranges]
         data["repeated_text_suppressed"] = bool(full_text and not data["new_text"])
+        if source_key:
+            data["source_version"] = source_key
         canonical["data"] = data
 
     status = base.status
@@ -331,9 +419,6 @@ def retrieve_with_session(
         status=status,
         canonical_result=canonical,
         progress=readiness,
-        # Even when the underlying search is truncated, rows already delivered
-        # in this session remain repeated.  Truncation says unseen results may
-        # exist beyond the projection; it is not a reason to resend known rows.
         new_evidence=new_rows,
         repeated_evidence=repeated,
         stop_reason=stop,
