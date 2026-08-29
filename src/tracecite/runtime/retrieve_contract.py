@@ -1,24 +1,24 @@
 """Public adaptive retrieve contract over the canonical Agent API.
 
-The low-level Agent API remains deterministic and target-specific.  This public
-wrapper adds product semantics without changing upper-layer request types:
+The low-level Agent API remains deterministic and target-specific. This wrapper
+owns product retrieval semantics:
 
-1. pointer novelty and line-coverage novelty stay distinct for RangeTarget;
-2. evidence transport defaults to adaptive DIRECT -> BOUNDED -> INVESTIGATE;
-3. DIRECT preserves lossless line-addressable source context for an unseen
-   source instead of forcing the Agent to reason from selected labels alone;
-4. truncated bounded searches retain a tiny high-signal navigation side channel
-   so a late panic/fatal/critical record cannot disappear merely because the
-   normal first-N evidence transport budget filled earlier in the source.
+1. adaptive DIRECT -> BOUNDED -> INVESTIGATE transport;
+2. fidelity-first DIRECT raw access for small unseen sources;
+3. bounded structured-context recovery for search results;
+4. mechanical evidence-integrity observations and actionable evidence gaps;
+5. bounded high-signal navigation for truncated searches.
 
-Routing and selection are transport mechanisms only.  They must not infer or
-rank a root cause.
+Runtime owns retrieval/materialization/integrity. Integration projections must
+not reopen source files or discover new Evidence. None of these mechanisms may
+infer or rank a root cause.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 from tracecite_core.run import RunIntegrityError
 
@@ -35,7 +35,8 @@ from .agent_api import (
     _sha256,
     retrieve as _retrieve,
 )
-from .evidence_ambiguity import verify_scoped_identity_gaps
+from .evidence_ambiguity import scoped_identity_fanout_hints, verify_scoped_identity_gaps
+from .evidence_fidelity import enrich_search_leaf_context
 from .evidence_identity import file_source_version
 from .evidence_routing import (
     EvidenceRoute,
@@ -46,6 +47,9 @@ from .evidence_routing import (
 )
 from .evidence_selection import select_signal_hints
 from .investigation import InvestigationStore
+
+
+_TRANSPORT_ONLY_OPERATIONS = frozenset({"probe", "search", "expand", "survey", "retrieve"})
 
 
 def _history(request: EvidenceRequest) -> tuple[Mapping[str, object], ...]:
@@ -79,6 +83,11 @@ def _decision(request: EvidenceRequest, policy: EvidenceRoutingPolicy) -> Routin
 
 def _with_routing(result: RetrievalResult, decision: RoutingDecision) -> RetrievalResult:
     canonical = dict(result.canonical_result)
+    if result.operation in _TRANSPORT_ONLY_OPERATIONS:
+        # Retrieval success means evidence was matched/materialized, not that a
+        # hypothesis was epistemically supported. Proposition-level APIs own
+        # supported/contradicted outcomes.
+        canonical["outcome"] = "not_assessed"
     data = dict(canonical.get("data") or {})
     data["routing"] = decision.to_dict()
     canonical["data"] = data
@@ -90,6 +99,53 @@ def _with_routing(result: RetrievalResult, decision: RoutingDecision) -> Retriev
         new_evidence=result.new_evidence,
         repeated_evidence=result.repeated_evidence,
         stop_reason=result.stop_reason,
+    )
+
+
+def _replace_canonical(
+    result: RetrievalResult,
+    canonical: Mapping[str, Any],
+    *,
+    new_evidence: tuple[Mapping[str, Any], ...] | None = None,
+) -> RetrievalResult:
+    return RetrievalResult(
+        operation=result.operation,
+        status=result.status,
+        canonical_result=canonical,
+        progress=result.progress,
+        new_evidence=result.new_evidence if new_evidence is None else new_evidence,
+        repeated_evidence=result.repeated_evidence,
+        stop_reason=result.stop_reason,
+    )
+
+
+def _with_actionable_gap_progress(result: RetrievalResult) -> RetrievalResult:
+    gaps = [
+        item
+        for item in result.canonical_result.get("missing_evidence") or []
+        if isinstance(item, Mapping) and item.get("actionable") is True
+    ]
+    if not gaps or result.progress.actionable_gaps >= len(gaps):
+        return result
+
+    progress = replace(
+        result.progress,
+        actionable_gaps=len(gaps),
+        ready_for_reasoning=(
+            False if result.progress.ready_for_reasoning is True else result.progress.ready_for_reasoning
+        ),
+        stop_recommended=False,
+        stop_reason="actionable_evidence_gap",
+        stop=None,
+    )
+    return RetrievalResult(
+        operation=result.operation,
+        status=result.status,
+        canonical_result=result.canonical_result,
+        progress=progress,
+        new_evidence=result.new_evidence,
+        repeated_evidence=result.repeated_evidence,
+        stop_reason=None,
     )
 
 
@@ -187,14 +243,7 @@ def _direct_query(
     decision: RoutingDecision,
     policy: EvidenceRoutingPolicy,
 ) -> RetrievalResult:
-    """Preserve exact source context for a safe one-time DIRECT query.
-
-    Search still produces canonical EvidencePointers and Coverage.  DIRECT adds
-    the stable raw source view beside those pointers so the Agent is not forced
-    to reconstruct a simple incident from selected labels or summaries.  This
-    is intentionally limited to sources whose aggregate raw representation fit
-    the router's direct budget.
-    """
+    """Preserve exact source context for a safe one-time DIRECT query."""
 
     assert isinstance(request.target, QueryTarget)
     path = Path(request.target.source).expanduser().resolve()
@@ -234,15 +283,7 @@ def _direct_query(
     coverage["direct_raw_lines"] = last_seen
     coverage["direct_raw_chars"] = len(text)
     canonical["coverage"] = coverage
-    resolved = RetrievalResult(
-        operation=result.operation,
-        status=result.status,
-        canonical_result=canonical,
-        progress=result.progress,
-        new_evidence=result.new_evidence,
-        repeated_evidence=result.repeated_evidence,
-        stop_reason=result.stop_reason,
-    )
+    resolved = _replace_canonical(result, canonical)
     decision = refine_route_after_result(decision, canonical, policy=policy)
     return _with_routing(resolved, decision)
 
@@ -328,6 +369,33 @@ def _matched_records_path(result: Mapping[str, object]) -> Path | None:
     return None
 
 
+def _attach_search_fidelity(
+    result: RetrievalResult,
+    request: EvidenceRequest,
+) -> RetrievalResult:
+    """Materialize tiny structured neighborhoods inside canonical search output."""
+
+    if not isinstance(request.target, QueryTarget):
+        return result
+    if str(result.canonical_result.get("status") or "").lower() in {"error", "no_match"}:
+        return result
+    enriched = enrich_search_leaf_context(result.canonical_result)
+    if enriched == result.canonical_result:
+        return result
+
+    enriched_by_uri = {
+        str(item.get("uri") or ""): dict(item)
+        for item in enriched.get("evidence") or []
+        if isinstance(item, Mapping) and item.get("uri")
+    }
+    new_rows: list[Mapping[str, Any]] = []
+    for item in result.new_evidence:
+        uri = str(item.get("uri") or "")
+        new_rows.append(enriched_by_uri.get(uri, dict(item)))
+    resolved = _replace_canonical(result, enriched, new_evidence=tuple(new_rows))
+    return _with_actionable_gap_progress(resolved)
+
+
 def _attach_signal_hints(
     result: RetrievalResult,
     request: EvidenceRequest,
@@ -335,10 +403,9 @@ def _attach_signal_hints(
 ) -> RetrievalResult:
     """Attach bounded high-signal navigation hints to a truncated search.
 
-    Hints deliberately stay out of ``evidence`` / ``new_evidence``.  They are
-    line-addressable candidates discovered from the complete matched-record
-    artifact; the upper Agent must call RangeTarget/get before citing them or
-    counting them as covered Evidence.
+    Hints stay out of Evidence/new_evidence. They are line-addressable
+    candidates only; callers must materialize the referenced range before
+    treating them as covered Evidence.
     """
 
     if not isinstance(request.target, QueryTarget):
@@ -394,19 +461,13 @@ def _attach_signal_hints(
 
     data = dict(canonical.get("data") or {})
     data["signal_hints"] = retained
-    data["signal_hint_note"] = "Truncated-search high-signal candidates; call get on the referenced line before citing."
+    data["signal_hint_note"] = (
+        "Truncated-search high-signal candidates; materialize the referenced line before citing."
+    )
     canonical["data"] = data
     coverage["signal_hints_returned"] = len(retained)
     canonical["coverage"] = coverage
-    return RetrievalResult(
-        operation=result.operation,
-        status=result.status,
-        canonical_result=canonical,
-        progress=result.progress,
-        new_evidence=result.new_evidence,
-        repeated_evidence=result.repeated_evidence,
-        stop_reason=result.stop_reason,
-    )
+    return _replace_canonical(result, canonical)
 
 
 def _correct_range_novelty(result: RetrievalResult, request: EvidenceRequest) -> RetrievalResult:
@@ -434,22 +495,58 @@ def _correct_range_novelty(result: RetrievalResult, request: EvidenceRequest) ->
     )
 
 
+def _append_gap(
+    canonical: dict[str, Any],
+    *,
+    identifier_key: str,
+    identifier_value: str,
+    source: str,
+) -> None:
+    rows = [
+        dict(item)
+        for item in canonical.get("missing_evidence") or []
+        if isinstance(item, Mapping)
+    ]
+    identity = ("scope_uniqueness_unverified", identifier_key, identifier_value, source)
+    for item in rows:
+        current = (
+            str(item.get("kind") or ""),
+            str(item.get("identifier_key") or ""),
+            str(item.get("identifier_value") or ""),
+            str(item.get("source") or ""),
+        )
+        if current == identity:
+            return
+    rows.append(
+        {
+            "kind": "scope_uniqueness_unverified",
+            "detail": (
+                f"{identifier_key}={identifier_value} is visible inside a scoped entity, "
+                "but uniqueness across the relevant identity domain remains unverified."
+            ),
+            "actionable": True,
+            "identifier_key": identifier_key,
+            "identifier_value": identifier_value,
+            "source": source,
+            "recommended_action": {
+                "operation": "search",
+                "query": identifier_value,
+                "purpose": "verify_identifier_uniqueness_across_scopes",
+            },
+        }
+    )
+    canonical["missing_evidence"] = rows
+    next_queries = [str(item) for item in canonical.get("next_queries") or [] if str(item).strip()]
+    if identifier_value not in next_queries:
+        next_queries.append(identifier_value)
+    canonical["next_queries"] = next_queries
+
+
 def _attach_identity_verification(
     result: RetrievalResult,
     request: EvidenceRequest,
 ) -> RetrievalResult:
-    """Close a visible scoped-ID evidence gap within the same Range retrieval.
-
-    A range expansion can discover a local-looking identifier only on the
-    Agent's last available tool round.  Requiring another Agent call would make
-    evidence correctness depend on round budget.  Instead, Core performs the
-    smallest deterministic verification itself: scan the same stable source
-    for that already-visible identifier and return only bounded scoped-entity
-    associations with exact line references.
-
-    This is evidence correlation/integrity work, not diagnosis.  The result
-    never ranks a hypothesis or declares a root cause.
-    """
+    """Attach canonical scoped-ID integrity observations to a Range retrieval."""
 
     if not isinstance(request.target, RangeTarget):
         return result
@@ -461,6 +558,7 @@ def _attach_identity_verification(
     if not isinstance(text, str) or not text:
         return result
 
+    hints = scoped_identity_fanout_hints(text)
     expected = str(request.target.expected_sha256 or "").strip().lower()
     if not expected:
         for item in canonical.get("evidence") or []:
@@ -477,27 +575,57 @@ def _attach_identity_verification(
             expected_sha256=expected or None,
         )
     except (OSError, ValueError):
-        # Source instability or an un-verifiable pattern must never be converted
-        # into a confident identity statement.  Keep the original evidence view.
-        return result
-    if not verification:
+        verification = []
+    if not hints and not verification:
         return result
 
-    data["identity_verification"] = verification
-    data["identity_verification_note"] = (
-        "Mechanical evidence-correlation check only. If one identifier value is observed under multiple scoped entities, "
-        "do not correlate by that identifier alone; preserve the relevant entity/scope. This does not identify a root cause."
+    source_name = Path(request.target.source).name
+    integrity = dict(data.get("evidence_integrity") or {})
+    integrity["scoped_identity"] = [
+        {
+            "source": source_name,
+            "scoped_identity_hints": hints,
+            "identity_verification": verification,
+        }
+    ]
+    integrity["note"] = (
+        "Evidence-integrity navigation only. Scoped identity observations constrain "
+        "correlation; they do not identify a root cause."
     )
+    data["evidence_integrity"] = integrity
     canonical["data"] = data
-    return RetrievalResult(
-        operation=result.operation,
-        status=result.status,
-        canonical_result=canonical,
-        progress=result.progress,
-        new_evidence=result.new_evidence,
-        repeated_evidence=result.repeated_evidence,
-        stop_reason=result.stop_reason,
-    )
+
+    verified_keys: set[tuple[str, str]] = set()
+    for item in verification:
+        key = str(item.get("identifier_key") or "").strip()
+        value = str(item.get("identifier_value") or "").strip()
+        if not key or not value:
+            continue
+        verified_keys.add((key.lower(), value))
+        if str(item.get("status") or "") != "multiple_scoped_entities_observed":
+            _append_gap(
+                canonical,
+                identifier_key=key,
+                identifier_value=value,
+                source=source_name,
+            )
+
+    for hint in hints:
+        if hint.get("kind") != "scope_uniqueness_unverified":
+            continue
+        key = str(hint.get("identifier_key") or "").strip()
+        value = str(hint.get("identifier_value") or "").strip()
+        if not key or not value or (key.lower(), value) in verified_keys:
+            continue
+        _append_gap(
+            canonical,
+            identifier_key=key,
+            identifier_value=value,
+            source=source_name,
+        )
+
+    resolved = _replace_canonical(result, canonical)
+    return _with_actionable_gap_progress(resolved)
 
 
 def retrieve(
@@ -528,6 +656,7 @@ def retrieve(
     if isinstance(request.target, QueryTarget):
         routed_request = _bounded_query(request, policy, route=decision.route)
     result = _correct_range_novelty(_retrieve(routed_request), routed_request)
+    result = _attach_search_fidelity(result, routed_request)
     result = _attach_identity_verification(result, routed_request)
     result = _attach_signal_hints(result, routed_request, policy)
     decision = refine_route_after_result(decision, result.canonical_result, policy=policy)
