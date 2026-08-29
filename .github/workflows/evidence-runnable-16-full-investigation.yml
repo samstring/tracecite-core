@@ -1,0 +1,284 @@
+name: Runnable 16 Full TraceCite Investigation A/B
+# Full Investigation E2E gate. This is intentionally distinct from the canonical
+# runtime-only A/B workflow: TraceCite must execute the investigation protocol.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/evidence-runnable-16-full-investigation.yml
+      - benchmarks/agent-investigation/gmi_investigation_host.py
+      - benchmarks/agent-investigation/run_paired_bounded_retry.py
+      - benchmarks/agent-investigation/run_paired_retry.py
+      - benchmarks/agent-investigation/gmi_canonical_host.py
+      - benchmarks/agent-investigation/aggregate_runnable_pairs.py
+      - src/tracecite/runtime/**
+      - src/tracecite/integrations/**
+      - tests/test_gmi_investigation_host.py
+      - tests/test_run_paired_bounded_retry.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evidence-runnable-16-full-investigation
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install TraceCite
+        run: python -m pip install -e ".[dev]"
+      - name: Validate full-investigation host and bounded retry policy
+        run: |
+          python -m pytest -q \
+            tests/test_gmi_investigation_host.py \
+            tests/test_run_paired_bounded_retry.py \
+            tests/test_gmi_canonical_host.py
+
+  paired:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        case:
+          - id: doublecmd-2264
+            dir: benchmarks/agent-investigation/cases/doublecmd-2264
+            scorer: legacy
+          - id: doublecmd-2616
+            dir: benchmarks/agent-investigation/cases/doublecmd-2616
+            scorer: legacy
+          - id: doublecmd-2731
+            dir: benchmarks/agent-investigation/cases/doublecmd-2731
+            scorer: legacy
+          - id: doublecmd-2772
+            dir: benchmarks/agent-investigation/cases/doublecmd-2772
+            scorer: legacy
+          - id: doublecmd-2777
+            dir: benchmarks/agent-investigation/cases/doublecmd-2777
+            scorer: legacy
+          - id: doublecmd-2809
+            dir: benchmarks/agent-investigation/cases/doublecmd-2809
+            scorer: legacy
+          - id: doublecmd-2815
+            dir: benchmarks/agent-investigation/cases/doublecmd-2815
+            scorer: legacy
+          - id: doublecmd-3061
+            dir: benchmarks/agent-investigation/cases/doublecmd-3061
+            scorer: legacy
+          - id: flutter-179398
+            dir: benchmarks/agent-investigation/cases/flutter-179398
+            scorer: legacy
+          - id: mobile-payment-runtime-evidence
+            dir: benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence
+            scorer: legacy
+          - id: prometheus-18018
+            dir: benchmarks/agent-investigation/cases/prometheus-18018
+            scorer: legacy
+          - id: pulumi-20529
+            dir: benchmarks/agent-investigation/cases/pulumi-20529
+            scorer: legacy
+          - id: kubernetes-140039-runc-5347-scale
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347
+            scorer: root
+          - id: kubernetes-140268-scale
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140268
+            scorer: root
+          - id: kubernetes-140628-scale
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140628
+            scorer: root
+          - id: kubernetes-140848-scale
+            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140848
+            scorer: root
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      TRACECITE_BENCH_MAX_OUTPUT_TOKENS: "1800"
+      TRACECITE_BENCH_MAX_ROUNDS: "20"
+      TRACECITE_BENCH_NO_GROWTH_ROUNDS: "2"
+      TRACECITE_BENCH_PROVIDER_MAX_ATTEMPTS: "2"
+      TRACECITE_BENCH_PROVIDER_BACKOFF_SECONDS: "20"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install TraceCite
+        run: python -m pip install -e ".[dev]"
+      - name: Install and verify ripgrep
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ripgrep
+          fi
+          rg --version
+      - name: Prepare immutable evidence once for the pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="/tmp/full-investigation-16-${{ matrix.case.id }}"
+          PREP="$ROOT/prepared"
+          RESULT="$ROOT/result"
+          rm -rf "$ROOT"
+          mkdir -p "$PREP" "$RESULT"
+          python -m tracecite.benchmarking validate "${{ matrix.case.dir }}" > "$RESULT/validate.json"
+          python -m tracecite.benchmarking prepare "${{ matrix.case.dir }}" \
+            --work-dir "$PREP" > "$RESULT/prepare.json"
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          echo "PAIR_RESULT=$RESULT" >> "$GITHUB_ENV"
+          echo "PREPARED=$PREPARED" >> "$GITHUB_ENV"
+      - name: Run full TraceCite investigation first, then free-shell baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python benchmarks/agent-investigation/run_paired_bounded_retry.py \
+            "${{ matrix.case.dir }}" "$PREPARED" \
+            --case-id "${{ matrix.case.id }}" \
+            --scorer "${{ matrix.case.scorer }}" \
+            --model "$BENCH_MODEL" \
+            --result-dir "$PAIR_RESULT" \
+            --host-script benchmarks/agent-investigation/gmi_investigation_host.py \
+            --retry-delay-seconds 120 \
+            --max-provider-attempts 2 \
+            --timeout-seconds 900
+      - name: Upload paired case result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-investigation-16-${{ matrix.case.id }}
+          path: /tmp/full-investigation-16-${{ matrix.case.id }}/result
+          if-no-files-found: warn
+
+  aggregate:
+    needs: paired
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: full-investigation-16-*
+          path: /tmp/full-investigation-16-all
+      - name: Enforce actual TraceCite investigation protocol
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('/tmp/full-investigation-16-all')
+          transcripts = sorted(root.rglob('tracecite/transcript.jsonl'))
+          if len(transcripts) != 16:
+              raise SystemExit(f'expected 16 TraceCite transcripts, got {len(transcripts)}')
+
+          required = {
+              'tracecite_probe',
+              'tracecite_hypothesis',
+              'tracecite_test',
+              'tracecite_search',
+              'tracecite_expand',
+              'tracecite_finding',
+              'tracecite_investigation_stop',
+          }
+          violations = []
+          for transcript in transcripts:
+              tools = []
+              for line in transcript.read_text(encoding='utf-8', errors='replace').splitlines():
+                  try:
+                      event = json.loads(line)
+                  except json.JSONDecodeError:
+                      continue
+                  if event.get('type') == 'tool':
+                      tools.append(str(event.get('tool') or ''))
+              missing = sorted(required - set(tools))
+              evidence_ops = [
+                  name for name in tools
+                  if name in {'tracecite_probe','tracecite_sample','tracecite_survey','tracecite_search','tracecite_expand'}
+              ]
+              probe_first = bool(evidence_ops) and evidence_ops[0] == 'tracecite_probe'
+              if missing or not probe_first:
+                  violations.append(
+                      {
+                          'transcript': str(transcript),
+                          'missing': missing,
+                          'probe_first': probe_first,
+                          'tools': tools,
+                      }
+                  )
+          if violations:
+              raise SystemExit(
+                  'full TraceCite investigation protocol was not actually executed: '
+                  + json.dumps(violations, ensure_ascii=False, sort_keys=True)
+              )
+          print('All 16 TraceCite arms executed probe/hypothesis/test/search/expand/finding/stop.')
+          PY
+      - name: Aggregate all 16 A/B pairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python benchmarks/agent-investigation/aggregate_runnable_pairs.py \
+            /tmp/full-investigation-16-all \
+            --output /tmp/full-investigation-16-summary/summary.json
+      - name: Verify all outcomes and reject residual provider transients
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          summary = json.loads(Path('/tmp/full-investigation-16-summary/summary.json').read_text())
+          observed = summary.get('observed_outcomes')
+          if observed != 32:
+              raise SystemExit(f'expected 32 outcomes, got {observed}')
+          transient = []
+          for row in summary.get('comparisons', []):
+              for side in ('free_shell', 'tracecite'):
+                  reason = row.get(f'{side}_failure_reason')
+                  if reason in {'provider_rate_limited', 'provider_unavailable'}:
+                      transient.append((row.get('case_id'), side, reason))
+          if transient:
+              raise SystemExit(
+                  'provider remained rate-limited/unavailable after bounded retry budget; '
+                  'classify this run as infrastructure-invalid instead of retrying forever: '
+                  + repr(transient)
+              )
+          print('All 32 outcomes produced; no retryable provider failure remains.')
+          PY
+      - name: Enforce TraceCite no-harm correctness gate
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          summary = json.loads(Path('/tmp/full-investigation-16-summary/summary.json').read_text())
+          regressions = summary.get('no_harm_regressions') or []
+          if regressions:
+              raise SystemExit(
+                  'TraceCite no-harm regression: free_shell passed but TraceCite did not: '
+                  + json.dumps(regressions, ensure_ascii=False, sort_keys=True)
+              )
+          print('No-harm gate passed: TraceCite did not turn any free_shell pass into a failure.')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-investigation-16-summary
+          path: /tmp/full-investigation-16-summary/summary.json
+          if-no-files-found: warn
