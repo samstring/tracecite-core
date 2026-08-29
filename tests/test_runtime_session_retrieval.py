@@ -55,6 +55,31 @@ def test_standalone_session_hard_stops_repeated_immutable_range(tmp_path: Path) 
     assert "requested_context_already_covered" in second.stop_reason.basis
 
 
+def test_standalone_session_persists_structural_relation_novelty(tmp_path: Path) -> None:
+    source = tmp_path / "runtime.log"
+    source.write_text(
+        "- name: resource-a\n"
+        "resources:\n"
+        "resourceID: device-a\n"
+        "done\n",
+        encoding="utf-8",
+    )
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    store = _store(tmp_path)
+
+    result = retrieve_with_session(
+        EvidenceRequest(RangeTarget(source, 2, before=1, after=1, expected_sha256=digest)),
+        store,
+    )
+
+    assert result.status == "ok"
+    assert result.progress is not None
+    assert result.progress.delta.new_relations >= 1
+    assert store.load().seen_relations
+    data = result.canonical_result["data"]
+    assert data["observed_relations"][0]["relation_id"].startswith("rel:")
+
+
 def test_standalone_session_rejects_investigation_owned_request(tmp_path: Path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("ERROR timeout\n", encoding="utf-8")
