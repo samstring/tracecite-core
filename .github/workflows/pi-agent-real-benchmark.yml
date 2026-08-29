@@ -29,6 +29,8 @@ jobs:
       CASE_DIR: benchmarks/agent-investigation/scale-cases/kubernetes-140268
       RESULT: /tmp/pi-real-kubernetes-140268
       PREP: /tmp/pi-real-kubernetes-140268/prepared
+      COMMON_SYSTEM_PROMPT: >-
+        You are a real coding agent investigating one supplied CI log. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, investigation order, and the final conclusion. Use the tools available to you as needed and keep exploration bounded. Every material factual claim in the final answer must cite exact line numbers you actually observed, preferably as build-log.txt:L123. Distinguish direct observation from inference. Finish with a concise answer containing only the requested conclusions and evidence, not an internal monologue.
     steps:
       - uses: actions/checkout@v4
 
@@ -132,10 +134,6 @@ jobs:
         run: |
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
-          SYSTEM_PROMPT=$(cat <<'EOF'
-          You are a real coding agent investigating one supplied CI log. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, and the final conclusion. Use native read, grep, find, ls, and bash tools as needed. Keep exploration bounded. Every material factual claim in the final answer must cite exact line numbers you actually observed, preferably as build-log.txt:L123. Distinguish direct observation from inference. Finish with a concise answer containing only the requested conclusions and evidence, not an internal monologue.
-          EOF
-          )
           mkdir -p "$RESULT/pi-baseline-session"
           cd "$INPUT_ROOT"
           set +e
@@ -152,7 +150,7 @@ jobs:
             --no-skills \
             --no-prompt-templates \
             --no-context-files \
-            --system-prompt "$SYSTEM_PROMPT" \
+            --system-prompt "$COMMON_SYSTEM_PROMPT" \
             "$QUESTION" \
             > "$RESULT/pi-baseline-answer.md" 2> "$RESULT/pi-baseline-stderr.log"
           code=$?
@@ -168,10 +166,6 @@ jobs:
         run: |
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
-          SYSTEM_PROMPT=$(cat <<'EOF'
-          You are a real coding agent investigating one supplied CI log. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, and the final conclusion. Native read, grep, find, ls, and bash tools are available. You also have first-class tracecite_search and tracecite_expand tools for deterministic bounded evidence retrieval from large logs. TraceCite is not a reasoner: its results are evidence/navigation with explicit coverage, not root-cause truth. Prefer tracecite_search when native grep would create broad/high-volume context, and tracecite_expand before relying on a decisive compact hit. You may still use native tools when they are better. Keep exploration bounded. Every material factual claim in the final answer must cite exact line numbers you actually observed, preferably as build-log.txt:L123. Distinguish direct observation from inference. Finish with a concise answer containing only the requested conclusions and evidence, not an internal monologue.
-          EOF
-          )
           mkdir -p "$RESULT/pi-tracecite-session"
           cd "$INPUT_ROOT"
           set +e
@@ -188,7 +182,7 @@ jobs:
             --no-skills \
             --no-prompt-templates \
             --no-context-files \
-            --system-prompt "$SYSTEM_PROMPT" \
+            --system-prompt "$COMMON_SYSTEM_PROMPT" \
             "$QUESTION" \
             > "$RESULT/pi-tracecite-answer.md" 2> "$RESULT/pi-tracecite-stderr.log"
           code=$?
