@@ -110,6 +110,49 @@ def test_no_growth_detection_requires_explicit_stop_not_false_fields(tmp_path: P
     assert output.strip() == "ok"
 
 
+def test_action_policy_prioritizes_runtime_owned_gap_closure_once(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "action = {'operation':'search','source':'runtime.log','query':'local-device','purpose':'verify_identifier_uniqueness_across_scopes','gap_kind':'scope_uniqueness_unverified'}\n"
+        "tool_payload = {'status':'ok','data':{'actionable_retrieval':action}}\n"
+        "messages = [\n"
+        " {'role':'system','content':'s'}, {'role':'user','content':'u'},\n"
+        " {'role':'assistant','content':'','tool_calls':[{'id':'1','type':'function','function':{'name':'tracecite_get','arguments':'{\\\"file\\\":\\\"runtime.log\\\",\\\"line\\\":2,\\\"radius\\\":1}'}}]},\n"
+        " {'role':'tool','tool_call_id':'1','content':json.dumps(tool_payload)},\n"
+        "]\n"
+        "request, event = host._apply_action_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
+        "assert event is not None and event['event'] == 'prioritize_actionable_retrieval'\n"
+        "assert event['query'] == 'local-device'\n"
+        "assert request['messages'][-1]['role'] == 'user'\n"
+        "assert 'TRACECITE_ACTION_REQUIRED search|runtime.log|local-device' in request['messages'][-1]['content']\n"
+        "assert 'tracecite_search' in request['messages'][-1]['content']\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
+def test_action_policy_does_not_repeat_action_after_matching_tool_call(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "action = {'operation':'search','source':'runtime.log','query':'local-device','purpose':'verify_identifier_uniqueness_across_scopes','gap_kind':'scope_uniqueness_unverified'}\n"
+        "tool_payload = {'status':'ok','data':{'actionable_retrieval':action}}\n"
+        "messages = [\n"
+        " {'role':'system','content':'s'}, {'role':'user','content':'u'},\n"
+        " {'role':'assistant','content':'','tool_calls':[{'id':'1','type':'function','function':{'name':'tracecite_get','arguments':'{\\\"file\\\":\\\"runtime.log\\\",\\\"line\\\":2,\\\"radius\\\":1}'}}]},\n"
+        " {'role':'tool','tool_call_id':'1','content':json.dumps(tool_payload)},\n"
+        " {'role':'user','content':'TRACECITE_ACTION_REQUIRED search|runtime.log|local-device'},\n"
+        " {'role':'assistant','content':'','tool_calls':[{'id':'2','type':'function','function':{'name':'tracecite_search','arguments':'{\\\"file\\\":\\\"runtime.log\\\",\\\"query\\\":\\\"local-device\\\",\\\"regex\\\":false}'}}]},\n"
+        " {'role':'tool','tool_call_id':'2','content':json.dumps(tool_payload)},\n"
+        "]\n"
+        "assert host._pending_action(messages) is None\n"
+        "request, event = host._apply_action_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
+        "assert event is None\n"
+        "assert len(request['messages']) == len(messages)\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
 def test_stop_policy_forces_final_only_after_two_explicit_no_growth_rounds(tmp_path: Path) -> None:
     output = _run_host_script(
         tmp_path,
