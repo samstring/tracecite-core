@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 
 from tracecite.integrations.agent_projection import project
+from tracecite.runtime import EvidenceRequest, EvidenceRoutingPolicy, QueryTarget, retrieve
 from tracecite.runtime.evidence_fidelity import enrich_search_leaf_context
 
 
@@ -60,7 +61,35 @@ def test_structured_leaf_keeps_bounded_parent_and_sibling_context(tmp_path: Path
     assert payload["evidence"][0]["label"] == "- state: degraded"
 
 
-def test_agent_projection_wires_structured_context_without_changing_full_view(tmp_path: Path) -> None:
+def test_public_retrieve_owns_structured_context_and_identity_gap(tmp_path: Path) -> None:
+    source = tmp_path / "events.log"
+    source.write_text(
+        "name: service.example/worker-1001\nstate: degraded\nlocalID: worker-a\n",
+        encoding="utf-8",
+    )
+
+    result = retrieve(
+        EvidenceRequest(QueryTarget(source, "state: degraded", snapshot=False)),
+        routing_policy=EvidenceRoutingPolicy(mode="bounded"),
+    ).to_dict()
+
+    assert result["outcome"] == "not_assessed"
+    assert "events.log:1 name: service.example/worker-1001" in result["evidence"][0]["label"]
+    assert "events.log:3 localID: worker-a" in result["evidence"][0]["label"]
+    assert result["coverage"]["structured_context_enriched"] == 1
+    assert result["missing_evidence"][0]["kind"] == "scope_uniqueness_unverified"
+    assert result["missing_evidence"][0]["identifier_value"] == "worker-a"
+    assert result["data"]["progress"]["actionable_gaps"] == 1
+    assert result["data"]["progress"]["stop"]["recommended"] is False
+    assert result["data"]["evidence_integrity"]["scoped_identity"]
+
+    agent = project(result, profile="agent")
+    full = project(result, profile="full")
+    assert agent["evidence"][0]["label"] == result["evidence"][0]["label"]
+    assert full == result
+
+
+def test_agent_projection_does_not_discover_structured_context(tmp_path: Path) -> None:
     source = tmp_path / "events.log"
     source.write_text(
         "name: service.example/worker-1001\nstate: degraded\nlocalID: worker-a\n",
@@ -69,12 +98,10 @@ def test_agent_projection_wires_structured_context_without_changing_full_view(tm
     payload = _search_payload(source, label="state: degraded", line=2)
 
     agent = project(payload, profile="agent")
-    full = project(payload, profile="full")
 
-    assert "events.log:1 name: service.example/worker-1001" in agent["evidence"][0]["label"]
-    assert "events.log:3 localID: worker-a" in agent["evidence"][0]["label"]
-    assert full == payload
-    assert full["evidence"][0]["label"] == "state: degraded"
+    assert agent["evidence"][0]["label"] == "state: degraded"
+    assert "structured_context_enriched" not in agent["coverage"]
+    assert "evidence_integrity" not in agent["data"]
 
 
 def test_unstructured_search_hit_is_unchanged(tmp_path: Path) -> None:
