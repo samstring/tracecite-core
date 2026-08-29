@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Any, Mapping
+
+from tracecite_core.state_file import state_lock
 
 from .agent_api import EvidenceRequest, RangeTarget, RetrievalResult
 from .evidence_identity import file_source_version, pointer_source_key
@@ -18,6 +21,9 @@ from .retrieval_session import (
     RetrievalSessionStore,
 )
 from .retrieve_contract import retrieve as _retrieve_contract
+
+
+_LINE_PREFIX_RE = re.compile(r"^\s*(\d+):(?:\s|$)")
 
 
 def _sha256(path: Path) -> str:
@@ -62,33 +68,49 @@ def _restore_tracker(state: RetrievalSessionState) -> EvidenceProgressTracker:
     return tracker
 
 
-def _persist(
-    store: RetrievalSessionStore,
-    state: RetrievalSessionState,
-    *,
-    evidence_ids: tuple[str, ...],
-    relation_ids: tuple[str, ...] = (),
-    source_key: str | None = None,
-    line_ranges: tuple[tuple[int, int], ...] = (),
-) -> None:
-    if not evidence_ids and not relation_ids and not line_ranges:
-        return
-    evidence_limit = max(
-        DEFAULT_MAX_SEEN_EVIDENCE,
-        len(state.seen_evidence) + len(evidence_ids) + 1,
-    )
-    relation_limit = max(
-        DEFAULT_MAX_SEEN_RELATIONS,
-        len(state.seen_relations) + len(relation_ids) + 1,
-    )
-    next_state, _ = state.advance(
-        evidence=evidence_ids,
-        relations=relation_ids,
-        covered_ranges={source_key: line_ranges} if source_key and line_ranges else None,
-        max_seen_evidence=evidence_limit,
-        max_seen_relations=relation_limit,
-    )
-    store.save(next_state)
+def _visible_line_ranges(canonical: Mapping[str, Any]) -> tuple[tuple[int, int], ...]:
+    data = canonical.get("data") or {}
+    if not isinstance(data, Mapping):
+        return ()
+    text = data.get("text")
+    if not isinstance(text, str) or not text:
+        return ()
+    numbers: list[int] = []
+    for raw in text.splitlines():
+        match = _LINE_PREFIX_RE.match(raw)
+        if match is not None:
+            numbers.append(int(match.group(1)))
+    if not numbers:
+        return ()
+    ordered = sorted(set(numbers))
+    ranges: list[tuple[int, int]] = []
+    start = previous = ordered[0]
+    for number in ordered[1:]:
+        if number == previous + 1:
+            previous = number
+            continue
+        ranges.append((start, previous))
+        start = previous = number
+    ranges.append((start, previous))
+    return tuple(ranges)
+
+
+def _filter_numbered_text(text: str, ranges: tuple[tuple[int, int], ...]) -> str:
+    if not text or not ranges:
+        return ""
+
+    def included(number: int) -> bool:
+        return any(start <= number <= end for start, end in ranges)
+
+    kept: list[str] = []
+    keep_continuation = False
+    for raw in text.splitlines():
+        match = _LINE_PREFIX_RE.match(raw)
+        if match is not None:
+            keep_continuation = included(int(match.group(1)))
+        if keep_continuation:
+            kept.append(raw)
+    return "\n".join(kept) + ("\n" if kept else "")
 
 
 def _already_covered_range(
@@ -111,6 +133,79 @@ def _already_covered_range(
     if tracker.range_is_covered(source_key, start, end):
         return source_key, start, end
     return None
+
+
+def _commit_observation(
+    store: RetrievalSessionStore,
+    *,
+    evidence: tuple[Mapping[str, Any], ...],
+    relation_ids: tuple[str, ...],
+    source_key: str | None,
+    line_ranges: tuple[tuple[int, int], ...],
+) -> tuple[
+    EvidenceProgressTracker,
+    object,
+    tuple[Mapping[str, Any], ...],
+    int,
+    tuple[str, ...],
+    tuple[tuple[int, int], ...],
+]:
+    """Atomically merge one retrieval result with the latest session state.
+
+    Pi and other Agents may issue multiple tool calls in one model turn.  The
+    complete read/compare/advance/write sequence therefore has to be serialized;
+    atomic file replacement alone is not enough because two processes can both
+    load the same old revision and then overwrite each other's observations.
+    """
+
+    with state_lock(store.path):
+        state = store.load()
+        tracker = _restore_tracker(state)
+        prior = set(state.seen_evidence)
+        evidence_ids = _pointer_ids(evidence)
+        new_rows = tuple(
+            item
+            for item in evidence
+            if str(item.get("uri") or "").strip() not in prior
+        )
+        repeated = max(0, len(evidence) - len(new_rows))
+
+        prior_relations = set(state.seen_relations)
+        new_relation_ids = tuple(item for item in relation_ids if item not in prior_relations)
+
+        unseen_ranges: tuple[tuple[int, int], ...] = ()
+        if source_key and line_ranges:
+            unseen: list[tuple[int, int]] = []
+            for start, end in line_ranges:
+                unseen.extend(tracker.unseen_ranges(source_key, start, end))
+            unseen_ranges = tuple(unseen)
+
+        readiness = tracker.observe(
+            source=source_key,
+            evidence_ids=evidence_ids,
+            line_ranges=line_ranges,
+            new_relations=len(new_relation_ids),
+        )
+
+        if evidence_ids or relation_ids or line_ranges:
+            evidence_limit = max(
+                DEFAULT_MAX_SEEN_EVIDENCE,
+                len(state.seen_evidence) + len(evidence_ids) + 1,
+            )
+            relation_limit = max(
+                DEFAULT_MAX_SEEN_RELATIONS,
+                len(state.seen_relations) + len(relation_ids) + 1,
+            )
+            next_state, _ = state.advance(
+                evidence=evidence_ids,
+                relations=relation_ids,
+                covered_ranges={source_key: line_ranges} if source_key and line_ranges else None,
+                max_seen_evidence=evidence_limit,
+                max_seen_relations=relation_limit,
+            )
+            store.save(next_state)
+
+    return tracker, readiness, new_rows, repeated, new_relation_ids, unseen_ranges
 
 
 def retrieve_with_session(
@@ -139,9 +234,12 @@ def retrieve_with_session(
     if request.hypothesis_id is not None or request.test_id is not None:
         raise ValueError("hypothesis_id/test_id require InvestigationState")
 
-    state = session.load()
-    tracker = _restore_tracker(state)
-    covered = _already_covered_range(request, tracker)
+    # The preflight is advisory only.  Concurrent calls may still both pass it;
+    # final novelty is recomputed atomically after retrieval in _commit_observation.
+    with state_lock(session.path):
+        state = session.load()
+        tracker = _restore_tracker(state)
+        covered = _already_covered_range(request, tracker)
     if covered is not None:
         source_key, _start, _end = covered
         readiness = tracker.observe(source=source_key)
@@ -159,7 +257,7 @@ def retrieve_with_session(
                 "outcome": "not_assessed",
                 "evidence": [],
                 "coverage": {},
-                "data": {},
+                "data": {"new_text": "", "unseen_ranges": []},
             },
             progress=readiness,
             stop_reason=stop,
@@ -175,18 +273,7 @@ def retrieve_with_session(
     evidence = tuple(
         item for item in canonical.get("evidence") or [] if isinstance(item, Mapping)
     )
-    prior = set(state.seen_evidence)
-    evidence_ids = _pointer_ids(evidence)
-    new_rows = tuple(
-        item
-        for item in evidence
-        if str(item.get("uri") or "").strip() not in prior
-    )
-    repeated = max(0, len(evidence) - len(new_rows))
-
     relation_ids = _relation_ids(canonical)
-    prior_relations = set(state.seen_relations)
-    new_relation_ids = tuple(item for item in relation_ids if item not in prior_relations)
 
     source_key: str | None = None
     line_ranges: tuple[tuple[int, int], ...] = ()
@@ -198,32 +285,33 @@ def retrieve_with_session(
     )
     if isinstance(request.target, RangeTarget) and evidence:
         source_key = pointer_source_key(evidence[0])
-        if isinstance(coverage, Mapping) and not bool(coverage.get("truncated")):
-            start = coverage.get("context_start_line")
-            end = coverage.get("context_end_line")
-            if (
-                isinstance(start, int)
-                and not isinstance(start, bool)
-                and isinstance(end, int)
-                and not isinstance(end, bool)
-                and end >= start
-            ):
-                line_ranges = ((start, end),)
+        # Track what was actually delivered, including a truncated expand.  The
+        # visible numbered lines are safer than assuming the requested range was
+        # completely materialized.
+        line_ranges = _visible_line_ranges(canonical)
 
-    readiness = tracker.observe(
-        source=source_key,
-        evidence_ids=evidence_ids,
-        line_ranges=line_ranges,
-        new_relations=len(new_relation_ids),
-    )
-    _persist(
+    (
+        _tracker,
+        readiness,
+        new_rows,
+        repeated,
+        new_relation_ids,
+        unseen_ranges,
+    ) = _commit_observation(
         session,
-        state,
-        evidence_ids=evidence_ids,
+        evidence=evidence,
         relation_ids=relation_ids,
         source_key=source_key,
         line_ranges=line_ranges,
     )
+
+    if isinstance(request.target, RangeTarget):
+        data = dict(canonical.get("data") or {})
+        full_text = data.get("text") if isinstance(data.get("text"), str) else ""
+        data["new_text"] = _filter_numbered_text(full_text, unseen_ranges)
+        data["unseen_ranges"] = [[start, end] for start, end in unseen_ranges]
+        data["repeated_text_suppressed"] = bool(full_text and not data["new_text"])
+        canonical["data"] = data
 
     status = base.status
     stop = base.stop_reason
@@ -232,6 +320,7 @@ def retrieve_with_session(
         and evidence
         and not new_rows
         and not new_relation_ids
+        and readiness.delta.new_lines == 0
         and not truncated
     ):
         status = "no_new_evidence"
@@ -242,7 +331,10 @@ def retrieve_with_session(
         status=status,
         canonical_result=canonical,
         progress=readiness,
-        new_evidence=evidence if truncated else new_rows,
+        # Even when the underlying search is truncated, rows already delivered
+        # in this session remain repeated.  Truncation says unseen results may
+        # exist beyond the projection; it is not a reason to resend known rows.
+        new_evidence=new_rows,
         repeated_evidence=repeated,
         stop_reason=stop,
     )
