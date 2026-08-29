@@ -1,16 +1,21 @@
-"""Evidence-backed assessment for declared investigation Tests.
+"""Evidence-grounded bookkeeping for declared investigation Tests.
 
 A Test is the Agent's explicit statement of what it intends to verify for a
-Hypothesis. Runtime does not decide whether the natural-language interpretation
-is correct; it verifies that a decisive Test assessment is grounded in
-immutable Evidence formally linked to that Test.
+Hypothesis. ``assess_test`` records the Agent's semantic judgment about that
+Test. Runtime does not certify that the natural-language judgment is true; it
+only verifies the mechanical evidence contract: cited Evidence was actually
+materialized, is immutable/line-addressable, is linked to the Test, and has no
+known blocking coverage or integrity defect.
 
 Free exploration may happen before a Test is declared. Previously observed
 Evidence is not silently grandfathered into a later Test: the Agent must
 explicitly confirm/relink immutable line-addressable Evidence that was actually
-materialized by a recorded execution before it can support a decisive
-assessment. This preserves exploration flexibility while keeping the epistemic
-contract auditable.
+materialized by a recorded execution before it can be used by that Test. This
+preserves exploration flexibility while keeping the evidence trail auditable.
+
+A future Runtime-mechanical Test verdict must come from a deterministic
+assertion/capability path. It must not be created by letting an Agent label its
+own semantic interpretation as Runtime-verified.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from .investigation import InvestigationError, InvestigationState, Investigation
 
 
 TEST_ASSESSMENT_OUTCOMES = frozenset({"supported", "contradicted", "unknown"})
+TEST_ASSESSMENT_SOURCE_AGENT = "agent"
 _TEST_ASSESSMENT_OPERATION = "assess_test"
 _CONFIRM_EVIDENCE_OPERATION = "confirm_test_evidence"
 _EVIDENCE_URI_RE = re.compile(
@@ -33,12 +39,13 @@ _EVIDENCE_URI_RE = re.compile(
 
 @dataclass(frozen=True)
 class TestAssessmentValidation:
-    """Mechanical validation result for one proposed Test assessment."""
+    """Mechanical grounding result for one Agent-proposed Test assessment."""
 
     valid: bool
     test_id: str
     hypothesis_id: str
     outcome: str
+    assessment_source: str = TEST_ASSESSMENT_SOURCE_AGENT
     evidence_refs: Sequence[str] = field(default_factory=tuple)
     reasons: Sequence[str] = field(default_factory=tuple)
 
@@ -48,6 +55,7 @@ class TestAssessmentValidation:
             "test_id": self.test_id,
             "hypothesis_id": self.hypothesis_id,
             "outcome": self.outcome,
+            "assessment_source": self.assessment_source,
             "evidence_refs": list(self.evidence_refs),
             "reasons": list(self.reasons),
         }
@@ -342,7 +350,7 @@ def validate_test_assessment(
     evidence_refs: Sequence[str] = (),
     coverage: Mapping[str, Any] | None = None,
 ) -> TestAssessmentValidation:
-    """Validate a Test assessment against Evidence formally linked to the Test."""
+    """Check only the mechanical grounding of an Agent Test assessment."""
 
     state = _state(store_or_state)
     resolved_test = str(test_id or "").strip()
@@ -359,7 +367,6 @@ def validate_test_assessment(
         reasons.append("missing_assessment_evidence")
 
     source_executions = _source_executions(state, resolved_test)
-    selected: dict[str, tuple[Mapping[str, Any], dict[str, Any]]] = {}
     for ref in refs:
         if _parse_evidence_ref(ref) is None:
             reasons.append("non_citable_assessment_evidence")
@@ -368,12 +375,10 @@ def validate_test_assessment(
         if source is None:
             reasons.append("assessment_evidence_not_from_test")
             continue
-        execution, pointer = source
+        execution, _pointer = source
         source_reasons = _source_validation_reasons(execution)
         if source_reasons:
             reasons.extend(source_reasons)
-            continue
-        selected[ref] = (execution, pointer)
 
     if decisive and _coverage_has_blocking_gap(coverage or {}):
         reasons.append("assessment_coverage_gap")
@@ -384,6 +389,7 @@ def validate_test_assessment(
         test_id=resolved_test,
         hypothesis_id=hypothesis_id,
         outcome=resolved_outcome,
+        assessment_source=TEST_ASSESSMENT_SOURCE_AGENT,
         evidence_refs=tuple(refs),
         reasons=deduped,
     )
@@ -398,7 +404,12 @@ def assess_test(
     coverage: Mapping[str, Any] | None = None,
     limitations: Sequence[str] = (),
 ) -> Dict[str, Any]:
-    """Persist one evidence-backed Test assessment as a linked Execution."""
+    """Persist an Agent semantic assessment with mechanically checked Evidence.
+
+    ``supported`` here means "the Agent judges this Test supported by these
+    cited observations". It does *not* mean Runtime has mechanically verified
+    the natural-language semantics of the Test.
+    """
 
     if not isinstance(store, InvestigationStore):
         raise TypeError("assess_test requires InvestigationStore")
@@ -412,7 +423,7 @@ def assess_test(
     if not validation.valid:
         reasons = ", ".join(validation.reasons) or "unknown"
         raise InvestigationError(
-            "Test Assessment 拒绝未经验证的决定性评估；"
+            "Test Assessment 拒绝不满足机械证据约束的评估；"
             f"test_id={validation.test_id}, outcome={validation.outcome}, reasons={reasons}."
         )
 
@@ -428,7 +439,12 @@ def assess_test(
         "outcome": validation.outcome,
         "evidence": evidence,
         "coverage": dict(coverage or {}),
-        "verification": {"assessment_contract": "evidence_backed_test_v1"},
+        "verification": {
+            "assessment_contract": "agent_semantic_evidence_grounded_v2",
+            "assessment_source": TEST_ASSESSMENT_SOURCE_AGENT,
+            "evidence_binding_verified": True,
+            "semantic_claim_verified": False,
+        },
     }
     execution = store.record_execution(
         _TEST_ASSESSMENT_OPERATION,
@@ -444,6 +460,8 @@ def assess_test(
         "test_id": validation.test_id,
         "hypothesis_id": validation.hypothesis_id,
         "outcome": validation.outcome,
+        "assessment_source": TEST_ASSESSMENT_SOURCE_AGENT,
+        "semantic_claim_verified": False,
         "evidence_refs": list(validation.evidence_refs),
         "execution_id": execution["id"],
         "recorded_at": execution["recorded_at"],
@@ -474,6 +492,7 @@ def latest_test_assessments(
 
 __all__ = [
     "TEST_ASSESSMENT_OUTCOMES",
+    "TEST_ASSESSMENT_SOURCE_AGENT",
     "TestAssessmentValidation",
     "assess_test",
     "confirm_test_evidence",
