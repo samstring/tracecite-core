@@ -1,0 +1,110 @@
+name: Pi Agent Moderate Suite Preflight
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - benchmarks/agent-investigation/moderate-suite-candidates.json
+      - benchmarks/agent-investigation/probe_real_online_evidence.py
+      - .github/workflows/pi-agent-moderate-suite-preflight.yml
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe real evidence candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/moderate-suite
+          mkdir -p /tmp/moderate-suite
+          python benchmarks/agent-investigation/probe_real_online_evidence.py \
+            --spec benchmarks/agent-investigation/moderate-suite-candidates.json \
+            --output /tmp/moderate-suite/probe.json
+
+      - name: Classify size tiers and candidate eligibility
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          spec = json.loads(Path('benchmarks/agent-investigation/moderate-suite-candidates.json').read_text())
+          probe = json.loads(Path('/tmp/moderate-suite/probe.json').read_text())
+          policy = spec['policy']
+          by_id = {row['id']: row for row in probe.get('candidates', [])}
+          errors = list(probe.get('errors') or [])
+          rows = []
+          for candidate in spec.get('candidates', []):
+              cid = candidate['id']
+              measured = by_id.get(cid)
+              row = {
+                  'id': cid,
+                  'declared_role': candidate.get('role'),
+                  'evidence_sufficiency': candidate.get('evidence_sufficiency'),
+                  'main_correctness_eligible': bool(candidate.get('main_correctness_eligible')),
+              }
+              if not measured:
+                  row['size_eligible'] = False
+                  row['reason'] = 'probe_failed'
+                  rows.append(row)
+                  continue
+              size = int(measured['bytes'])
+              if size < int(policy['small_max_bytes_exclusive']):
+                  tier = 'small'
+              elif int(policy['medium_min_bytes_inclusive']) <= size <= int(policy['medium_max_bytes_inclusive']):
+                  tier = 'medium'
+              else:
+                  tier = 'out_of_scope'
+              row.update({
+                  'bytes': size,
+                  'mib': measured['mib'],
+                  'line_count': measured['line_count'],
+                  'sha256': measured['sha256'],
+                  'measured_tier': tier,
+                  'size_eligible': tier in {'small', 'medium'},
+                  'needles': measured.get('needles') or [],
+              })
+              rows.append(row)
+
+          small = [r for r in rows if r.get('measured_tier') == 'small']
+          medium = [r for r in rows if r.get('measured_tier') == 'medium']
+          report = {
+              'schema_version': 1,
+              'suite_id': spec['suite_id'],
+              'policy': policy,
+              'small_candidates': len(small),
+              'medium_candidates': len(medium),
+              'probe_error_count': len(errors),
+              'probe_errors': errors,
+              'cases': rows,
+          }
+          Path('/tmp/moderate-suite/preflight.json').write_text(
+              json.dumps(report, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if len(small) < int(policy['small_case_count']):
+              raise SystemExit(f"need {policy['small_case_count']} small candidates, got {len(small)}")
+          if len(medium) < int(policy['medium_case_count']):
+              raise SystemExit(f"need {policy['medium_case_count']} medium candidates, got {len(medium)}")
+          PY
+
+      - name: Upload moderate suite preflight
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-agent-moderate-suite-preflight
+          path: |
+            /tmp/moderate-suite/probe.json
+            /tmp/moderate-suite/preflight.json
+          if-no-files-found: warn
