@@ -1,19 +1,30 @@
 import { execFile } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const execFileAsync = promisify(execFile);
 const MAX_BUFFER = 256 * 1024;
+const BRIDGE = fileURLToPath(new URL("./pi_tracecite_bridge.py", import.meta.url));
+const STATE =
+  process.env.TRACECITE_PI_INVESTIGATION ||
+  join(tmpdir(), `tracecite-pi-${process.pid}`, "investigation.json");
 
-async function runTraceCite(args: string[], cwd: string, signal?: AbortSignal): Promise<string> {
+async function runBridge(args: string[], cwd: string, signal?: AbortSignal): Promise<string> {
   try {
-    const { stdout, stderr } = await execFileAsync("tracecite", args, {
-      cwd,
-      encoding: "utf8",
-      maxBuffer: MAX_BUFFER,
-      signal,
-    });
+    const { stdout, stderr } = await execFileAsync(
+      "python",
+      [BRIDGE, "--state", STATE, ...args],
+      {
+        cwd,
+        encoding: "utf8",
+        maxBuffer: MAX_BUFFER,
+        signal,
+      },
+    );
     const out = String(stdout || "").trim();
     const err = String(stderr || "").trim();
     if (out && err) return `${out}\n@STDERR ${err}`;
@@ -21,7 +32,7 @@ async function runTraceCite(args: string[], cwd: string, signal?: AbortSignal): 
   } catch (error: any) {
     const stdout = String(error?.stdout || "").trim();
     const stderr = String(error?.stderr || "").trim();
-    const message = String(error?.message || error || "TraceCite command failed");
+    const message = String(error?.message || error || "TraceCite bridge failed");
     return [
       `@TRACECITE_ERROR ${message}`,
       stdout ? `@STDOUT ${stdout}` : "",
@@ -67,8 +78,9 @@ function projectForPi(text: string): string {
   if (!payload || typeof payload !== "object") return text;
 
   const operation = String(payload.operation || "");
+  const data = payload.data && typeof payload.data === "object" ? payload.data : {};
+
   if (operation === "search") {
-    const data = payload.data && typeof payload.data === "object" ? payload.data : {};
     const priorityAction = data.actionable_retrieval ?? null;
     const constraints = Array.isArray(data.correlation_constraints)
       ? data.correlation_constraints.map(compactConstraint)
@@ -90,6 +102,8 @@ function projectForPi(text: string): string {
         : undefined,
       evidence: payload.evidence,
       coverage: payload.coverage,
+      progress: data.progress,
+      stop_reason: data.stop_reason,
       evidence_source: data.evidence_source,
       correlation_constraints: constraints.length ? constraints : undefined,
       missing_evidence: gaps.length ? gaps : undefined,
@@ -100,13 +114,14 @@ function projectForPi(text: string): string {
   }
 
   if (operation === "expand") {
-    const data = payload.data && typeof payload.data === "object" ? payload.data : {};
     return JSON.stringify({
       operation: payload.operation,
       status: payload.status,
       outcome: payload.outcome,
       evidence: payload.evidence,
       coverage: payload.coverage,
+      progress: data.progress,
+      stop_reason: data.stop_reason,
       text: data.text,
     });
   }
@@ -119,12 +134,13 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_search",
     label: "TraceCite Search",
     description:
-      "Search a large local text/log file with bounded, line-addressable evidence. Returns coverage, immutable evidence refs, signal hints, and any mechanically required next retrieval action. This is retrieval evidence, not a root-cause judgement.",
+      "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns bounded line-addressable evidence plus novelty, coverage, identity/correlation integrity, routing, and any mechanically actionable retrieval gap. It never decides root cause.",
     promptSnippet:
       "Use tracecite_search for bounded evidence discovery in large logs; treat its output as evidence/navigation, never as causal truth.",
     promptGuidelines: [
       "When tracecite_search returns priority_action, execute that action next before unrelated broadening. Treat the priority actions as an ordered mechanical gap-closure sequence; a same-text search performed before the current result does not satisfy the newly derived step.",
-      "tracecite_search constraints protect evidence correlation; they do not prove a root cause.",
+      "A search hit is an observation, not support for a causal hypothesis.",
+      "TraceCite correlation constraints protect evidence identity; they do not prove a root cause.",
       "Expand decisive TraceCite hits before citing or semantically interpreting them.",
     ],
     parameters: Type.Object({
@@ -140,19 +156,19 @@ export default function traceciteTools(pi: ExtensionAPI) {
         "search",
         params.file,
         params.query,
-        "--no-snapshot",
-        "--compact",
         "--max-evidence",
         String(params.max_evidence ?? 20),
-        "--max-output-chars",
-        "16000",
-        "--lightweight",
       ];
       if (params.regex) args.push("--regex");
-      const text = projectForPi(await runTraceCite(args, ctx.cwd, signal));
+      const text = projectForPi(await runBridge(args, ctx.cwd, signal));
       return {
         content: [{ type: "text", text }],
-        details: { operation: "search", file: params.file, query: params.query },
+        details: {
+          operation: "search",
+          file: params.file,
+          query: params.query,
+          canonical_retrieve: true,
+        },
       };
     },
   });
@@ -161,11 +177,10 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_expand",
     label: "TraceCite Expand",
     description:
-      "Materialize bounded source context around a specific line found by TraceCite. Use this to inspect/cite a decisive hit rather than reasoning only from compact search labels. Returns exact source lines and evidence metadata; it does not interpret causality.",
-    promptSnippet:
-      "Expand important TraceCite hits before citing or interpreting them.",
+      "Materialize bounded source context through TraceCite's canonical retrieval contract around a specific line. Use it before citing or interpreting a decisive compact hit. It returns evidence and coverage, not causal judgement.",
+    promptSnippet: "Expand important TraceCite hits before citing or interpreting them.",
     promptGuidelines: [
-      "Use tracecite_expand to materialize the exact source context for evidence that matters to the final explanation.",
+      "Use tracecite_expand to materialize exact source context for evidence that matters to the final explanation.",
     ],
     parameters: Type.Object({
       file: Type.String({ description: "Path to the same local source file." }),
@@ -178,23 +193,26 @@ export default function traceciteTools(pi: ExtensionAPI) {
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const radius = params.radius ?? 8;
       const args = [
         "expand",
         params.file,
         String(params.line),
-        "--before",
-        String(radius),
-        "--after",
-        String(radius),
+        "--radius",
+        String(params.radius ?? 8),
         "--max-chars",
         "16000",
       ];
-      if (params.sha256) args.push("--expected-sha256", params.sha256);
-      const text = projectForPi(await runTraceCite(args, ctx.cwd, signal));
+      if (params.sha256) args.push("--sha256", params.sha256);
+      const text = projectForPi(await runBridge(args, ctx.cwd, signal));
       return {
         content: [{ type: "text", text }],
-        details: { operation: "expand", file: params.file, line: params.line, radius },
+        details: {
+          operation: "expand",
+          file: params.file,
+          line: params.line,
+          radius: params.radius ?? 8,
+          canonical_retrieve: true,
+        },
       };
     },
   });
