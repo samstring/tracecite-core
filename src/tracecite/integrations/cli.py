@@ -952,17 +952,18 @@ def main(
             payload["data"] = data
         if args.command == "survey" and getattr(args, "brief", False):
             payload = project(payload, profile="survey-brief")
+        transport_projection = "portable-json" if profile.name == "agent" else profile.name
         if args.command == "search" and compact:
             projector = search_projector or project
             payload = projector(
                 payload,
-                profile=profile.name,
+                profile=transport_projection,
                 max_output_chars=args.max_output_chars,
             )
         elif args.command == "expand-many":
             payload = project(
                 payload,
-                profile=profile.name,
+                profile=transport_projection,
                 max_output_chars=args.max_output_chars,
             )
         if getattr(args, "lightweight", False):

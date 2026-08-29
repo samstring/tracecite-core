@@ -268,7 +268,7 @@ def test_named_transport_profiles_share_project_owner() -> None:
         "data": {},
     }
 
-    for name in ("agent", "portable-json", "strict-json", "stateful-index", "frame"):
+    for name in ("portable-json", "strict-json", "stateful-index", "frame"):
         view = project(payload, profile=name, max_output_chars=12_000)
         assert view["evidence"]["columns"][0] == "ref"
         assert view["evidence"]["rows"][0][0] == "#L7"
@@ -280,3 +280,16 @@ def test_cli_does_not_define_structural_projection_helpers() -> None:
 
     assert not hasattr(cli, "_compact_search_result")
     assert not hasattr(cli, "_fit_expand_many_result")
+
+
+def test_generic_agent_projection_preserves_canonical_evidence_shape() -> None:
+    digest = "b" * 64
+    payload = {
+        "operation": "search", "status": "ok", "outcome": "not_assessed",
+        "evidence": [{"uri": f"evidence://sha256/{digest}#L9", "source_path": "/tmp/runtime.log",
+                      "sha256": digest, "start_line": 9, "end_line": 9, "label": "visible evidence"}],
+        "coverage": {"match_records": 1, "evidence_returned": 1}, "data": {},
+    }
+    view = project(payload, profile="agent")
+    assert isinstance(view["evidence"], list)
+    assert view["evidence"][0]["label"] == "visible evidence"

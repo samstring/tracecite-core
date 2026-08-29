@@ -11,7 +11,8 @@ from typing import Any, Mapping, Sequence
 
 import free_shell
 import openai_host as common
-from tracecite.integrations import cli as trace_cli
+from tracecite.integrations.agent_profile import render_frame
+from tracecite.integrations.agent_projection import project
 from tracecite.integrations.context_engine import ContextEngine
 from tracecite.integrations.evidence_ledger import EvidenceLedger
 from tracecite.runtime.tools import search as tracecite_search
@@ -218,10 +219,9 @@ class BenchmarkToolRuntime(common.ToolRuntime):
         data["result_id"] = result_id
         canonical["data"] = data
 
-        baseline = trace_cli._compact_search_result(canonical, max_output_chars=None)
-        baseline = trace_cli.lightweight_result(baseline)
+        baseline = project(canonical, profile="frame", max_output_chars=None)
         if self.mode != "tracecite_context":
-            return trace_cli.render_frame(baseline)
+            return render_frame(baseline)
 
         if not self.context_id:
             raise RuntimeError("tracecite_context requires context_id")
@@ -229,10 +229,9 @@ class BenchmarkToolRuntime(common.ToolRuntime):
             canonical,
             result_id=result_id,
         )
-        delta = trace_cli._compact_search_result(projected, max_output_chars=None)
-        delta = trace_cli.lightweight_result(delta)
-        baseline_frame = trace_cli.render_frame(baseline)
-        delta_frame = trace_cli.render_frame(delta)
+        delta = project(projected, profile="frame", max_output_chars=None)
+        baseline_frame = render_frame(baseline)
+        delta_frame = render_frame(delta)
         return delta_frame if len(delta_frame) < len(baseline_frame) else baseline_frame
 
 

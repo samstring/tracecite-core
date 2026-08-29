@@ -11,7 +11,6 @@ from typing import Any, Mapping, Sequence
 
 import gmi_host as base
 import openai_host as common
-from tracecite.integrations import cli as trace_cli
 from tracecite.integrations.agent_projection import DEFAULT_AGENT_MAX_OUTPUT_CHARS, project
 from tracecite.runtime import (
     EvidenceRequest,
@@ -390,8 +389,9 @@ class CanonicalRuntime(base.BenchmarkToolRuntime):
         payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
         view = project(payload, profile="agent")
         if view.get("operation") == "search":
-            view = trace_cli._compact_search_result(
+            view = project(
                 view,
+                profile="portable-json",
                 max_output_chars=DEFAULT_AGENT_MAX_OUTPUT_CHARS,
             )
         rendered = json.dumps(view, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

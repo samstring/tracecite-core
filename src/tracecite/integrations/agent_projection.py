@@ -587,14 +587,14 @@ def project(
         return apply_survey_brief(canonical)
     if name == "lightweight":
         return lightweight_result(canonical)
-    if name in {"agent", "portable-json", "strict-json", "stateful-index", "frame"}:
+    if name == "agent":
+        return lightweight_result(apply_survey_brief(canonical))
+    if name in {"portable-json", "strict-json", "stateful-index", "frame"}:
         operation = str(canonical.get("operation") or "")
         if operation == "search":
             return compact_search_result(canonical, max_output_chars=max_output_chars)
         if operation == "expand_many":
             return fit_expand_many_result(canonical, max_output_chars=max_output_chars)
-        if name == "agent":
-            return lightweight_result(apply_survey_brief(canonical))
         return canonical
     raise ValueError(f"unsupported projection profile: {profile!r}")
 
