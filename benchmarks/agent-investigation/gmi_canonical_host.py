@@ -34,6 +34,10 @@ _REQUEST_INDEX = 0
 _DEFAULT_MAX_ROUNDS = 12
 _DEFAULT_NO_GROWTH_ROUNDS = 2
 _ACTION_PROMPT_MARKER = "TRACECITE_ACTION_REQUIRED"
+# Process-local protocol memory. A benchmark process owns one conversation,
+# so this prevents re-injecting the same synthetic action prompt without
+# leaking state across independent benchmark jobs/processes.
+_PROMPTED_ACTIONS: set[tuple[str, str, str]] = set()
 _FINAL_ONLY_PROMPT = (
     "Evidence acquisition has stopped because the configured mechanical exploration limit was reached. "
     "Do not call more tools. Produce the best supported final root-cause answer from evidence already visible, "
@@ -249,15 +253,20 @@ def _apply_action_policy(payload: Mapping[str, Any]) -> tuple[dict[str, Any], di
     if action is None:
         return request, None
 
-    signature = "|".join(_action_signature(action))
+    action_signature = _action_signature(action)
+    signature = "|".join(action_signature)
     marker = f"{_ACTION_PROMPT_MARKER} {signature}"
-    already_prompted = any(
+    already_prompted = action_signature in _PROMPTED_ACTIONS or any(
         str(item.get("role") or "") == "user" and marker in str(item.get("content") or "")
         for item in messages
     )
     if already_prompted:
         return request, None
 
+    # Record before provider dispatch. If the synthetic user prompt is not
+    # persisted into the host's conversation history, the next request still
+    # cannot re-inject it and repeatedly defer the normal safety cap.
+    _PROMPTED_ACTIONS.add(action_signature)
     messages.append({"role": "user", "content": _action_prompt(action)})
     request["messages"] = messages
     return request, {

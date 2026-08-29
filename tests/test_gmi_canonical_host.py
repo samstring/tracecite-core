@@ -131,6 +131,30 @@ def test_action_policy_prioritizes_runtime_owned_gap_closure_once(tmp_path: Path
     assert output.strip() == "ok"
 
 
+def test_action_policy_does_not_reinject_ignored_synthetic_prompt(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "host._PROMPTED_ACTIONS.clear()\n"
+        "action = {'operation':'search','source':'runtime.log','query':'local-device','purpose':'verify_identifier_uniqueness_across_scopes','gap_kind':'scope_uniqueness_unverified'}\n"
+        "tool_payload = {'status':'ok','data':{'actionable_retrieval':action}}\n"
+        "messages = [\n"
+        " {'role':'system','content':'s'}, {'role':'user','content':'u'},\n"
+        " {'role':'assistant','content':'','tool_calls':[{'id':'1','type':'function','function':{'name':'tracecite_get','arguments':'{\\\"file\\\":\\\"runtime.log\\\",\\\"line\\\":2,\\\"radius\\\":1}'}}]},\n"
+        " {'role':'tool','tool_call_id':'1','content':json.dumps(tool_payload)},\n"
+        "]\n"
+        "payload = {'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'}\n"
+        "first, first_event = host._apply_action_policy(payload)\n"
+        "second, second_event = host._apply_action_policy(payload)\n"
+        "assert first_event is not None\n"
+        "assert len(first['messages']) == len(messages) + 1\n"
+        "assert second_event is None\n"
+        "assert len(second['messages']) == len(messages)\n"
+        "assert ('search','runtime.log','local-device') in host._PROMPTED_ACTIONS\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
 def test_action_policy_does_not_repeat_action_after_matching_tool_call(tmp_path: Path) -> None:
     output = _run_host_script(
         tmp_path,
