@@ -20,10 +20,12 @@ from tracecite.runtime.tools import search as tracecite_search
 DEFAULT_BASE_URL = "https://api.gmi-serving.com/v1"
 SYSTEM_PROMPT = """You are debugging a production incident from runtime evidence only.
 Use only the benchmark tools provided to you. Do not use web search or outside knowledge.
-Reconstruct the relevant sequence before giving a causal conclusion. Distinguish direct
-observations from inference. If evidence is insufficient, say unknown/partial rather than
-inventing a cause. Your final answer must cite concrete evidence IDs or precise source
-locations that support the conclusion. Keep investigating until the evidence is sufficient
+For large evidence files, prefer targeted semantic or text search over walking sequential
+ranges or chunks. Use bounded range/context reads to materialize around known hits, not to
+scan the source linearly. Reconstruct the relevant sequence before giving a causal conclusion.
+Distinguish direct observations from inference. If evidence is insufficient, say unknown/partial
+rather than inventing a cause. Your final answer must cite concrete evidence IDs or precise
+source locations that support the conclusion. Keep investigating until the evidence is sufficient
 to give a supported final answer.
 """
 _MAX_FINAL_CONTINUATIONS = 2
@@ -159,7 +161,9 @@ def _tool_calls(message: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "type": "function",
                 "function": {
                     "name": str(function.get("name") or ""),
-                    "arguments": function.get("arguments") if isinstance(function.get("arguments"), str) else "{}",
+                    "arguments": function.get("arguments")
+                    if isinstance(function.get("arguments"), str)
+                    else "{}",
                 },
             }
         )
@@ -247,10 +251,20 @@ def run() -> int:
     common._truncate = lambda value, limit=None: value  # type: ignore[assignment]
 
     if mode == "free_shell":
-        runtime = free_shell.Runtime(mode=mode, input_root=input_root, scratch=scratch, context_id=context_id)
+        runtime = free_shell.Runtime(
+            mode=mode,
+            input_root=input_root,
+            scratch=scratch,
+            context_id=context_id,
+        )
         raw_tools = free_shell.tools(runtime.files)
     else:
-        runtime = BenchmarkToolRuntime(mode=mode, input_root=input_root, scratch=scratch, context_id=context_id)
+        runtime = BenchmarkToolRuntime(
+            mode=mode,
+            input_root=input_root,
+            scratch=scratch,
+            context_id=context_id,
+        )
         raw_tools = common._tools_for_mode(mode, runtime.files)
     tools = _chat_tools(raw_tools)
     question = question_path.read_text(encoding="utf-8")
@@ -260,7 +274,9 @@ def run() -> int:
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
     ]
-    max_output_tokens = int(os.environ.get("TRACECITE_BENCH_MAX_OUTPUT_TOKENS", "1800"))
+    max_output_tokens = int(
+        os.environ.get("TRACECITE_BENCH_MAX_OUTPUT_TOKENS", "1800")
+    )
     if max_output_tokens < 128 or max_output_tokens > 8192:
         raise ValueError("TRACECITE_BENCH_MAX_OUTPUT_TOKENS must be 128-8192")
 
@@ -297,7 +313,10 @@ def run() -> int:
         common._append_event(transcript, event)
 
         calls = _tool_calls(message)
-        assistant_message: dict[str, Any] = {"role": "assistant", "content": visible or None}
+        assistant_message: dict[str, Any] = {
+            "role": "assistant",
+            "content": visible or None,
+        }
         if calls:
             assistant_message["tool_calls"] = calls
         conversation.append(assistant_message)
@@ -325,7 +344,9 @@ def run() -> int:
                         "output_tokens": usage.get("output_tokens"),
                     },
                 )
-                conversation.append({"role": "user", "content": _FINAL_CONTINUATION_PROMPT})
+                conversation.append(
+                    {"role": "user", "content": _FINAL_CONTINUATION_PROMPT}
+                )
                 continue
 
             if incomplete:
@@ -354,7 +375,11 @@ def run() -> int:
             raw_arguments = function.get("arguments")
             args: dict[str, Any] = {}
             try:
-                decoded = json.loads(raw_arguments) if isinstance(raw_arguments, str) else {}
+                decoded = (
+                    json.loads(raw_arguments)
+                    if isinstance(raw_arguments, str)
+                    else {}
+                )
                 if not isinstance(decoded, dict):
                     raise ValueError("tool arguments must decode to an object")
                 args = decoded
@@ -362,7 +387,10 @@ def run() -> int:
                 output = runtime.call(name, args)
                 duration_ms = round((time.monotonic() - started) * 1000, 3)
             except Exception as exc:
-                output = json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False)
+                output = json.dumps(
+                    {"error": type(exc).__name__, "message": str(exc)},
+                    ensure_ascii=False,
+                )
                 duration_ms = 0.0
             common._append_event(
                 transcript,
@@ -375,10 +403,15 @@ def run() -> int:
                     "duration_ms": duration_ms,
                 },
             )
-            conversation.append({"role": "tool", "tool_call_id": call_id, "content": output})
+            conversation.append(
+                {"role": "tool", "tool_call_id": call_id, "content": output}
+            )
 
     evidence = sorted(set(common._EVIDENCE_ID_RE.findall(final_text)))
-    common._append_event(transcript, {"type": "final", "answer": final_text, "evidence": evidence})
+    common._append_event(
+        transcript,
+        {"type": "final", "answer": final_text, "evidence": evidence},
+    )
     return 0
 
 
@@ -391,9 +424,16 @@ if __name__ == "__main__":
             try:
                 common._append_event(
                     Path(transcript_value),
-                    {"type": "host_error", "error": type(exc).__name__, "message": str(exc)},
+                    {
+                        "type": "host_error",
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                    },
                 )
             except Exception:
                 pass
-        print(f"benchmark host failed: {type(exc).__name__}: {exc}", file=os.sys.stderr)
+        print(
+            f"benchmark host failed: {type(exc).__name__}: {exc}",
+            file=os.sys.stderr,
+        )
         raise
