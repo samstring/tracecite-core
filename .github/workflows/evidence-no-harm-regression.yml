@@ -17,6 +17,7 @@ on:
       - benchmarks/agent-investigation/gmi_canonical_host.py
       - benchmarks/agent-investigation/run_paired_retry.py
       - tests/test_retrieval_guidance.py
+      - tests/test_gmi_canonical_host.py
       - tests/test_evidence_ambiguity.py
       - tests/test_evidence_fidelity.py
       - tests/test_identity_verification_retrieve.py
