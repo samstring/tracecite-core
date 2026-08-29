@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tracecite.runtime import assess_test
 from tracecite.runtime.investigation import InvestigationStore
 from tracecite.runtime.investigation_summary import (
     MAX_SUMMARY_OUTPUT_CHARS,
@@ -62,6 +63,13 @@ def test_active_state_with_no_substantive_gaps_can_suggest_stop_or_reopen(
         },
         hypothesis_id="H1",
         test_id="T1",
+    )
+    assess_test(
+        store,
+        "T1",
+        "supported",
+        evidence_refs=[VALID_REF],
+        coverage={"complete": True},
     )
     store.add_finding(
         "H1",
