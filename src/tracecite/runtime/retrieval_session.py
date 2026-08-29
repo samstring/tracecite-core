@@ -1,22 +1,25 @@
-"""Canonical persisted retrieval/context seen-state for Agent sessions.
+"""Canonical persisted retrieval/context state for Agent sessions.
 
-``RetrievalSessionState`` is the single owner for bounded transport/retrieval
-seen identities shared by compatibility projections. It deliberately does not
-own hypotheses, findings, causal conclusions, or audit decisions; those remain
+``RetrievalSessionState`` is the single owner for mechanical retrieval memory:
+seen Evidence identities, covered immutable-source ranges, and bounded transport
+identities used by compatibility projections. It deliberately does not own
+hypotheses, findings, causal conclusions, or audit decisions; those remain
 InvestigationState responsibilities.
 
-The canonical on-disk location remains ``_contexts/<id>.json`` for compatibility
-with the existing public CLI. Legacy ``_evidence_contexts/<id>.json`` files are
-accepted on read and are migrated to the canonical location on the next save.
+The canonical transport location remains ``_contexts/<id>.json`` for public CLI
+compatibility. Legacy ``_evidence_contexts/<id>.json`` files are accepted on
+read and migrated on the next save. Investigation-linked retrieval progress uses
+the same state model in a separate ``_retrieval_sessions`` namespace.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -62,9 +65,44 @@ def _append_unique(previous: tuple[str, ...], values: Iterable[str], limit: int)
     return tuple(order[-limit:]), True
 
 
+def _normalize_ranges(values: Iterable[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
+    ordered: list[tuple[int, int]] = []
+    for start, end in values:
+        if isinstance(start, bool) or isinstance(end, bool):
+            raise ValueError("covered ranges require positive integers")
+        if not isinstance(start, int) or not isinstance(end, int) or start < 1 or end < start:
+            raise ValueError("covered ranges must satisfy 1 <= start <= end")
+        ordered.append((start, end))
+    ordered.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in ordered:
+        if not merged or start > merged[-1][1] + 1:
+            merged.append((start, end))
+        else:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+    return tuple(merged)
+
+
+def _covered_ranges_from_dict(payload: Mapping[str, Any]) -> dict[str, tuple[tuple[int, int], ...]]:
+    raw = payload.get("covered_ranges") or {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("RetrievalSessionState covered_ranges must be an object")
+    result: dict[str, tuple[tuple[int, int], ...]] = {}
+    for source, ranges in raw.items():
+        if not isinstance(source, str) or not isinstance(ranges, list):
+            raise ValueError("RetrievalSessionState covered_ranges is malformed")
+        pairs: list[tuple[int, int]] = []
+        for item in ranges:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                raise ValueError("RetrievalSessionState covered range must be [start, end]")
+            pairs.append((item[0], item[1]))
+        result[source] = _normalize_ranges(pairs)
+    return result
+
+
 @dataclass(frozen=True)
 class RetrievalSessionState:
-    """Bounded identity memory for one retrieval/Agent transport session."""
+    """Mechanical retrieval/context memory for one session."""
 
     context_id: str
     revision: int = 0
@@ -72,6 +110,7 @@ class RetrievalSessionState:
     seen_results: tuple[str, ...] = ()
     seen_groups: tuple[str, ...] = ()
     seen_relations: tuple[str, ...] = ()
+    covered_ranges: Mapping[str, tuple[tuple[int, int], ...]] = field(default_factory=dict)
     schema_version: int = RETRIEVAL_SESSION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -85,6 +124,13 @@ class RetrievalSessionState:
             if any(not isinstance(item, str) for item in values):
                 raise ValueError(f"RetrievalSessionState {name} must contain strings")
             object.__setattr__(self, name, values)
+        normalized_ranges: dict[str, tuple[tuple[int, int], ...]] = {}
+        for source, ranges in dict(self.covered_ranges).items():
+            source_key = str(source or "").strip()
+            if not source_key:
+                raise ValueError("covered range source cannot be empty")
+            normalized_ranges[source_key] = _normalize_ranges(ranges)
+        object.__setattr__(self, "covered_ranges", normalized_ranges)
 
     @property
     def session_id(self) -> str:
@@ -101,6 +147,10 @@ class RetrievalSessionState:
             "seen_results": list(self.seen_results),
             "seen_groups": list(self.seen_groups),
             "seen_relations": list(self.seen_relations),
+            "covered_ranges": {
+                source: [[start, end] for start, end in ranges]
+                for source, ranges in sorted(self.covered_ranges.items())
+            },
         }
 
     @classmethod
@@ -117,6 +167,7 @@ class RetrievalSessionState:
             seen_results=_string_list(payload, "seen_results"),
             seen_groups=_string_list(payload, "seen_groups"),
             seen_relations=_string_list(payload, "seen_relations"),
+            covered_ranges=_covered_ranges_from_dict(payload),
             schema_version=schema_version,
         )
 
@@ -127,23 +178,26 @@ class RetrievalSessionState:
         results: Iterable[str] = (),
         groups: Iterable[str] = (),
         relations: Iterable[str] = (),
+        covered_ranges: Mapping[str, Iterable[tuple[int, int]]] | None = None,
         max_seen_evidence: int = DEFAULT_MAX_SEEN_EVIDENCE,
         max_seen_results: int = DEFAULT_MAX_SEEN_RESULTS,
         max_seen_groups: int = DEFAULT_MAX_SEEN_GROUPS,
         max_seen_relations: int = DEFAULT_MAX_SEEN_RELATIONS,
     ) -> tuple["RetrievalSessionState", bool]:
-        """Advance bounded seen-state once while preserving unrelated dimensions.
-
-        A dimension is re-bounded only when the current projection actually
-        observes identities for that dimension. This prevents a search-only
-        projection from pruning groups/relations owned by another compatibility
-        view that was configured with a different bound.
-        """
+        """Advance state once while preserving unrelated dimensions."""
 
         seen_evidence, p1 = _append_unique(self.seen_evidence, evidence, max_seen_evidence)
         seen_results, p2 = _append_unique(self.seen_results, results, max_seen_results)
         seen_groups, p3 = _append_unique(self.seen_groups, groups, max_seen_groups)
         seen_relations, p4 = _append_unique(self.seen_relations, relations, max_seen_relations)
+        merged_ranges = dict(self.covered_ranges)
+        for source, ranges in dict(covered_ranges or {}).items():
+            source_key = str(source or "").strip()
+            if not source_key:
+                raise ValueError("covered range source cannot be empty")
+            merged_ranges[source_key] = _normalize_ranges(
+                [*merged_ranges.get(source_key, ()), *tuple(ranges)]
+            )
         return (
             RetrievalSessionState(
                 context_id=self.context_id,
@@ -152,22 +206,51 @@ class RetrievalSessionState:
                 seen_results=seen_results,
                 seen_groups=seen_groups,
                 seen_relations=seen_relations,
+                covered_ranges=merged_ranges,
             ),
             p1 or p2 or p3 or p4,
         )
 
 
 class RetrievalSessionStore:
-    """Atomic persistence for the single canonical retrieval seen-state owner."""
+    """Atomic persistence for the single canonical retrieval state owner."""
 
-    def __init__(self, root: str | Path, context_id: str) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        context_id: str,
+        *,
+        namespace: str = "_contexts",
+        legacy_evidence_context: bool = True,
+    ) -> None:
         self.root = Path(root).expanduser().resolve()
         self.context_id = validate_retrieval_session_id(context_id)
-        self.path = self.root / "_contexts" / f"{self.context_id}.json"
-        self.legacy_evidence_context_path = self.root / "_evidence_contexts" / f"{self.context_id}.json"
+        namespace_name = str(namespace or "").strip()
+        if not namespace_name or "/" in namespace_name or "\\" in namespace_name:
+            raise ValueError("retrieval session namespace must be one path component")
+        self.namespace = namespace_name
+        self.path = self.root / namespace_name / f"{self.context_id}.json"
+        self.legacy_evidence_context_path = (
+            self.root / "_evidence_contexts" / f"{self.context_id}.json"
+            if legacy_evidence_context and namespace_name == "_contexts"
+            else None
+        )
+
+    @classmethod
+    def for_investigation(cls, investigation_path: str | Path) -> "RetrievalSessionStore":
+        path = Path(investigation_path).expanduser().resolve()
+        digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:24]
+        return cls(
+            path.parent,
+            f"investigation-{digest}",
+            namespace="_retrieval_sessions",
+            legacy_evidence_context=False,
+        )
 
     def load(self) -> RetrievalSessionState:
-        source = self.path if self.path.exists() else self.legacy_evidence_context_path
+        source = self.path
+        if not source.exists() and self.legacy_evidence_context_path is not None:
+            source = self.legacy_evidence_context_path
         if not source.exists():
             return RetrievalSessionState(context_id=self.context_id)
         payload = json.loads(source.read_text(encoding="utf-8"))
@@ -203,7 +286,8 @@ class RetrievalSessionStore:
 
     def reset(self) -> None:
         self.path.unlink(missing_ok=True)
-        self.legacy_evidence_context_path.unlink(missing_ok=True)
+        if self.legacy_evidence_context_path is not None:
+            self.legacy_evidence_context_path.unlink(missing_ok=True)
 
 
 __all__ = [
