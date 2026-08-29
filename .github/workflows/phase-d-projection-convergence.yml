@@ -1,0 +1,120 @@
+name: Phase D Projection Convergence
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/phase-d-projection-convergence.yml
+
+permissions:
+  contents: write
+
+jobs:
+  converge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/evidence-intelligence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Move structural projections behind project()
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          cli_path = Path('src/tracecite/integrations/cli.py')
+          proj_path = Path('src/tracecite/integrations/agent_projection.py')
+          test_path = Path('tests/test_agent_projection.py')
+          cli = cli_path.read_text(encoding='utf-8')
+          proj = proj_path.read_text(encoding='utf-8')
+
+          start = cli.index('def _primary_artifact(')
+          end = cli.index('def _investigation_snapshot(', start)
+          block = cli[start:end]
+          if 'def _compact_search_result(' not in block or 'def _fit_expand_many_result(' not in block:
+              raise SystemExit('expected CLI structural projection functions were not found')
+          cli = cli[:start] + cli[end:]
+
+          block = block.replace('def _compact_search_result(', 'def compact_search_result(', 1)
+          block = block.replace('def _fit_expand_many_result(', 'def fit_expand_many_result(', 1)
+          block = block.replace('_encoded_json(', 'encoded_json(')
+
+          project_marker = '\ndef project(\n'
+          if project_marker not in proj:
+              raise SystemExit('agent_projection.project marker missing')
+          proj = proj.replace(project_marker, '\n' + block + project_marker, 1)
+
+          old_project = '''def project(\n    payload: Mapping[str, Any],\n    *,\n    profile: ProjectionProfile = "agent",\n) -> dict[str, Any]:\n    """Project canonical Runtime output for an upper-layer consumer.\n\n    Runtime owns Evidence acquisition, materialization and integrity.  This\n    function is deliberately transport-only: ``profile='agent'`` removes\n    recoverable bookkeeping, ``profile='full'`` returns a detached canonical\n    view, and custom callables may encode another upper-layer view.\n    """\n\n    if not isinstance(payload, Mapping):\n        raise TypeError("project payload must be a mapping")\n    canonical = copy.deepcopy(dict(payload))\n    if callable(profile):\n        projected = profile(canonical)\n        if not isinstance(projected, Mapping):\n            raise TypeError("custom projection must return a mapping")\n        return copy.deepcopy(dict(projected))\n    name = str(profile or "").strip().lower()\n    if name == "full":\n        return canonical\n    if name == "agent":\n        projected = apply_survey_brief(canonical)\n        return lightweight_result(projected)\n    raise ValueError(f"unsupported projection profile: {profile!r}")\n'''
+          new_project = '''def project(\n    payload: Mapping[str, Any],\n    *,\n    profile: ProjectionProfile = "agent",\n    max_output_chars: int | None = None,\n) -> dict[str, Any]:\n    """Project canonical Runtime output through the single transport owner.\n\n    Runtime owns Evidence acquisition, materialization and integrity. This\n    function owns structural transport shaping only. Named Agent transports\n    (portable/stateful/frame) share the same columnar JSON structure; frame\n    rendering is a final encoding step in ``agent_profile.render_frame``.\n    """\n\n    if not isinstance(payload, Mapping):\n        raise TypeError("project payload must be a mapping")\n    canonical = copy.deepcopy(dict(payload))\n    if callable(profile):\n        projected = profile(canonical)\n        if not isinstance(projected, Mapping):\n            raise TypeError("custom projection must return a mapping")\n        return copy.deepcopy(dict(projected))\n    name = str(profile or "").strip().lower()\n    if name in {"full", "canonical"}:\n        return canonical\n    if name == "survey-brief":\n        return apply_survey_brief(canonical)\n    if name == "lightweight":\n        return lightweight_result(canonical)\n    if name in {"agent", "portable-json", "strict-json", "stateful-index", "frame"}:\n        operation = str(canonical.get("operation") or "")\n        if operation == "search":\n            return compact_search_result(canonical, max_output_chars=max_output_chars)\n        if operation == "expand_many":\n            return fit_expand_many_result(canonical, max_output_chars=max_output_chars)\n        if name == "agent":\n            return lightweight_result(apply_survey_brief(canonical))\n        return canonical\n    raise ValueError(f"unsupported projection profile: {profile!r}")\n'''
+          if old_project not in proj:
+              raise SystemExit('old project() body did not match expected source')
+          proj = proj.replace(old_project, new_project, 1)
+
+          proj = proj.replace(
+              '    "compact_filter_payload",\n',
+              '    "compact_filter_payload",\n    "compact_search_result",\n    "fit_expand_many_result",\n',
+              1,
+          )
+
+          old_import = '''    apply_survey_brief,\n    dedupe_evidence_labels,\n    encoded_json,\n    lightweight_result,\n)'''
+          new_import = '''    encoded_json,\n    project,\n)'''
+          if old_import not in cli:
+              raise SystemExit('CLI projection import block mismatch')
+          cli = cli.replace(old_import, new_import, 1)
+
+          cli = cli.replace(
+              '            payload = apply_survey_brief(payload)',
+              '            payload = project(payload, profile="survey-brief")',
+              1,
+          )
+          cli = cli.replace(
+              '''            payload = _compact_search_result(\n                payload,\n                max_output_chars=args.max_output_chars,\n            )''',
+              '''            payload = project(\n                payload,\n                profile=profile.name,\n                max_output_chars=args.max_output_chars,\n            )''',
+              1,
+          )
+          cli = cli.replace(
+              '''            payload = _fit_expand_many_result(\n                payload,\n                max_output_chars=args.max_output_chars,\n            )''',
+              '''            payload = project(\n                payload,\n                profile=profile.name,\n                max_output_chars=args.max_output_chars,\n            )''',
+              1,
+          )
+          cli = cli.replace(
+              '            payload = lightweight_result(payload)',
+              '            payload = project(payload, profile="lightweight")',
+              1,
+          )
+
+          cli_path.write_text(cli, encoding='utf-8')
+          proj_path.write_text(proj, encoding='utf-8')
+
+          tests = test_path.read_text(encoding='utf-8')
+          tests += '''\n\ndef test_named_transport_profiles_share_project_owner() -> None:\n    digest = "a" * 64\n    payload = {\n        "operation": "search",\n        "status": "ok",\n        "outcome": "not_assessed",\n        "evidence": [{\n            "uri": f"evidence://sha256/{digest}#L7",\n            "source_path": "/tmp/runtime.log",\n            "sha256": digest,\n            "start_line": 7,\n            "end_line": 7,\n            "label": "timeout",\n        }],\n        "coverage": {"match_records": 1, "evidence_returned": 1},\n        "data": {},\n    }\n\n    for name in ("agent", "portable-json", "strict-json", "stateful-index", "frame"):\n        view = project(payload, profile=name, max_output_chars=12_000)\n        assert view["evidence"]["columns"][0] == "ref"\n        assert view["evidence"]["rows"][0][0] == "#L7"\n        assert payload["evidence"][0]["uri"].endswith("#L7")\n\n\ndef test_cli_no_longer_owns_structural_projection_helpers() -> None:\n    from tracecite.integrations import cli\n\n    assert not hasattr(cli, "_compact_search_result")\n    assert not hasattr(cli, "_fit_expand_many_result")\n'''
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+      - name: Install development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run projection and CLI gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/check_architecture.py
+          python -m pytest -W error::DeprecationWarning \
+            tests/test_agent_projection.py \
+            tests/test_agent_profile.py \
+            tests/test_runtime_cli.py \
+            tests/test_cli.py \
+            tests/test_stateful_cli.py
+      - name: Commit convergence and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/phase-d-projection-convergence.yml
+          git config user.name "tracecite-phase-d-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/tracecite/integrations/agent_projection.py src/tracecite/integrations/cli.py tests/test_agent_projection.py .github/workflows/phase-d-projection-convergence.yml
+          git commit -m "refactor(projection): centralize agent transport shaping"
+          git push origin HEAD:experiment/evidence-intelligence
