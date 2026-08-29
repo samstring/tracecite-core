@@ -7,6 +7,9 @@ on:
       - experiment/evidence-intelligence
     paths:
       - benchmarks/agent-investigation/moderate-suite.json
+      - benchmarks/agent-investigation/pi_tracecite_extension.ts
+      - benchmarks/agent-investigation/pi_tracecite_bridge.py
+      - benchmarks/agent-investigation/pi_ab_runtime.py
       - benchmarks/agent-investigation/scale-cases/kubernetes-139417/**
       - .github/workflows/pi-agent-moderate-suite.yml
 
@@ -19,7 +22,7 @@ jobs:
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 1
       matrix:
         include:
           - case_id: doublecmd-2264
@@ -171,7 +174,7 @@ jobs:
         run: |
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
-          SYSTEM_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, investigation order, and the final conclusion. Native tools and TraceCite evidence tools are available. During this investigation, actually use tracecite_search at least once and tracecite_expand at least once; you choose the queries, anchor lines, and all other tools yourself. TraceCite provides evidence, coverage, and literal relationships only; it does not decide root cause. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly say when the supplied evidence is insufficient for a deeper claim.'
+          SYSTEM_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, investigation order, and the final conclusion. Native tools and TraceCite evidence tools are available. During this investigation, actually use tracecite_search at least once and tracecite_expand at least once; you choose the queries, anchor lines, and all other tools yourself. TraceCite provides evidence, coverage, and literal relationships only; it does not decide root cause. Treat TraceCite progress.stop.recommended or explicit no-new-evidence guidance as a stop signal for that evidence scope; do not broaden merely to discover a deeper cause. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly say when the supplied evidence is insufficient for a deeper claim.'
           mkdir -p "$RESULT/pi-tracecite-session"
           cd "$INPUT_ROOT"
           set +e
@@ -214,9 +217,12 @@ jobs:
           done
 
           python - <<'PY'
-          import json, os
+          import json, os, sys
           from collections import Counter
           from pathlib import Path
+
+          sys.path.insert(0, str(Path('benchmarks/agent-investigation').resolve()))
+          from pi_ab_runtime import classify_arm_validity
 
           root = Path(os.environ['RESULT'])
           scorer = os.environ['SCORER']
@@ -227,6 +233,7 @@ jobs:
               score_path = root / f'pi-{name}-score.json'
               transcript_path = root / f'pi-{name}-transcript.jsonl'
               exit_path = root / f'pi-{name}-exit.txt'
+              stderr_path = root / f'pi-{name}-stderr.log'
               score = json.loads(score_path.read_text()) if score_path.is_file() else {}
               quality = score.get('quality') or {}
               cost = score.get('context_cost') or {}
@@ -238,9 +245,17 @@ jobs:
                       e = json.loads(line)
                       if e.get('type') == 'tool':
                           tools[str(e.get('name') or 'unknown')] += 1
+              exit_code = int(exit_path.read_text().strip()) if exit_path.is_file() else None
+              stderr = stderr_path.read_text(errors='replace') if stderr_path.is_file() else ''
+              validity = classify_arm_validity(exit_code, stderr)
               row = {
-                  'exit_code': int(exit_path.read_text().strip()) if exit_path.is_file() else None,
-                  'raw_passed': score.get('passed'),
+                  'exit_code': exit_code,
+                  'valid_for_comparison': validity.valid_for_comparison,
+                  'infrastructure_invalid': validity.infrastructure_invalid,
+                  'failure_kind': validity.failure_kind,
+                  'raw_passed': score.get('passed') if validity.valid_for_comparison else None,
+                  'scored_raw_passed': score.get('passed'),
+                  'stderr_tail': stderr[-300:] if stderr else '',
                   'tool_names': dict(sorted(tools.items())),
                   'model_calls': cost.get('model_calls'),
                   'tool_calls': cost.get('tool_calls'),
@@ -271,19 +286,28 @@ jobs:
               trace['tool_names'].get('tracecite_search', 0) >= 1 and
               trace['tool_names'].get('tracecite_expand', 0) >= 1
           )
+          comparison_valid = native['valid_for_comparison'] and trace['valid_for_comparison']
           comparison = {
-              'schema_version': 1,
+              'schema_version': 2,
               'suite_id': 'agent-evidence-moderate-v1',
               'case_id': os.environ['CASE_ID'],
               'tier': next((c['tier'] for c in json.loads(Path('benchmarks/agent-investigation/moderate-suite.json').read_text())['cases'] if c['id'] == os.environ['CASE_ID']), None),
               'scorer': scorer,
               'primary_correctness_eligible': primary,
+              'comparison_valid': comparison_valid,
               'tracecite_actual_use_valid': trace_used,
               'native': native,
               'tracecite': trace,
           }
           (root / 'comparison.json').write_text(json.dumps(comparison, indent=2, sort_keys=True) + '\n')
           print(json.dumps(comparison, indent=2, sort_keys=True))
+          if not comparison_valid:
+              failures = [
+                  f"{name}:{row['failure_kind']}"
+                  for name, row in [('native', native), ('tracecite', trace)]
+                  if not row['valid_for_comparison']
+              ]
+              raise SystemExit('Infrastructure-invalid Pi A/B comparison: ' + ', '.join(failures))
           if not trace_used:
               raise SystemExit('TraceCite arm is invalid: tracecite_search and tracecite_expand were not both used')
           PY
