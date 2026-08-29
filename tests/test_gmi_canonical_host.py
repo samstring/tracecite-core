@@ -86,7 +86,7 @@ def test_canonical_host_preserves_visible_evidence_and_clamps_radius(tmp_path: P
         "assert 'runtime.log:2 ERROR checksum failed request=7' in first\n"
         "assert 'runtime.log:3 INFO end' in first\n"
         "assert 'no_new_evidence' in second.lower()\n"
-        "assert 'radius_clamped_from=10 radius=8' in clamped\n"
+        "assert 'radius_expanded_from=10 radius=12' in clamped\n"
         "assert 'INFO start' in clamped and 'INFO end' in clamped\n"
         "assert 'runtime.log:1' in clamped and 'runtime.log:3' in clamped\n"
         "print('ok')\n",
@@ -207,6 +207,71 @@ def test_stop_policy_max_round_is_a_safety_cap(tmp_path: Path) -> None:
         "request, event = host._apply_stop_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
         "assert event is not None and event['reason'] == 'max_rounds'\n"
         "assert 'tools' not in request\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
+
+def test_question_aligned_truncated_navigation_is_required_once(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "host._PROMPTED_ACTIONS.clear()\n"
+        "tool_payload = {'status':'ok','coverage':{'evidence_truncated':True},'data':{'evidence_source':{'path':'/tmp/inputs/crash-report.txt'}},'next_queries':['dylib','Flutter','framework']}\n"
+        "messages = [\n"
+        " {'role':'system','content':'s'},\n"
+        " {'role':'user','content':'Identify the Flutter engine subsystem from this crash report.'},\n"
+        " {'role':'assistant','content':'','tool_calls':[{'id':'1','type':'function','function':{'name':'tracecite_search','arguments':'{\\\"file\\\":\\\"crash-report.txt\\\",\\\"query\\\":\\\"^Thread \\\",\\\"regex\\\":true}'}}]},\n"
+        " {'role':'tool','tool_call_id':'1','content':json.dumps(tool_payload)},\n"
+        "]\n"
+        "request, event = host._apply_action_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
+        "assert event is not None and event['event'] == 'prioritize_question_aligned_coverage'\n"
+        "assert event['query'] == 'Flutter'\n"
+        "assert 'TRACECITE_COVERAGE_REQUIRED search|crash-report.txt|Flutter' in request['messages'][-1]['content']\n"
+        "second, second_event = host._apply_action_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
+        "assert second_event is None\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
+def test_question_aligned_navigation_does_not_invent_unmentioned_branch(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "host._PROMPTED_ACTIONS.clear()\n"
+        "tool_payload = {'status':'ok','coverage':{'evidence_truncated':True},'data':{'evidence_source':{'path':'/tmp/inputs/runtime.log'}},'next_queries':['database','network']}\n"
+        "messages = [\n"
+        " {'role':'user','content':'Why did the cache checksum fail?'},\n"
+        " {'role':'assistant','content':'','tool_calls':[{'id':'1','type':'function','function':{'name':'tracecite_search','arguments':'{\\\"file\\\":\\\"runtime.log\\\",\\\"query\\\":\\\"ERROR\\\",\\\"regex\\\":false}'}}]},\n"
+        " {'role':'tool','tool_call_id':'1','content':json.dumps(tool_payload)},\n"
+        "]\n"
+        "assert host._pending_question_navigation(messages) is None\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
+def test_positive_get_radius_expands_to_fidelity_neighborhood(tmp_path: Path) -> None:
+    input_root = tmp_path / "inputs"
+    scratch = tmp_path / "scratch"
+    input_root.mkdir()
+    scratch.mkdir()
+    (input_root / "runtime.log").write_text(
+        "".join(f"line-{i}\n" for i in range(1, 40)), encoding="utf-8"
+    )
+    output = _run_host_script(
+        tmp_path,
+        "runtime = host.CanonicalRuntime(mode='tracecite', input_root=tmp/'inputs', scratch=tmp/'scratch', context_id='')\n"
+        "expanded = runtime._tracecite_get({'file':'runtime.log','line':20,'radius':5})\n"
+        "assert 'radius_expanded_from=5 radius=12' in expanded\n"
+        "assert 'runtime.log:8 line-8' in expanded\n"
+        "assert 'runtime.log:32 line-32' in expanded\n"
+        "scratch_exact = tmp/'scratch-exact'\n"
+        "scratch_exact.mkdir()\n"
+        "runtime_exact = host.CanonicalRuntime(mode='tracecite', input_root=tmp/'inputs', scratch=scratch_exact, context_id='')\n"
+        "exact = runtime_exact._tracecite_get({'file':'runtime.log','line':20,'radius':0})\n"
+        "assert '@NORMALIZE' not in exact\n"
+        "assert 'runtime.log:20 line-20' in exact\n"
         "print('ok')\n",
     )
     assert output.strip() == "ok"

@@ -29,11 +29,13 @@ _CONTEXT_WINDOW_RE = re.compile(
     re.IGNORECASE,
 )
 _HTTP_5XX_RE = re.compile(r"HTTP\s+5\d\d", re.IGNORECASE)
-_MAX_GET_RADIUS = 8
+_MAX_GET_RADIUS = 12
+_MIN_GET_RADIUS = 12
 _REQUEST_INDEX = 0
 _DEFAULT_MAX_ROUNDS = 12
 _DEFAULT_NO_GROWTH_ROUNDS = 2
 _ACTION_PROMPT_MARKER = "TRACECITE_ACTION_REQUIRED"
+_NAVIGATION_PROMPT_MARKER = "TRACECITE_COVERAGE_REQUIRED"
 # Process-local protocol memory. A benchmark process owns one conversation,
 # so this prevents re-injecting the same synthetic action prompt without
 # leaking state across independent benchmark jobs/processes.
@@ -164,6 +166,60 @@ def _action_from_tool_output(output: Any) -> dict[str, Any] | None:
     }
 
 
+
+def _original_question_text(messages: Sequence[Mapping[str, Any]]) -> str:
+    parts: list[str] = []
+    for message in messages:
+        if str(message.get("role") or "") != "user":
+            continue
+        content = str(message.get("content") or "")
+        if not content:
+            continue
+        if _ACTION_PROMPT_MARKER in content or _NAVIGATION_PROMPT_MARKER in content:
+            continue
+        if "Evidence acquisition has stopped" in content or "previous assistant response hit" in content:
+            continue
+        parts.append(content)
+    return "\n".join(parts)
+
+
+def _question_aligned_navigation_from_tool_output(
+    output: Any,
+    question_text: str,
+) -> dict[str, Any] | None:
+    # Lexical coverage control only; this does not infer or rank a root cause.
+    payload = _tool_output_payload(output)
+    if payload is None:
+        return None
+    coverage = payload.get("coverage") or {}
+    if not isinstance(coverage, Mapping) or not bool(coverage.get("evidence_truncated")):
+        return None
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return None
+    evidence_source = data.get("evidence_source") or {}
+    if not isinstance(evidence_source, Mapping):
+        return None
+    source_path = str(evidence_source.get("path") or "").strip()
+    if not source_path:
+        return None
+    question_folded = question_text.casefold()
+    if not question_folded:
+        return None
+    for raw in payload.get("next_queries") or []:
+        query = str(raw or "").strip()
+        if len(query) < 3 or query.casefold() not in question_folded:
+            continue
+        return {
+            "operation": "search",
+            "source": Path(source_path).name,
+            "query": query,
+            "purpose": "cover_question_aligned_truncated_branch",
+            "gap_kind": "truncated_question_coverage",
+        }
+    return None
+
+
 def _tool_call_signature(call: Mapping[str, Any]) -> tuple[str, str, str] | None:
     function = call.get("function") or {}
     if not isinstance(function, Mapping):
@@ -229,6 +285,44 @@ def _pending_action(messages: Sequence[Mapping[str, Any]]) -> dict[str, Any] | N
     return pending
 
 
+
+def _pending_question_navigation(messages: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    attempted: set[tuple[str, str, str]] = set()
+    pending: dict[str, Any] | None = None
+    question_text = _original_question_text(messages)
+    for message in messages:
+        role = str(message.get("role") or "")
+        if role == "assistant":
+            for raw_call in message.get("tool_calls") or []:
+                if not isinstance(raw_call, Mapping):
+                    continue
+                signature = _tool_call_signature(raw_call)
+                if signature is not None:
+                    attempted.add(signature)
+                    if pending is not None and signature == _action_signature(pending):
+                        pending = None
+            continue
+        if role != "tool":
+            continue
+        action = _question_aligned_navigation_from_tool_output(
+            message.get("content") or "", question_text
+        )
+        if action is not None and _action_signature(action) not in attempted:
+            pending = action
+    return pending
+
+
+def _navigation_prompt(action: Mapping[str, Any]) -> str:
+    signature = "|".join(_action_signature(action))
+    return (
+        f"{_NAVIGATION_PROMPT_MARKER} {signature}\n"
+        "The latest canonical search was truncated and Runtime exposed a next-query branch that is also "
+        "explicitly named in the investigation question. Before concluding, cover that branch once: "
+        f"tracecite_search(file={action['source']!r}, query={action['query']!r}, regex=false). "
+        "This is lexical evidence-coverage completion only; it is not a causal or root-cause recommendation."
+    )
+
+
 def _action_prompt(action: Mapping[str, Any]) -> str:
     signature = "|".join(_action_signature(action))
     purpose = str(action.get("purpose") or "mechanical_evidence_gap_closure").strip()
@@ -250,12 +344,20 @@ def _apply_action_policy(payload: Mapping[str, Any]) -> tuple[dict[str, Any], di
     if len(messages) != len(raw_messages):
         return request, None
     action = _pending_action(messages)
+    event_name = "prioritize_actionable_retrieval"
+    prompt_builder = _action_prompt
+    marker_prefix = _ACTION_PROMPT_MARKER
+    if action is None:
+        action = _pending_question_navigation(messages)
+        event_name = "prioritize_question_aligned_coverage"
+        prompt_builder = _navigation_prompt
+        marker_prefix = _NAVIGATION_PROMPT_MARKER
     if action is None:
         return request, None
 
     action_signature = _action_signature(action)
     signature = "|".join(action_signature)
-    marker = f"{_ACTION_PROMPT_MARKER} {signature}"
+    marker = f"{marker_prefix} {signature}"
     already_prompted = action_signature in _PROMPTED_ACTIONS or any(
         str(item.get("role") or "") == "user" and marker in str(item.get("content") or "")
         for item in messages
@@ -263,15 +365,12 @@ def _apply_action_policy(payload: Mapping[str, Any]) -> tuple[dict[str, Any], di
     if already_prompted:
         return request, None
 
-    # Record before provider dispatch. If the synthetic user prompt is not
-    # persisted into the host's conversation history, the next request still
-    # cannot re-inject it and repeatedly defer the normal safety cap.
     _PROMPTED_ACTIONS.add(action_signature)
-    messages.append({"role": "user", "content": _action_prompt(action)})
+    messages.append({"role": "user", "content": prompt_builder(action)})
     request["messages"] = messages
     return request, {
         "type": "protocol",
-        "event": "prioritize_actionable_retrieval",
+        "event": event_name,
         "operation": action["operation"],
         "source": action["source"],
         "query": action["query"],
@@ -454,10 +553,15 @@ class CanonicalRuntime(base.BenchmarkToolRuntime):
             raise ValueError("line must be >= 1")
         if requested_radius < 0:
             raise ValueError("radius must be >= 0")
-        radius = min(requested_radius, _MAX_GET_RADIUS)
+        radius = (
+            0
+            if requested_radius == 0
+            else min(_MAX_GET_RADIUS, max(_MIN_GET_RADIUS, requested_radius))
+        )
         prefix = ""
         if radius != requested_radius:
-            prefix = f"@NORMALIZE radius_clamped_from={requested_radius} radius={radius}"
+            direction = "expanded" if radius > requested_radius else "clamped"
+            prefix = f"@NORMALIZE radius_{direction}_from={requested_radius} radius={radius}"
         result = retrieve(
             EvidenceRequest(
                 RangeTarget(
@@ -516,8 +620,8 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
         common._function_tool(
             "tracecite_get",
             (
-                "Recover exact line-addressable context around a known line through the canonical Runtime. radius is bounded to 0-8; "
-                "slight model overshoot is normalized to 8 instead of wasting a model turn. If canonical output reports "
+                "Recover exact line-addressable context around a known line through the canonical Runtime. radius=0 is exact-line; any positive radius is normalized to a 12-line evidence neighborhood for fidelity. "
+                "This preserves adjacent correlated evidence without requiring the model to guess a larger radius. If canonical output reports "
                 "data.actionable_retrieval, execute that mechanical gap-closing action before unrelated exploration or conclusion."
             ),
             {
