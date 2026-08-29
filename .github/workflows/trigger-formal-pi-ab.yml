@@ -16,34 +16,22 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for matching TraceCite capability run
+      - name: Wait for latest TraceCite capability run
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
           for attempt in $(seq 1 90); do
-            json="$(gh api "repos/$REPO/actions/workflows/pi-tracecite-139417-capability.yml/runs?branch=experiment%2Fevidence-intelligence&per_page=20")"
-            row="$(python - "$SHA" <<'PY' <<<"$json"
-          import json, sys
-          wanted = sys.argv[1]
-          data = json.load(sys.stdin)
-          runs = [r for r in data.get('workflow_runs', []) if r.get('head_sha') == wanted]
-          if not runs:
-              print('')
-          else:
-              run = runs[0]
-              print(f"{run.get('id')}|{run.get('status')}|{run.get('conclusion') or ''}")
-          PY
-            )"
+            row="$(gh api "repos/$REPO/actions/workflows/pi-tracecite-139417-capability.yml/runs?branch=experiment%2Fevidence-intelligence&per_page=1" \
+              --jq '.workflow_runs[0] | "\(.id)|\(.status)|\(.conclusion // "")|\(.head_sha)"')"
             if [[ -z "$row" ]]; then
               sleep 10
               continue
             fi
-            IFS='|' read -r run_id status conclusion <<<"$row"
-            echo "capability run=$run_id status=$status conclusion=$conclusion"
+            IFS='|' read -r run_id status conclusion head_sha <<<"$row"
+            echo "capability run=$run_id sha=$head_sha status=$status conclusion=$conclusion"
             if [[ "$status" == "completed" ]]; then
               if [[ "$conclusion" != "success" ]]; then
                 echo "Capability validation failed; formal A/B will not be dispatched."
