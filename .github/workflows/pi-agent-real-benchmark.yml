@@ -22,12 +22,12 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
       BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
-      PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent-config
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
       PI_SKIP_VERSION_CHECK: "1"
       PI_TELEMETRY: "0"
       CASE_DIR: benchmarks/agent-investigation/scale-cases/kubernetes-140268
-      RESULT: ${{ runner.temp }}/pi-real-kubernetes-140268
-      PREP: ${{ runner.temp }}/pi-real-kubernetes-140268/prepared
+      RESULT: /tmp/pi-real-kubernetes-140268
+      PREP: /tmp/pi-real-kubernetes-140268/prepared
     steps:
       - uses: actions/checkout@v4
 
@@ -221,7 +221,7 @@ jobs:
           from pathlib import Path
 
           result = Path(os.environ["RESULT"])
-          summary = {"pi_version": None, "model": os.environ.get("BENCH_MODEL"), "arms": {}}
+          summary = {"pi_version": "0.84.4", "model": os.environ.get("BENCH_MODEL"), "arms": {}}
           for arm in ("baseline", "tracecite"):
               row = {"exit_code": None, "passed": None, "dimension_recall": None, "supported_dimension_recall": None, "citation_accuracy": None}
               exit_path = result / f"pi-{arm}-exit.txt"
@@ -245,5 +245,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pi-real-kubernetes-140268
-          path: ${{ runner.temp }}/pi-real-kubernetes-140268
+          path: /tmp/pi-real-kubernetes-140268
           if-no-files-found: warn
