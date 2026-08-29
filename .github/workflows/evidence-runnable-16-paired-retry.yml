@@ -1,4 +1,5 @@
 name: Runnable 16 Paired A/B Retry
+# Final Gate validation: Phase D deterministic convergence + hardened canonical host.
 
 on:
   workflow_dispatch:
