@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Union
 
 from tracecite.runtime.evidence_ambiguity import scoped_identity_fanout_hints
+from tracecite.runtime.evidence_fidelity import enrich_search_leaf_context
 
 DEFAULT_AGENT_MAX_OUTPUT_CHARS = 12_000
 DEFAULT_FILTER_MAX_LINE_CHARS = 1024
@@ -338,6 +339,7 @@ def project(
         return canonical
     if name == "agent":
         projected = apply_survey_brief(canonical)
+        projected = enrich_search_leaf_context(projected)
         projected = attach_ambiguity_hints(projected)
         return lightweight_result(projected)
     raise ValueError(f"unsupported projection profile: {profile!r}")
