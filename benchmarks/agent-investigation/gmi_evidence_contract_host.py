@@ -118,9 +118,15 @@ class EvidenceContractRuntime(canonical.CanonicalRuntime):
 
     def _render(self, result: Any, *, prefix: str = "") -> str:
         payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+        canonical_result = getattr(result, "canonical_result", None)
+        evidence_source = (
+            canonical_result.get("evidence")
+            if isinstance(canonical_result, Mapping)
+            else payload.get("evidence")
+        )
         refs = [
             str(item.get("uri") or "").strip()
-            for item in payload.get("evidence") or []
+            for item in evidence_source or []
             if isinstance(item, Mapping) and str(item.get("uri") or "").strip()
         ]
         rendered = super()._render(result, prefix=prefix)
