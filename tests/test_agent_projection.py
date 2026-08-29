@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from tracecite.integrations.agent_projection import (
     apply_survey_brief,
+    attach_ambiguity_hints,
     compact_filter_payload,
     dedupe_evidence_labels,
     dedupe_survey_coverage,
@@ -119,6 +120,83 @@ def test_lightweight_drops_runtime_bookkeeping_but_keeps_actionable_progress() -
         "reasons": ["exploration_depth"],
     }
     assert slim["data"]["text"] == "runtime.log:7 failure\n"
+
+
+def test_attach_ambiguity_hints_is_navigation_only() -> None:
+    payload = {
+        "operation": "expand",
+        "status": "ok",
+        "data": {
+            "text": (
+                "1: resources: test.device/device-plugin-failures-2111 "
+                "test.device/device-plugin-failures-3083 "
+                "test.device/device-plugin-failures-5477\n"
+            )
+        },
+        "evidence": [{"source_path": "/tmp/build.log", "start_line": 1, "end_line": 1}],
+    }
+
+    projected = attach_ambiguity_hints(payload)
+
+    assert "ambiguity_hints" not in payload["data"]
+    hints = projected["data"]["ambiguity_hints"]
+    assert hints == [
+        {
+            "kind": "sibling_scope_fanout",
+            "scope": "test.device/",
+            "family": "device-plugin-failures-*",
+            "member_count": 3,
+            "members": [
+                "device-plugin-failures-2111",
+                "device-plugin-failures-3083",
+                "device-plugin-failures-5477",
+            ],
+            "navigation_query": "test.device/device-plugin-failures-",
+        }
+    ]
+    assert "does not identify a root cause" in projected["data"]["ambiguity_hint_note"]
+    assert projected["evidence"] == payload["evidence"]
+
+
+def test_agent_project_surfaces_scope_fanout_but_full_profile_stays_canonical() -> None:
+    payload = {
+        "operation": "expand",
+        "status": "ok",
+        "data": {
+            "text": (
+                "9: Capacity: test.device/device-plugin-failures-2111=1 "
+                "test.device/device-plugin-failures-3083=1 "
+                "test.device/device-plugin-failures-5477=1\n"
+            )
+        },
+        "evidence": [{"source_path": "/tmp/build.log", "start_line": 9, "end_line": 9}],
+    }
+
+    agent = project(payload, profile="agent")
+    full = project(payload, profile="full")
+
+    assert agent["data"]["ambiguity_hints"][0]["scope"] == "test.device/"
+    assert agent["data"]["ambiguity_hints"][0]["member_count"] == 3
+    assert "ambiguity_hints" not in full["data"]
+    assert "ambiguity_hints" not in payload["data"]
+
+
+def test_ambiguity_projection_requires_real_fanout_not_two_siblings() -> None:
+    payload = {
+        "operation": "expand",
+        "status": "ok",
+        "data": {
+            "text": (
+                "1: resource.example/widget-1001\n"
+                "2: resource.example/widget-1002\n"
+            )
+        },
+        "evidence": [{"source_path": "/tmp/runtime.log", "start_line": 1, "end_line": 2}],
+    }
+
+    agent = project(payload, profile="agent")
+
+    assert "ambiguity_hints" not in agent["data"]
 
 
 def test_apply_survey_brief_strips_template_text() -> None:
