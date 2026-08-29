@@ -21,6 +21,10 @@ from tracecite.runtime import (
 from tracecite.runtime.test_assessment import confirm_test_evidence
 
 
+# This file is a benchmark harness, not TraceCite product architecture. It keeps
+# an explicit investigation loop so experiments can measure bookkeeping effects
+# with the existing GMI host. A production Agent host (for example Pi) should
+# own its own loop and final answer policy.
 _CLOSURE_TOOL_NAMES = frozenset(
     {
         "tracecite_hypothesis",
@@ -32,13 +36,14 @@ _CLOSURE_TOOL_NAMES = frozenset(
     }
 )
 _EPISTEMIC_CLOSURE_PROMPT = (
-    "Mechanical evidence acquisition has reached its configured limit, but the investigation "
-    "does not yet contain a Finding. Do not retrieve more evidence. Use the remaining "
-    "investigation-state tools to account for the hypothesis and declared Tests. Evidence "
-    "observed before a Test was declared must first be explicitly bound with "
-    "tracecite_confirm_evidence before it can support a decisive Test assessment. A decisive "
-    "Finding is allowed only when every declared Test has an evidence-backed assessment; "
-    "otherwise record an unknown Finding. Never upgrade retrieval exhaustion into proof."
+    "Mechanical evidence acquisition has reached its configured benchmark limit, but the "
+    "investigation does not yet contain a Finding. Do not retrieve more evidence in this "
+    "benchmark run. Use the remaining investigation-state tools to account for the hypothesis "
+    "and declared Tests. Evidence observed before a Test was declared must first be explicitly "
+    "bound with tracecite_confirm_evidence before it can ground an Agent Test assessment. "
+    "A supported/contradicted Test assessment is the Agent's semantic judgment; TraceCite only "
+    "checks its Evidence provenance, coverage and integrity. Record unknown when the available "
+    "evidence is insufficient. Never upgrade retrieval exhaustion into proof."
 )
 _ORIGINAL_STOP_POLICY = canonical._apply_stop_policy
 _ORIGINAL_TRANSPORT = canonical._ORIGINAL_POST_CHAT
@@ -69,24 +74,6 @@ def _state_has_finding() -> bool:
     return bool(_findings())
 
 
-def _state_has_decisive_finding() -> bool:
-    return any(
-        str(item.get("outcome") or "").strip().lower() in {"supported", "contradicted"}
-        for item in _findings()
-    )
-
-
-def _unknown_finding_answer() -> str:
-    return (
-        "## Investigation result: unknown\n\n"
-        "TraceCite did not validate a decisive root-cause Finding. The declared Test/evidence "
-        "contract remained unresolved or insufficient, so the available evidence does not "
-        "justify presenting a specific causal mechanism, intermittent upstream condition, or "
-        "corrective change as confirmed. Any such explanation remains a hypothesis and must "
-        "not be stated as the root cause."
-    )
-
-
 def _tool_name(tool: Mapping[str, Any]) -> str:
     if "name" in tool:
         return str(tool.get("name") or "")
@@ -97,6 +84,8 @@ def _tool_name(tool: Mapping[str, Any]) -> str:
 def _closure_only_stop_policy(
     payload: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Benchmark-only closure step after the configured retrieval budget ends."""
+
     request, event = _ORIGINAL_STOP_POLICY(payload)
     if event is None or _state_has_finding():
         return request, event
@@ -128,71 +117,22 @@ def _closure_only_stop_policy(
     return request, replacement
 
 
-def _enforce_unknown_finding_ceiling(response: Mapping[str, Any]) -> dict[str, Any]:
-    """Prevent an unknown InvestigationState from becoming a decisive prose answer.
-
-    The model remains free to reason and may continue calling tools. The ceiling
-    is applied only to a no-tool final response after the persisted investigation
-    contains Findings but none of them is decisive.
-    """
-
-    if not _state_has_finding() or _state_has_decisive_finding():
-        return dict(response)
-
-    choices = response.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return dict(response)
-    first = choices[0]
-    if not isinstance(first, Mapping):
-        return dict(response)
-    message = first.get("message")
-    if not isinstance(message, Mapping):
-        return dict(response)
-    tool_calls = message.get("tool_calls")
-    if isinstance(tool_calls, list) and tool_calls:
-        return dict(response)
-
-    replaced = dict(response)
-    copied_choices = [dict(item) if isinstance(item, Mapping) else item for item in choices]
-    copied_first = dict(copied_choices[0])
-    copied_message = dict(message)
-    copied_message["content"] = _unknown_finding_answer()
-    copied_first["message"] = copied_message
-    copied_first["finish_reason"] = "stop"
-    copied_choices[0] = copied_first
-    replaced["choices"] = copied_choices
-
-    transcript_value = os.environ.get("TRACECITE_BENCH_TRANSCRIPT", "").strip()
-    if transcript_value:
-        common._append_event(
-            Path(transcript_value),
-            {
-                "type": "protocol",
-                "event": "enforce_unknown_finding_ceiling",
-                "finding_outcomes": [
-                    str(item.get("outcome") or "unknown") for item in _findings()
-                ],
-            },
-        )
-    return replaced
-
-
 def _required_tool_transport(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep the benchmark loop tool-driven without rewriting the model's prose."""
+
     request = dict(payload)
     if request.get("tools") and not _state_has_finding():
         request["tool_choice"] = "required"
-    response = _ORIGINAL_TRANSPORT(request)
-    if not isinstance(response, Mapping):
-        return response
-    return _enforce_unknown_finding_ceiling(response)
+    return _ORIGINAL_TRANSPORT(request)
 
 
+# Benchmark-only monkey patches. They must not be interpreted as Runtime policy.
 canonical._apply_stop_policy = _closure_only_stop_policy
 canonical._ORIGINAL_POST_CHAT = _required_tool_transport
 
 
 class EvidenceContractRuntime(canonical.CanonicalRuntime):
-    """Canonical evidence Runtime plus explicit investigation-state closure."""
+    """Benchmark adapter exposing TraceCite evidence + investigation bookkeeping tools."""
 
     @property
     def _store(self) -> InvestigationStore:
@@ -324,11 +264,20 @@ class EvidenceContractRuntime(canonical.CanonicalRuntime):
 
     def _tracecite_state(self, _args: Mapping[str, Any]) -> str:
         state = self._store.load()
-        all_assessments: dict[str, str] = {}
+        all_assessments: dict[str, dict[str, Any]] = {}
         for hypothesis in state.hypotheses:
             hypothesis_id = str(hypothesis.get("id") or "")
             for test_id, execution in latest_test_assessments(state, hypothesis_id).items():
-                all_assessments[test_id] = str(execution.get("outcome") or "unknown")
+                verification = execution.get("verification") or {}
+                if not isinstance(verification, Mapping):
+                    verification = {}
+                all_assessments[test_id] = {
+                    "outcome": str(execution.get("outcome") or "unknown"),
+                    "assessment_source": str(
+                        verification.get("assessment_source") or "legacy_unspecified"
+                    ),
+                    "semantic_verified": verification.get("semantic_claim_verified") is True,
+                }
         payload = {
             "hypotheses": [
                 {
@@ -342,7 +291,14 @@ class EvidenceContractRuntime(canonical.CanonicalRuntime):
                 {
                     "id": item.get("id"),
                     "hypothesis_id": item.get("hypothesis_id"),
-                    "assessment": all_assessments.get(str(item.get("id") or ""), "unassessed"),
+                    "assessment": all_assessments.get(
+                        str(item.get("id") or ""),
+                        {
+                            "outcome": "unassessed",
+                            "assessment_source": "none",
+                            "semantic_verified": False,
+                        },
+                    ),
                     "execution_count": len(item.get("execution_ids") or []),
                 }
                 for item in state.tests
@@ -485,7 +441,7 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
     investigation_tools = [
         common._function_tool(
             "tracecite_hypothesis",
-            "Record one falsifiable hypothesis before treating retrieved facts as a root-cause conclusion.",
+            "Record one falsifiable hypothesis for benchmark investigation bookkeeping.",
             {
                 "claim": {"type": "string"},
                 "hypothesis_id": {"type": ["string", "null"]},
@@ -495,7 +451,7 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
         ),
         common._function_tool(
             "tracecite_test",
-            "Declare one concrete Test for a hypothesis, including both the observation that would support it and the observation that would contradict it. Every declared Test must be assessed before a decisive Finding.",
+            "Declare one concrete Test for a hypothesis, including an expected observation and a contradicting observation. The Agent owns the semantic meaning of this Test.",
             {
                 "hypothesis_id": {"type": "string"},
                 "intent": {"type": "string"},
@@ -522,7 +478,7 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
         ),
         common._function_tool(
             "tracecite_assess_test",
-            "Assess one declared Test. supported/contradicted require an exact @EVIDENCE_REF formally linked to the same Test; if the ref was discovered before the Test existed, call tracecite_confirm_evidence first. Use unknown when evidence is insufficient.",
+            "Record the Agent's semantic assessment of one declared Test. supported/contradicted require @EVIDENCE_REF values formally linked to the Test; TraceCite validates only Evidence provenance/coverage/integrity, not the natural-language interpretation. Use unknown when evidence is insufficient.",
             {
                 "test_id": {"type": "string"},
                 "outcome": {
@@ -535,7 +491,7 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
         ),
         common._function_tool(
             "tracecite_finding",
-            "Record the epistemic Finding for a hypothesis. Runtime rejects a decisive supported/contradicted Finding when declared Tests are unassessed, unknown, contradictory to the requested outcome, or not evidence-backed. Record unknown when the investigation cannot close; an unknown Finding also caps the final prose answer at unknown.",
+            "Record the Agent's Finding for a hypothesis. Runtime checks mechanical grounding (linked Tests, Evidence provenance, Coverage and integrity) but does not certify the Finding's natural-language causal semantics. Record unknown when the Agent cannot justify a stronger judgment.",
             {
                 "hypothesis_id": {"type": "string"},
                 "outcome": {
@@ -558,7 +514,7 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
         ),
         common._function_tool(
             "tracecite_state",
-            "Inspect the compact investigation bookkeeping state: hypotheses, declared Tests, latest Test assessments, and Findings. This does not retrieve new evidence.",
+            "Inspect compact benchmark bookkeeping state: hypotheses, Tests, Agent assessment provenance, and Findings. This does not retrieve new evidence or verify causal semantics.",
             {},
             [],
         ),
