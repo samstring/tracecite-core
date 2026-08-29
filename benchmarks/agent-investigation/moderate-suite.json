@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "suite_id": "agent-evidence-moderate-v1",
+  "description": "Two small direct guards plus four natural 1-25 MiB real-evidence cases. Primary correctness excludes dimensions that the supplied evidence universe cannot establish.",
+  "policy": {
+    "target_case_count": 6,
+    "small_case_count": 2,
+    "medium_case_count": 4,
+    "small_max_bytes_exclusive": 1048576,
+    "medium_min_bytes_inclusive": 1048576,
+    "medium_max_bytes_inclusive": 26214400,
+    "synthetic_padding_allowed": false,
+    "actual_tracecite_use_required": true,
+    "primary_correctness_requires_evidence_sufficiency": true
+  },
+  "cases": [
+    {
+      "id": "doublecmd-2264",
+      "tier": "small",
+      "bytes": 1185,
+      "case_path": "benchmarks/agent-investigation/cases/doublecmd-2264",
+      "scorer": "legacy",
+      "primary_correctness_eligible": true,
+      "evidence_sufficiency": "closed"
+    },
+    {
+      "id": "prometheus-18018",
+      "tier": "small",
+      "bytes": 2108,
+      "case_path": "benchmarks/agent-investigation/cases/prometheus-18018",
+      "scorer": "legacy",
+      "primary_correctness_eligible": true,
+      "evidence_sufficiency": "closed"
+    },
+    {
+      "id": "kubernetes-140039-runc-5347",
+      "tier": "medium",
+      "bytes": 2292856,
+      "case_path": "benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347",
+      "scorer": "root_cause",
+      "primary_correctness_eligible": true,
+      "eligible_dimensions": [
+        "failure_localization",
+        "immediate_failure_mechanism",
+        "upstream_contributor"
+      ],
+      "excluded_dimensions": {
+        "fix_alignment": "merged-fix semantics are not present in the runtime log"
+      }
+    },
+    {
+      "id": "kubernetes-140848",
+      "tier": "medium",
+      "bytes": 14495302,
+      "case_path": "benchmarks/agent-investigation/scale-cases/kubernetes-140848",
+      "scorer": "root_cause",
+      "primary_correctness_eligible": true,
+      "eligible_dimensions": [
+        "failure_localization",
+        "immediate_failure_mechanism",
+        "upstream_contributor"
+      ],
+      "excluded_dimensions": {
+        "fix_alignment": "merged-fix semantics are not present in the runtime log"
+      }
+    },
+    {
+      "id": "kubernetes-139417",
+      "tier": "medium",
+      "bytes": 13492765,
+      "case_path": "benchmarks/agent-investigation/scale-cases/kubernetes-139417",
+      "scorer": "root_cause",
+      "primary_correctness_eligible": true,
+      "eligible_dimensions": [
+        "failure_localization",
+        "immediate_failure_mechanism"
+      ],
+      "excluded_dimensions": {
+        "upstream_contributor": "the status-patch race is maintainer-confirmed but not established by the runtime log",
+        "fix_alignment": "resourceVersion conflict detection is fix truth, not runtime evidence"
+      }
+    },
+    {
+      "id": "kubernetes-140268",
+      "tier": "medium",
+      "bytes": 24216286,
+      "case_path": "benchmarks/agent-investigation/scale-cases/kubernetes-140268",
+      "scorer": "root_cause",
+      "primary_correctness_eligible": false,
+      "evidence_sufficiency": "partial_control",
+      "diagnostic_purpose": "Measure retrieval/context behavior and whether the Agent correctly stops at the evidence boundary instead of guessing hidden source-code semantics.",
+      "excluded_dimensions": {
+        "immediate_failure_mechanism": "the log shows the intended pod remaining Healthy but does not directly establish that another pod received the update",
+        "upstream_contributor": "device-ID scoping and identifier-only lookup semantics are not directly established by the supplied build log",
+        "fix_alignment": "resourceName+deviceID fix semantics are evaluator-only"
+      }
+    }
+  ]
+}
