@@ -35,6 +35,18 @@ def _node_text(node: EvidenceNode) -> str:
     return node.label or node.kind
 
 
+def _entity_signature(node: EvidenceNode) -> tuple[tuple[str, str, str], ...]:
+    """Return exact entity identity that grouping is forbidden to normalize away.
+
+    Message payloads may contain high-cardinality UUIDs/numbers that are safe to
+    normalize for repetition detection. EntityRef keys are correlation identity,
+    however, so evidence from different exact entities must never be collapsed
+    into one group merely because their message templates match.
+    """
+
+    return tuple(sorted(entity.key for entity in node.entities))
+
+
 def _timestamp_key(value: str) -> tuple[int, str]:
     return (0 if value else 1, value or "")
 
@@ -110,25 +122,46 @@ def _representatives(nodes: Sequence[EvidenceNode], limit: int) -> tuple[str, ..
     return tuple(selected)
 
 
+def _encoded_group_key(
+    source: str,
+    kind: str,
+    template: str,
+    entity_signature: tuple[tuple[str, str, str], ...],
+) -> str:
+    # Preserve the historical key/id for evidence with no entity identity.
+    encoded = f"{source}\0{kind}\0{template}"
+    if not entity_signature:
+        return encoded
+    entity_part = "\x1e".join("\x1f".join(parts) for parts in entity_signature)
+    return f"{encoded}\0entities:{entity_part}"
+
+
 def group_evidence(
     nodes: Sequence[EvidenceNode],
     *,
     max_representatives: int = 3,
 ) -> GroupingResult:
-    """Group repeated evidence by source/kind/template and select representatives."""
+    """Group repetition while preserving exact correlation-entity diversity."""
 
-    buckets: dict[tuple[str, str, str], list[EvidenceNode]] = {}
+    buckets: dict[
+        tuple[str, str, str, tuple[tuple[str, str, str], ...]],
+        list[EvidenceNode],
+    ] = {}
     for node in nodes:
         template = normalize_template(_node_text(node))
-        key = (node.source, node.kind, template)
+        entity_signature = _entity_signature(node)
+        key = (node.source, node.kind, template, entity_signature)
         buckets.setdefault(key, []).append(node)
 
     groups: list[EvidenceGroup] = []
     node_to_group: dict[str, str] = {}
-    for source, kind, template in sorted(buckets):
-        members = sorted(buckets[(source, kind, template)], key=lambda item: (_timestamp_key(item.timestamp), item.id))
+    for source, kind, template, entity_signature in sorted(buckets):
+        members = sorted(
+            buckets[(source, kind, template, entity_signature)],
+            key=lambda item: (_timestamp_key(item.timestamp), item.id),
+        )
         member_ids = tuple(item.id for item in members)
-        encoded_key = f"{source}\0{kind}\0{template}"
+        encoded_key = _encoded_group_key(source, kind, template, entity_signature)
         group_id = "g-" + hashlib.sha256(encoded_key.encode("utf-8")).hexdigest()[:16]
         timestamps = [item.timestamp for item in members if item.timestamp]
         group = EvidenceGroup(
