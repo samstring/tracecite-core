@@ -7,6 +7,7 @@ import pytest
 
 from tracecite import InvestigationError, InvestigationStore
 from tracecite.knowledge import KnowledgeGovernanceError, KnowledgeGovernanceStore
+from tracecite.runtime import assess_test
 
 
 SUPPORT_REF = "evidence://sha256/" + ("a" * 64) + "#L2-L3"
@@ -39,6 +40,13 @@ def _ready(tmp_path: Path, *, outcome: str = "supported") -> tuple[Investigation
             },
             hypothesis_id="H1",
             test_id="T1",
+        )
+        assess_test(
+            state,
+            "T1",
+            outcome,
+            evidence_refs=[evidence_ref],
+            coverage={"records": 1, "complete": True},
         )
     finding = state.add_finding(
         "H1",
@@ -78,7 +86,7 @@ def test_supported_finding_proposal_contains_refs_scope_tests_and_source(
     assert candidate.payload["test_strategy"][0]["strategy"]["query"] == "timeout"
     assert candidate.payload["test_recipes"][0]["expected_observation"] == "timeout is present"
     assert candidate.payload["source_schema"] == 1
-    assert candidate.payload["source_revision"] == 4
+    assert candidate.payload["source_revision"] == 5
 
     persisted = json.loads(state.path.read_text(encoding="utf-8"))
     link = persisted["knowledge_candidates"]
