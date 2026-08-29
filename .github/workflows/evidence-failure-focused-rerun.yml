@@ -1,19 +1,10 @@
-name: Evidence Failure Focused Rerun
-# Validate evidence-contract closure on the two previously failing correctness cases.
+name: Legacy Evidence Contract Focused Rerun
+# Legacy benchmark for the in-repo GMI evidence-contract harness.
+# The primary real-Agent comparison is Pi Agent Real Benchmark; this workflow
+# remains manual for historical regression/debugging only.
 
 on:
-  push:
-    branches:
-      - experiment/evidence-intelligence
-    paths:
-      - .github/workflows/evidence-failure-focused-rerun.yml
-      - benchmarks/agent-investigation/gmi_evidence_contract_host.py
-      - benchmarks/agent-investigation/gmi_canonical_host.py
-      - benchmarks/agent-investigation/run_paired_retry.py
-      - src/tracecite/runtime/**
-      - tests/test_gmi_evidence_contract_host.py
-      - tests/test_test_assessment.py
-      - tests/test_finding_validation.py
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -67,7 +58,7 @@ jobs:
           test -n "$PREPARED"
           echo "RESULT=$RESULT" >> "$GITHUB_ENV"
           echo "PREPARED=$PREPARED" >> "$GITHUB_ENV"
-      - name: Run evidence-contract pair
+      - name: Run legacy evidence-contract pair
         shell: bash
         run: |
           python benchmarks/agent-investigation/run_paired_retry.py \
@@ -83,10 +74,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: focused-${{ matrix.id }}
+          name: legacy-focused-${{ matrix.id }}
           path: /tmp/focused-repair-${{ matrix.id }}/result
           if-no-files-found: warn
-      - name: Enforce focused correctness gate
+      - name: Enforce legacy focused correctness gate
         if: always()
         shell: bash
         run: |
@@ -97,7 +88,7 @@ jobs:
 
           pair_path = Path(os.environ["RESULT"]) / "pair.json"
           if not pair_path.is_file():
-              raise SystemExit(f"missing focused result: {pair_path}")
+              raise SystemExit(f"missing legacy focused result: {pair_path}")
 
           payload = json.loads(pair_path.read_text(encoding="utf-8"))
           outcomes = {
@@ -109,7 +100,7 @@ jobs:
           tracecite = outcomes.get("tracecite") or {}
 
           print(
-              "focused outcome:",
+              "legacy focused outcome:",
               json.dumps(
                   {
                       "case_id": payload.get("case_id"),
@@ -131,7 +122,7 @@ jobs:
           if tracecite.get("run_status") not in {"ok", "incomplete"}:
               raise SystemExit("TraceCite arm did not complete")
           if tracecite.get("passed") is not True:
-              raise SystemExit("focused repair unresolved: TraceCite correctness is not PASS")
+              raise SystemExit("legacy focused repair unresolved: TraceCite correctness is not PASS")
           if free_shell.get("passed") is True and tracecite.get("passed") is not True:
               raise SystemExit("no-harm regression: free-shell PASS while TraceCite is not PASS")
           PY
