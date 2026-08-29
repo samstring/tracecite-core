@@ -2,22 +2,34 @@
 
 Search is intentionally pointer-first, but an isolated structured leaf such as
 ``health: Unhealthy`` can invert meaning when its parent/sibling fields are
-removed.  This module preserves a tiny, line-addressable neighborhood only for
+removed. This module preserves a tiny, line-addressable neighborhood only for
 search hits that look like structured ``key: value`` leaves.
 
-The canonical Runtime result remains unchanged.  This is transport fidelity,
-not diagnosis: no root-cause, entity, or causal interpretation is added.
+When that bounded neighborhood itself exposes a local-looking identifier near a
+scoped entity, the same projection may also run the existing mechanical scoped-
+identity verifier against the stable source. This only surfaces an evidence gap
+(e.g. identifier uniqueness is unverified while sibling scoped entities exist);
+it never supplies a diagnosis or root-cause claim.
+
+The canonical Runtime result remains unchanged. This is transport/integrity
+fidelity, not reasoning.
 """
 
 from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import os
 import re
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Mapping
+
+from .evidence_ambiguity import (
+    scoped_identity_fanout_hints,
+    verify_scoped_identity_gaps,
+)
 
 
 _STRUCTURED_LEAF_RE = re.compile(
@@ -28,6 +40,8 @@ DEFAULT_STRUCTURED_CONTEXT_HITS = 8
 DEFAULT_STRUCTURED_CONTEXT_BEFORE = 4
 DEFAULT_STRUCTURED_CONTEXT_AFTER = 2
 DEFAULT_STRUCTURED_CONTEXT_CHARS = 720
+DEFAULT_SEARCH_IDENTITY_SOURCES = 2
+DEFAULT_SEARCH_IDENTITY_VERIFICATIONS = 2
 
 
 def _fingerprint(stat: os.stat_result) -> tuple[int, int, int, int, int]:
@@ -90,8 +104,6 @@ def _scan_contexts(
         if digest.hexdigest().lower() != expected_sha256.lower():
             return {}
         binary.seek(0)
-        import io
-
         text = io.TextIOWrapper(binary, encoding="utf-8", errors="replace", newline=None)
         try:
             for number, raw in enumerate(text, start=1):
@@ -128,6 +140,114 @@ def _scan_contexts(
     return contexts
 
 
+def _context_text(
+    contexts: Mapping[int, list[tuple[int, str]]],
+    target_lines: set[int],
+) -> str:
+    """Reconstruct de-duplicated raw context for evidence-integrity checks."""
+
+    rows: dict[int, str] = {}
+    for target in sorted(target_lines):
+        for number, text in contexts.get(target) or []:
+            rows.setdefault(number, text)
+    return "\n".join(rows[number] for number in sorted(rows))
+
+
+def _compact_identity_verification(item: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep only fields that can change an Agent's next correlation action."""
+
+    def compact_entities(values: Any) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for row in values or []:
+            if not isinstance(row, Mapping):
+                continue
+            refs = row.get("references") or []
+            result.append(
+                {
+                    "entity": row.get("entity"),
+                    "scope": row.get("scope"),
+                    "references": list(refs)[:2],
+                }
+            )
+        return result[:6]
+
+    return {
+        "kind": item.get("kind"),
+        "identifier_key": item.get("identifier_key"),
+        "identifier_value": item.get("identifier_value"),
+        "status": item.get("status"),
+        "source": item.get("source"),
+        "entity_count_observed": item.get("entity_count_observed"),
+        "entities": compact_entities(item.get("entities")),
+        "sibling_entity_count_observed": item.get("sibling_entity_count_observed"),
+        "sibling_entities": compact_entities(item.get("sibling_entities")),
+        "finding": item.get("finding"),
+        "correlation_requirement": item.get("correlation_requirement"),
+        "causal_note": item.get("causal_note"),
+    }
+
+
+def _attach_search_identity_integrity(
+    result: dict[str, Any],
+    *,
+    scanned: Mapping[tuple[Path, str], Mapping[int, list[tuple[int, str]]]],
+    grouped: Mapping[tuple[Path, str], set[int]],
+) -> None:
+    """Attach same-turn scoped-ID evidence gaps discovered in enriched search context."""
+
+    integrity_rows: list[dict[str, Any]] = []
+    for source_index, (key, target_lines) in enumerate(grouped.items()):
+        if source_index >= DEFAULT_SEARCH_IDENTITY_SOURCES:
+            break
+        path, digest = key
+        contexts = scanned.get(key) or {}
+        visible_text = _context_text(contexts, target_lines)
+        if not visible_text:
+            continue
+        hints = [
+            item
+            for item in scoped_identity_fanout_hints(visible_text)
+            if item.get("kind") == "scope_uniqueness_unverified"
+        ]
+        if not hints:
+            continue
+        try:
+            verified = verify_scoped_identity_gaps(
+                path,
+                visible_text,
+                expected_sha256=digest,
+                limit=DEFAULT_SEARCH_IDENTITY_VERIFICATIONS,
+                entity_limit=6,
+                reference_limit=2,
+            )
+        except (OSError, ValueError):
+            verified = []
+        integrity_rows.append(
+            {
+                "source": path.name,
+                "scoped_identity_hints": hints[:DEFAULT_SEARCH_IDENTITY_VERIFICATIONS],
+                "identity_verification": [
+                    _compact_identity_verification(item)
+                    for item in verified[:DEFAULT_SEARCH_IDENTITY_VERIFICATIONS]
+                ],
+            }
+        )
+
+    if not integrity_rows:
+        return
+    data = dict(result.get("data") or {})
+    data["evidence_integrity"] = {
+        "scoped_identity": integrity_rows,
+        "note": (
+            "Evidence-integrity navigation only: a local identifier appears inside a scoped "
+            "entity. Verify whether the identifier is unique across relevant sibling scopes "
+            "before using identifier-only correlation. Sibling fan-out is not proof of reuse "
+            "and does not by itself identify a root cause."
+        ),
+    }
+    result["data"] = data
+
+
 def enrich_search_leaf_context(
     payload: Mapping[str, Any],
     *,
@@ -139,7 +259,7 @@ def enrich_search_leaf_context(
     """Preserve bounded parent/sibling context for structured search leaf hits.
 
     Only exact, line-addressable search evidence with a local source path and
-    matching SHA-256 is eligible.  Ordinary prose/log hits are untouched.  Any
+    matching SHA-256 is eligible. Ordinary prose/log hits are untouched. Any
     integrity/read problem is a conservative no-op so an optional projection
     can never make canonical retrieval fail.
     """
@@ -221,10 +341,13 @@ def enrich_search_leaf_context(
     coverage = dict(result.get("coverage") or {})
     coverage["structured_context_enriched"] = enriched
     result["coverage"] = coverage
+    _attach_search_identity_integrity(result, scanned=scanned, grouped=grouped)
     return result
 
 
 __all__ = [
+    "DEFAULT_SEARCH_IDENTITY_SOURCES",
+    "DEFAULT_SEARCH_IDENTITY_VERIFICATIONS",
     "DEFAULT_STRUCTURED_CONTEXT_AFTER",
     "DEFAULT_STRUCTURED_CONTEXT_BEFORE",
     "DEFAULT_STRUCTURED_CONTEXT_CHARS",
