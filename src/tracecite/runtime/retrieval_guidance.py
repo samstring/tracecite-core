@@ -256,21 +256,9 @@ def _refine_scoped_gap_action(
         return gap
 
     if scoped_family and current_query == scoped_family:
-        if member_family and member_family != scoped_family:
-            gap["detail"] = (
-                "The scoped sibling family has been traced, but sibling identities can also "
-                "appear in runtime evidence without the scope prefix. Search the Runtime-observed "
-                "member family once to recover those cross-entity event references."
-            )
-            gap["recommended_action"] = {
-                "operation": "search",
-                "query": member_family,
-                "purpose": "trace_sibling_member_family_references",
-            }
-            return gap
-        return _finish_family_scan(gap)
-
-    if member_family and current_query == member_family:
+        # Stop while the scope is still explicit. Broadening to an unscoped
+        # member-family query discards the very correlation component this gap
+        # exists to protect and can flood large sources with unrelated siblings.
         return _finish_family_scan(gap)
 
     return gap

@@ -164,24 +164,17 @@ def test_scoped_entity_search_advances_to_observed_sibling_family() -> None:
     }
 
 
-def test_scoped_family_search_advances_to_unscoped_member_family() -> None:
+def test_scoped_family_search_finishes_without_dropping_scope() -> None:
     guided = prioritize_actionable_retrieval(
         _result(_identity_case("vendor.example/device-run-"))
     )
-    action = guided.canonical_result["data"]["actionable_retrieval"]
-    assert action["query"] == "device-run-"
-    assert action["purpose"] == "trace_sibling_member_family_references"
-    assert guided.canonical_result["next_queries"][0] == "device-run-"
-
-
-def test_member_family_search_finishes_mechanical_identity_actions_without_declaring_safety() -> None:
-    guided = prioritize_actionable_retrieval(_result(_identity_case("device-run-")))
     gap = guided.canonical_result["missing_evidence"][0]
     assert gap["actionable"] is False
     assert "actionable_retrieval" not in guided.canonical_result["data"]
     constraint = guided.canonical_result["data"]["correlation_constraints"][0]
     assert constraint["identifier_only_correlation_safe"] is False
     assert "remains unsafe" in gap["detail"]
+    assert "device-run-" not in guided.canonical_result["next_queries"][:1]
 
 
 def test_direct_multi_entity_observation_closes_uniqueness_gap_without_causal_claim() -> None:

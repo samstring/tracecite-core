@@ -10,19 +10,40 @@
   "required_concepts": [
     {
       "id": "impeller-round-superellipse",
-      "patterns": ["Impeller.{0,120}(RoundSuperellipse|superellipse)", "(RoundSuperellipse|superellipse).{0,120}Impeller", "round_superellipse_geometry"]
+      "patterns": [
+        "Impeller.{0,120}(RoundSuperellipse|superellipse)",
+        "(RoundSuperellipse|superellipse).{0,120}Impeller",
+        "round_superellipse_geometry"
+      ]
     },
     {
       "id": "memory-corruption",
-      "patterns": ["memory corrupt", "corrupt(ed|ion).{0,100}memory", "out[- ]of[- ]bounds.{0,100}(write|memory)"]
+      "patterns": [
+        "memory corrupt",
+        "corrupt(ed|ion).{0,100}memory",
+        "out[- ]of[- ]bounds.{0,100}(write|memory)",
+        "use[- ]after[- ]free",
+        "lifetime.{0,80}(bug|error|issue)",
+        "poison(ed)? pointer"
+      ]
     },
     {
       "id": "draw-circular-arc-evidence",
-      "patterns": ["DrawCircularArc", "round_superellipse_geometry\\.cc"]
+      "patterns": [
+        "DrawCircularArc",
+        "round_superellipse_geometry\\.cc"
+      ]
     },
     {
       "id": "crashed-thread-is-victim",
-      "patterns": ["libdispatch.{0,180}(victim|downstream|secondary|not.{0,40}origin)", "crash(ed|ing)? thread.{0,180}(victim|downstream|not.{0,40}(cause|origin))", "memory corrupt.{0,180}libdispatch"]
+      "patterns": [
+        "libdispatch.{0,180}(victim|downstream|secondary|not.{0,40}origin)",
+        "crash(ed|ing)? thread.{0,180}(victim|downstream|not.{0,40}(cause|origin))",
+        "memory corrupt.{0,180}libdispatch",
+        "crash(ed|ing)? thread.{0,180}not.{0,50}(corrupting|corrupter)",
+        "thread.{0,80}(not where state went wrong|red herring|unlucky thread)",
+        "(actual|original).{0,80}(destruction|corruption).{0,120}(earlier|different thread)"
+      ]
     }
   ],
   "evidence_markers": [
