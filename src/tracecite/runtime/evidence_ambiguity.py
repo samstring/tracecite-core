@@ -1,23 +1,26 @@
-"""Domain-neutral navigation hints for scoped-identity ambiguity.
+"""Domain-neutral scoped-identity navigation and verification.
 
-The detector is deliberately mechanical and conservative.  It only observes
-already-visible raw evidence and reports two kinds of navigation risk:
+The detector is deliberately mechanical and conservative. It observes raw
+evidence and may report:
 
-1. several sibling entity names share the same scope and generated-name family;
-2. a locally-shaped ``...ID`` value appears near a scoped entity, but uniqueness
-   across sibling scopes/entities has not been established in the visible text.
+1. sibling scoped entity fan-out;
+2. a local-looking ``...ID`` near a structured scoped entity whose uniqueness
+   is not yet established;
+3. a bounded source-wide verification showing which scoped entities actually
+   carry that identifier value.
 
-Neither observation claims that an identifier is duplicated, that correlation
-is wrong, or that a particular root cause follows.  These hints are intended
-for Agent transport only: they make potentially important scope distinctions
-and the smallest useful verification action visible without converting them
-into canonical Evidence or causal inference.
+None of these observations is a root-cause claim. They exist to prevent an
+Agent from silently correlating records by a locally-scoped identifier alone.
 """
 
 from __future__ import annotations
 
+import hashlib
+import io
+import os
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
+from pathlib import Path
 from typing import Any
 
 
@@ -25,6 +28,15 @@ _SCOPED_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9_.:-])"
     r"(?P<scope>[A-Za-z0-9][A-Za-z0-9_.:-]{1,79})/"
     r"(?P<member>[A-Za-z0-9][A-Za-z0-9_.:@-]{1,159})"
+)
+_STRUCTURED_SCOPED_ENTITY_RE = re.compile(
+    r"(?:^|[\s{,\[])(?:-\s*)?"
+    r"[\"']?(?:name|entity|resource|target|subject)[\"']?\s*[:=]\s*"
+    r"(?P<quote>[\"']?)"
+    r"(?P<scope>[A-Za-z0-9][A-Za-z0-9_.:-]{1,79})/"
+    r"(?P<member>[A-Za-z0-9][A-Za-z0-9_.:@-]{1,159})"
+    r"(?P=quote)",
+    re.IGNORECASE,
 )
 _IDENTIFIER_PAIR_RE = re.compile(
     r"(?<![A-Za-z0-9_.-])"
@@ -49,14 +61,15 @@ _LONG_HEX_VALUE_RE = re.compile(r"^(?:0x)?[0-9a-f]{16,}$", re.IGNORECASE)
 DEFAULT_AMBIGUITY_HINT_LIMIT = 3
 DEFAULT_AMBIGUITY_MEMBER_LIMIT = 6
 DEFAULT_IDENTITY_PROXIMITY_LINES = 4
+DEFAULT_VERIFICATION_ENTITY_LIMIT = 8
+DEFAULT_VERIFICATION_REFERENCE_LIMIT = 4
+_INTERNAL_ENTITY_SCAN_CAP = 64
 _IGNORED_IDENTIFIER_VALUES = frozenset(
     {"true", "false", "null", "none", "nil", "unknown", "unset", "n/a"}
 )
 
 
 def _family(member: str) -> str:
-    """Return a conservative generated-name family, or an empty string."""
-
     value = str(member or "").strip()
     if not value:
         return ""
@@ -68,20 +81,10 @@ def _family(member: str) -> str:
 
 
 def _line_number(text: str, offset: int) -> int:
-    """Return a 1-based line number for ``offset`` in an already-visible text."""
-
     return text.count("\n", 0, offset) + 1
 
 
 def _local_identifier(key: str, value: str) -> bool:
-    """Return whether a key/value is worth a scope-uniqueness verification.
-
-    The detector intentionally recognises only identifier-shaped keys ending in
-    ``id`` and skips values that are obviously absent, UUID-shaped, or long
-    digest-like hex values.  Short strings and numeric IDs remain eligible
-    because their uniqueness is commonly scope-dependent.
-    """
-
     name = str(key or "").strip()
     candidate = str(value or "").strip().strip("\"'")
     if not name.lower().endswith("id"):
@@ -95,25 +98,12 @@ def _local_identifier(key: str, value: str) -> bool:
     return True
 
 
-def _scope_uniqueness_hints(
-    text: str,
-    *,
-    member_limit: int,
-    proximity_lines: int,
-) -> list[dict[str, Any]]:
-    """Find local identifiers near scoped entities in the visible raw text.
-
-    This is deliberately an *unverified evidence gap*.  Seeing ``taskID=17``
-    near ``worker/a`` is not evidence that task 17 is duplicated.  It only
-    means an Agent should not correlate records by ``17`` alone until it has
-    searched the source and compared the nearby scoped entities.
-    """
-
-    scoped: list[tuple[int, str, str, str]] = []
-    for match in _SCOPED_TOKEN_RE.finditer(text):
+def _structured_entities(text: str) -> list[tuple[int, str, str, str]]:
+    rows: list[tuple[int, str, str, str]] = []
+    for match in _STRUCTURED_SCOPED_ENTITY_RE.finditer(text):
         scope = match.group("scope")
         member = match.group("member").rstrip(".,;:)]}")
-        scoped.append(
+        rows.append(
             (
                 _line_number(text, match.start()),
                 scope,
@@ -121,22 +111,32 @@ def _scope_uniqueness_hints(
                 f"{scope}/{member}",
             )
         )
+    return rows
 
+
+def _scope_uniqueness_hints(
+    text: str,
+    *,
+    member_limit: int,
+    proximity_lines: int,
+) -> list[dict[str, Any]]:
+    """Find local IDs near *structured* scoped entities in visible evidence.
+
+    Requiring a structured entity field (for example ``name: scope/member``)
+    avoids treating dates and source-code paths as identity scopes.
+    """
+
+    scoped = _structured_entities(text)
     identifiers: list[tuple[int, str, str]] = []
     for match in _IDENTIFIER_PAIR_RE.finditer(text):
         key = match.group("key")
         value = match.group("value").rstrip(".,;:)]}")
-        if not _local_identifier(key, value):
-            continue
-        identifiers.append((_line_number(text, match.start()), key, value))
+        if _local_identifier(key, value):
+            identifiers.append((_line_number(text, match.start()), key, value))
 
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for id_line, key, value in identifiers:
-        nearby = [
-            row
-            for row in scoped
-            if abs(row[0] - id_line) <= proximity_lines
-        ]
+        nearby = [row for row in scoped if abs(row[0] - id_line) <= proximity_lines]
         if not nearby:
             continue
         identity = (key.lower(), value)
@@ -183,7 +183,6 @@ def _scope_uniqueness_hints(
                 ),
             }
         )
-
     hints.sort(
         key=lambda item: (
             -len(item["scoped_entities"]),
@@ -202,12 +201,7 @@ def scoped_identity_fanout_hints(
     minimum_siblings: int = 3,
     proximity_lines: int = DEFAULT_IDENTITY_PROXIMITY_LINES,
 ) -> list[dict[str, Any]]:
-    """Find scoped-identity navigation risks in already-visible raw text.
-
-    Actionable ``scope_uniqueness_unverified`` gaps are returned before the
-    broader sibling-family fan-out hints so a bounded Agent view prioritises a
-    concrete, cheap verification step when one is available.
-    """
+    """Find scoped-identity navigation risks in already-visible raw text."""
 
     if limit < 1 or member_limit < 1 or minimum_siblings < 2 or proximity_lines < 0:
         raise ValueError("ambiguity hint bounds are invalid")
@@ -225,9 +219,8 @@ def scoped_identity_fanout_hints(
         scope = match.group("scope")
         member = match.group("member").rstrip(".,;:)]}")
         family = _family(member)
-        if not family:
-            continue
-        groups[(scope, family)].add(member)
+        if family:
+            groups[(scope, family)].add(member)
 
     fanout_hints: list[dict[str, Any]] = []
     for (scope, family), members in groups.items():
@@ -244,7 +237,6 @@ def scoped_identity_fanout_hints(
                 "navigation_query": f"{scope}/{family}-",
             }
         )
-
     fanout_hints.sort(
         key=lambda item: (
             -int(item["member_count"]),
@@ -255,9 +247,168 @@ def scoped_identity_fanout_hints(
     return (identity_hints + fanout_hints)[:limit]
 
 
+def _fingerprint(stat: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def verify_scoped_identity_gaps(
+    source_path: str | Path,
+    visible_text: str,
+    *,
+    expected_sha256: str | None = None,
+    limit: int = 2,
+    proximity_lines: int = DEFAULT_IDENTITY_PROXIMITY_LINES,
+    entity_limit: int = DEFAULT_VERIFICATION_ENTITY_LIMIT,
+    reference_limit: int = DEFAULT_VERIFICATION_REFERENCE_LIMIT,
+) -> list[dict[str, Any]]:
+    """Mechanically verify local-ID uniqueness across a stable local source.
+
+    Only IDs that already triggered ``scope_uniqueness_unverified`` in the
+    caller-visible range are scanned. The source is hashed and scanned through
+    one stable file descriptor. Output is bounded; the whole source is never
+    returned to the Agent.
+    """
+
+    if limit < 1 or proximity_lines < 0 or entity_limit < 1 or reference_limit < 1:
+        raise ValueError("identity verification bounds are invalid")
+    hints = [
+        item
+        for item in scoped_identity_fanout_hints(visible_text, limit=max(limit, 3))
+        if item.get("kind") == "scope_uniqueness_unverified"
+    ][:limit]
+    if not hints:
+        return []
+
+    targets = {
+        (str(item["identifier_key"]).lower(), str(item["identifier_value"])): item
+        for item in hints
+    }
+    path = Path(source_path).expanduser().resolve()
+    digest = hashlib.sha256()
+    recent_entities: deque[tuple[int, str, str]] = deque()
+    state: dict[tuple[str, str], dict[str, Any]] = {
+        key: {
+            "identifier_key": hint["identifier_key"],
+            "identifier_value": hint["identifier_value"],
+            "identifier_occurrences_seen": 0,
+            "associated_occurrences": 0,
+            "entities": {},
+            "entity_overflow": False,
+        }
+        for key, hint in targets.items()
+    }
+
+    with path.open("rb") as binary:
+        opened = os.fstat(binary.fileno())
+        for block in iter(lambda: binary.read(1024 * 1024), b""):
+            digest.update(block)
+        observed_sha = digest.hexdigest()
+        if expected_sha256 and observed_sha.lower() != str(expected_sha256).lower():
+            raise ValueError("source changed before scoped-identity verification")
+        binary.seek(0)
+        handle = io.TextIOWrapper(binary, encoding="utf-8", errors="replace", newline=None)
+        try:
+            for number, line in enumerate(handle, start=1):
+                while recent_entities and number - recent_entities[0][0] > proximity_lines:
+                    recent_entities.popleft()
+                for match in _STRUCTURED_SCOPED_ENTITY_RE.finditer(line):
+                    scope = match.group("scope")
+                    member = match.group("member").rstrip(".,;:)]}")
+                    recent_entities.append((number, f"{scope}/{member}", f"{scope}/"))
+                for match in _IDENTIFIER_PAIR_RE.finditer(line):
+                    key = match.group("key")
+                    value = match.group("value").rstrip(".,;:)]}")
+                    slot = state.get((key.lower(), value))
+                    if slot is None:
+                        continue
+                    slot["identifier_occurrences_seen"] += 1
+                    if not recent_entities:
+                        continue
+                    entity_line, entity, scope = recent_entities[-1]
+                    slot["associated_occurrences"] += 1
+                    entities = slot["entities"]
+                    if entity not in entities:
+                        if len(entities) >= _INTERNAL_ENTITY_SCAN_CAP:
+                            slot["entity_overflow"] = True
+                            continue
+                        entities[entity] = {
+                            "entity": entity,
+                            "scope": scope,
+                            "occurrence_count": 0,
+                            "references": [],
+                            "first_line": entity_line,
+                        }
+                    row = entities[entity]
+                    row["occurrence_count"] += 1
+                    refs = row["references"]
+                    if len(refs) < reference_limit:
+                        refs.append(
+                            {
+                                "entity_ref": f"{path.name}:{entity_line}",
+                                "identifier_ref": f"{path.name}:{number}",
+                            }
+                        )
+            read_complete = os.fstat(binary.fileno())
+            current_path = path.stat()
+        finally:
+            handle.detach()
+    if _fingerprint(opened) != _fingerprint(read_complete) or _fingerprint(opened) != _fingerprint(current_path):
+        raise OSError("source changed during scoped-identity verification")
+
+    verified: list[dict[str, Any]] = []
+    for slot in state.values():
+        ordered = sorted(
+            slot["entities"].values(),
+            key=lambda row: (int(row["first_line"]), str(row["entity"])),
+        )
+        entity_count = len(ordered)
+        if entity_count >= 2:
+            status = "multiple_scoped_entities_observed"
+            finding = (
+                "The same identifier value is directly associated with multiple scoped "
+                "entities in this source. The identifier value alone is not source-unique; "
+                "preserve entity/scope when correlating records."
+            )
+        elif entity_count == 1:
+            status = "single_scoped_entity_observed"
+            finding = (
+                "Only one scoped entity was observed for this identifier in the scanned "
+                "source; this does not prove global uniqueness outside this source."
+            )
+        else:
+            status = "unresolved"
+            finding = "The identifier was not associated with a structured scoped entity during the bounded verification."
+        verified.append(
+            {
+                "kind": "scoped_identifier_verification",
+                "identifier_key": slot["identifier_key"],
+                "identifier_value": slot["identifier_value"],
+                "status": status,
+                "source": path.name,
+                "sha256": observed_sha,
+                "identifier_occurrences_seen": int(slot["identifier_occurrences_seen"]),
+                "associated_occurrences": int(slot["associated_occurrences"]),
+                "entity_count_observed": entity_count,
+                "entities": [
+                    {key: value for key, value in row.items() if key != "first_line"}
+                    for row in ordered[:entity_limit]
+                ],
+                "truncated": bool(slot["entity_overflow"] or entity_count > entity_limit),
+                "finding": finding,
+                "causal_note": (
+                    "Identity/correlation verification only; this observation does not by itself identify a root cause."
+                ),
+            }
+        )
+    return verified
+
+
 __all__ = [
     "DEFAULT_AMBIGUITY_HINT_LIMIT",
     "DEFAULT_AMBIGUITY_MEMBER_LIMIT",
     "DEFAULT_IDENTITY_PROXIMITY_LINES",
+    "DEFAULT_VERIFICATION_ENTITY_LIMIT",
+    "DEFAULT_VERIFICATION_REFERENCE_LIMIT",
     "scoped_identity_fanout_hints",
+    "verify_scoped_identity_gaps",
 ]
