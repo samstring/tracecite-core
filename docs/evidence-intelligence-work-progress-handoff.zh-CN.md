@@ -12,12 +12,14 @@
 - 本轮减法重构开始前 HEAD：`e43c0cb8605992e1f9b2b2871a1571069e30b85a`
 - Phase A deterministic cleanup 基线：`3e0155402fd5b7571b59c2f2a6e3b1c3ee045512`
 - Phase A scoped-identity / sibling-family remediation：`b6ecb1c9c75962e324554987d219d9416b76913e`
-- Phase B public CLI convergence code：`0c872fc5bc3c7e4ce2d42164d23b56d2f33dfdb3`
-- Phase B contract tests HEAD：`d36f11e3394cebfd567cd93a8eae154fa42c8739`
+- Phase B public CLI convergence：`d36f11e3394cebfd567cd93a8eae154fa42c8739`
+- Phase C grouping entity-diversity：`85a08179ce66373f2b4272bfe1b89de2e6a1608d`
+- Phase C provider namespace：`08a57547b38bb8f462ec7c43b4088f3848438955`
+- Phase C relation-strength / reducer gate HEAD：`d722a1f31e4b55250625cdf5dd6be10d52ef000b`
 - 未经明确确认，不合并到基础分支。
 - Core 稳定前，不改 Mobile / MCP 上层业务设计。
 
-当前阶段：**Phase B deterministic 已完成，进入 Phase C — Identity / grouping safety。**
+当前阶段：**Phase C deterministic 已完成，进入 Phase D — State simplification。**
 
 ### 1.1 Focused gate 豁免说明
 
@@ -131,25 +133,24 @@ DIRECT -> BOUNDED -> INVESTIGATE
 
 ## 4. 已确认的结构风险
 
-### P0
+### 已处理的 P0/P1
 
-1. Agent 入口曾未统一：部分 CLI / integration 直接使用 `tools.search()/expand()`。
-2. Projection 曾打开 source、补结构上下文和 scoped identity；这些语义必须由 Runtime owner。
-3. Materialization 仍存在重复实现。
-4. retrieval success 不能等于 hypothesis `supported`。
-5. Provider record identity 必须全局 namespaced。
-6. Scoped entity identity 必须进入主身份 contract。
-7. Grouping 不得 normalize away entity identity。
-8. EvidenceGap 必须继续从分散提示收敛到 canonical gap/progress/action 语义。
+- Agent public entry 已收敛到 typed `retrieve()`；
+- Projection 不再打开 source 发现新 Evidence；
+- retrieval success 不再等于 hypothesis `supported`；
+- scoped identity integrity 已进入 canonical Runtime；
+- Provider record identity 已在 public Runtime boundary namespaced；
+- grouping 已保留 exact entity identity；
+- weak relation 与 exact identity relation 已在 retention path 中区分；
+- reducer score 已明确标注为 retention priority，不是 cause likelihood。
 
-### P1
+### Phase D 仍要处理的 P1
 
 1. seen/context state owner 过多；
 2. Agent compact/projection 路径过多；
 3. investigate facade 重复；
-4. exact relation 与 weak temporal relation retention 语义不足；
-5. reducer score 存在 causal salience 风险；
-6. SourceSession monkey patch 状态扩展长期过重。
+4. SourceSession monkey-patch / 动态状态扩展长期过重；
+5. RetrievalSession 尚未成为唯一 retrieval/context state owner。
 
 长期状态 owner 目标只有：
 
@@ -162,33 +163,20 @@ InvestigationState
 
 ## 5. Phase A — Runtime owns evidence semantics
 
-### 5.1 已落地
+状态：**deterministic COMPLETE；focused 未闭合但按用户决策不阻塞后续实验阶段。**
+
+已落地：
 
 - Agent projection 不再打开 source 发现新 Evidence；
 - structured search fidelity 移入 canonical Runtime；
 - scoped identity integrity 移入 Runtime；
 - identity gap 接入 `missing_evidence` / progress；
-- public retrieval outcome 使用 `not_assessed`，不把 search/read success 写成 `supported`；
-- canonical identity integrity 使用 `data.evidence_integrity.scoped_identity`；
+- public retrieval outcome 使用 `not_assessed`；
 - actionable gap 可提升为 `data.actionable_retrieval`；
 - local ID 明确携带 `identifier_only_correlation_safe=false`；
 - identifier search 可推进到 observed scoped entity，再推进到 Runtime-observed sibling family；
 - canonical benchmark host 可要求 Agent 优先执行 Runtime actionable retrieval；
 - 没有加入 Kubernetes / Flutter / gold 特判。
-
-### 5.2 Deterministic
-
-Phase A deterministic gate 已 PASS，包括 Core CI、Ubuntu Python matrix、macOS Python、Evidence Intelligence deterministic benchmark。
-
-### 5.3 Focused 当前事实
-
-历史 focused 已证明：
-
-- Mobile Payment 多轮能够 PASS/PASS，且部分 run TraceCite token 更低；
-- Flutter 存在真实模型波动，历史既有有效 TraceCite PASS，也有 FAIL；
-- Kubernetes 140268 中 shell 多次 context overflow，而 TraceCite 能 bounded 完成 retrieval，但 RCA correctness 尚未稳定闭合；
-- 140268 已暴露 `testdevice`、scoped identity gap、sibling family 等机械证据导航问题；
-- 这些问题只能通过通用 Runtime/host 契约修复，不允许 case-specific 修补。
 
 最近 focused run `33245944773`（HEAD `b6ecb1c9...`）：
 
@@ -198,122 +186,137 @@ Flutter 179398: FAIL
 Kubernetes 140268: FAIL
 ```
 
-因此：
-
-> **Phase A focused 仍未通过。它目前仅被用户豁免为阶段转换 blocker，不是 PASS。**
+因此 focused 仍是 unresolved debt，不是 PASS。
 
 ---
 
 ## 6. Phase B — Entry path convergence
 
-状态：**deterministic COMPLETE；focused 按用户决策不阻塞。**
+状态：**deterministic COMPLETE。**
 
-### 6.1 已完成
+已完成：
 
-1. Canonical benchmark host 已使用：
+- Canonical benchmark host 使用 typed `EvidenceRequest` + `retrieve()`；
+- public `tracecite` entrypoint `stateful_cli.main` 默认 search -> `QueryTarget` -> `retrieve()`；
+- public expand -> `RangeTarget` -> `retrieve()`；
+- `search --output-path` 仅作为明确 legacy side-effect fallback 保留；
+- ContextEngine / ledger projection 仍在 Runtime result 之后工作；
+- contract tests 防止 public CLI 再绕回 low-level semantic owner。
 
-```text
-EvidenceRequest
-QueryTarget / RangeTarget / SourceTarget
-retrieve()
-project(profile="agent")
-```
-
-2. public `tracecite` console entrypoint 确认为：
-
-```text
-tracecite.integrations.stateful_cli:main
-```
-
-3. public CLI 默认 `search` 已改为：
-
-```text
-CLI args
- -> QueryTarget
- -> EvidenceRequest
- -> retrieve()
- -> canonical Runtime result
- -> CLI projection / ledger / context transport
-```
-
-4. public CLI `expand` 已改为：
-
-```text
-CLI args
- -> RangeTarget
- -> EvidenceRequest
- -> retrieve()
- -> canonical Runtime result
- -> CLI rendering
-```
-
-5. `search --output-path` 保留显式 legacy fallback，因为“写 filtered artifact”当前还没有进入 `QueryTarget` contract；没有静默丢失该兼容行为。
-
-6. `tests/test_stateful_cli.py` 新增 contract tests：
-
-- search 必须构造 typed `QueryTarget` 并调用 `retrieve()`；
-- expand 必须构造 typed `RangeTarget` 并调用 `retrieve()`；
-- routing / `not_assessed` canonical semantics 可穿过 public CLI；
-- `--output-path` 明确走 legacy compatibility；
-- ContextEngine / ledger projection 仍正常；
-- adapter 在调用结束后必须恢复，不污染进程全局 CLI 状态。
-
-### 6.2 Gate
-
-HEAD `d36f11e3394cebfd567cd93a8eae154fa42c8739`：
+Gate：
 
 ```text
 Core CI run 33246863204: PASS
 Evidence Intelligence benchmark run 33246863162: PASS
 ```
 
-Phase B 的主要 entry-convergence 目标因此已完成。
-
-仍保留的 compatibility debt：
-
-- `integrations.cli` 内部仍暴露 low-level search/expand symbol，供 legacy/internal path 使用；
-- `search --output-path` 仍直接调用 legacy primitive；
-- 未来若把 artifact-writing 纳入 typed Runtime contract，可再消除这一 fallback。
-
-这些不能重新成为 Agent-facing semantic owner。
-
 ---
 
 ## 7. Phase C — Identity / grouping safety
 
-状态：**CURRENT / 进行中。**
+状态：**deterministic COMPLETE。**
 
-顺序：
+### 7.1 Provider record identity
 
-1. Provider record IDs 全局 namespace；
-2. scoped entity identity contract 完整化；
-3. grouping 保留 entity diversity；
-4. correlation exact/weak relation-strength no-harm；
-5. reducer 只表达 retention priority，不表达 cause likelihood；
-6. deterministic gate；
-7. 更新本文档；
-8. focused 作为非阻塞观测继续保留。
+问题：不同 Provider 可以同时返回相同 local `id`，甚至相同 source-native `evidence_uri`；旧实现会在 canonical progress 前碰撞。
 
-Phase C 禁止：
+修复：
 
-- 通过 benchmark case 名、gold、已知 root cause 推导 identity；
-- 把 sibling fan-out 当成 identifier reuse 证明；
-- 把 severity/error/timeout 当 cause probability；
-- 为了压缩而删除 entity/source/provenance diversity。
+```text
+Provider native record
+  -> provider name + provider-local id
+  -> canonical provider://<provider>/<record-id>
+```
+
+- provider name 是 namespace owner；
+- source-native URI 只作为 provenance metadata 保留；
+- duplicate provider names 被拒绝，因为 namespace 不可判定；
+- provider name / record id 做 URI escaping；
+- 第二次同一 retrieval 才正确进入 repeated-evidence 语义。
+
+### 7.2 Grouping entity diversity
+
+旧 grouping key：
+
+```text
+(source, kind, normalized_template)
+```
+
+会把不同 entity 的高基数事件折叠。
+
+新 grouping identity：
+
+```text
+(source, kind, normalized_template, exact_entity_signature)
+```
+
+- 同一 exact entity 的重复消息仍可压缩；
+- 不同 entity 永不因为模板 normalization 被折叠；
+- 无 entity 的历史 group key / group id 保持不变；
+- entity set 顺序不影响 identity。
+
+### 7.3 Relation strength / reducer semantics
+
+事实层 `CorrelationGraph` 保持中立，不加入 cause weight。
+
+Reducer 单独使用 mechanical retention path cost：
+
+```text
+exact entity / confidence=1 declaration -> cost 1
+strong partial relation -> higher cost
+weak relation -> still higher cost
+```
+
+因此 temporal proximity 可以帮助扩大 evidence frontier，但不会获得与 exact identity 相同的 retention boost。
+
+同时：
+
+```text
+score_semantics = retention_priority
+```
+
+以及 diagnostics：
+
+```text
+retention_priority_not_causal_likelihood
+```
+
+明确禁止消费者把 score 当 root-cause probability。
+
+### 7.4 Gate
+
+HEAD `d722a1f31e4b55250625cdf5dd6be10d52ef000b`：
+
+```text
+Core CI run 33247276940: PASS
+Evidence Intelligence benchmark run 33247276942: PASS
+```
+
+Phase C deterministic 完成。
 
 ---
 
 ## 8. Phase D — State simplification
 
-Phase C deterministic 完成后进入：
+状态：**CURRENT / 进行中。**
+
+目标：
 
 1. 收敛 RetrievalSession；
 2. 合并 ContextEngine / EvidenceContextEngine 的重复 seen/context ownership；
 3. InvestigationState 只保留 reasoning/audit state；
-4. SourceSession 正式 schema 化；
+4. SourceSession 正式 schema 化，减少 monkey-patch/dynamic ownership；
 5. 收敛重复 Agent compact/projection owner；
 6. deterministic gate；
 7. 更新本文档。
+
+设计约束：
+
+- retrieval novelty / covered ranges / seen Evidence 归 RetrievalSession；
+- hypothesis/test/audit/decision trail 归 InvestigationState；
+- projection 只做 transport shaping，不拥有 Evidence truth/state；
+- Context optimization 可以引用 canonical state，但不能成为第二套 evidence truth owner；
+- 不为了“少类/少文件”把职责重新混回 InvestigationState。
 
 Focused 继续保留为非阻塞实验信号，不伪造 PASS。
 
@@ -366,10 +369,10 @@ Mobile / MCP 只消费稳定的：
 retrieve / investigate / project / capability
 ```
 
-不复制 Router / Integrity / grouping / reducer 内部逻辑。
+不复制 Router / Integrity / grouping / reducer / state owner 内部逻辑。
 
 ---
 
 ## 11. 当前一句话结论
 
-> **Phase A 的 Runtime evidence semantics 和 Phase B 的 public entry convergence 已完成 deterministic 收敛；focused correctness 仍有 Flutter / 140268 未闭合，但按用户明确决策暂不阻塞实验阶段推进。当前进入 Phase C，优先处理 provider identity namespace、scoped identity 与 grouping diversity；Final Gate 仍保留完整 correctness/no-harm 要求。**
+> **Phase A Runtime evidence semantics、Phase B public entry convergence、Phase C identity/grouping/relation-strength 已完成 deterministic 收敛；focused correctness 仍有 Flutter / 140268 未闭合，但按用户明确决策暂不阻塞实验阶段推进。当前进入 Phase D，开始收敛 retrieval/context state ownership；Final Gate 仍保留完整 correctness/no-harm 要求。**
