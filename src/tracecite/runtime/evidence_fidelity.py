@@ -1,18 +1,17 @@
-"""Bounded evidence-fidelity helpers for Agent-facing search projections.
+"""Bounded evidence-fidelity helpers for canonical Runtime search results.
 
-Search is intentionally pointer-first, but an isolated structured leaf such as
-``health: Unhealthy`` can invert meaning when its parent/sibling fields are
-removed. This module preserves a tiny, line-addressable neighborhood only for
+Search remains pointer-first, but an isolated structured leaf such as
+``health: Unhealthy`` can lose meaning when its parent/sibling fields are
+removed.  This module preserves a tiny, line-addressable neighborhood only for
 search hits that look like structured ``key: value`` leaves.
 
-When that bounded neighborhood itself exposes a local-looking identifier near a
-scoped entity, the same projection may also run the existing mechanical scoped-
-identity verifier against the stable source. This only surfaces an evidence gap
-(e.g. identifier uniqueness is unverified while sibling scoped entities exist);
-it never supplies a diagnosis or root-cause claim.
+When that bounded neighborhood exposes a local-looking identifier near a scoped
+entity, Runtime may also run the mechanical scoped-identity verifier against the
+same stable source.  The verifier can surface an actionable Evidence gap, but
+never supplies a diagnosis or root-cause claim.
 
-The canonical Runtime result remains unchanged. This is transport/integrity
-fidelity, not reasoning.
+This module is Runtime evidence work.  Integration projections must not invoke
+it or reopen source files.
 """
 
 from __future__ import annotations
@@ -187,6 +186,63 @@ def _compact_identity_verification(item: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _gap_from_verification(item: Mapping[str, Any]) -> dict[str, Any] | None:
+    status = str(item.get("status") or "")
+    if status == "multiple_scoped_entities_observed":
+        return None
+    identifier = str(item.get("identifier_value") or "").strip()
+    key = str(item.get("identifier_key") or "").strip()
+    if not identifier or not key:
+        return None
+    return {
+        "kind": "scope_uniqueness_unverified",
+        "detail": (
+            f"{key}={identifier} is visible inside a scoped entity, but its uniqueness "
+            "across the relevant identity domain is not established."
+        ),
+        "actionable": True,
+        "identifier_key": key,
+        "identifier_value": identifier,
+        "source": item.get("source"),
+        "recommended_action": {
+            "operation": "search",
+            "query": identifier,
+            "purpose": "verify_identifier_uniqueness_across_scopes",
+        },
+    }
+
+
+def _append_unique_gap(result: dict[str, Any], gap: Mapping[str, Any]) -> None:
+    rows = [dict(item) for item in result.get("missing_evidence") or [] if isinstance(item, Mapping)]
+    identity = (
+        str(gap.get("kind") or ""),
+        str(gap.get("identifier_key") or ""),
+        str(gap.get("identifier_value") or ""),
+        str(gap.get("source") or ""),
+    )
+    for item in rows:
+        current = (
+            str(item.get("kind") or ""),
+            str(item.get("identifier_key") or ""),
+            str(item.get("identifier_value") or ""),
+            str(item.get("source") or ""),
+        )
+        if current == identity:
+            return
+    rows.append(dict(gap))
+    result["missing_evidence"] = rows
+
+
+def _append_next_query(result: dict[str, Any], query: str) -> None:
+    value = str(query or "").strip()
+    if not value:
+        return
+    rows = [str(item) for item in result.get("next_queries") or [] if str(item).strip()]
+    if value not in rows:
+        rows.append(value)
+    result["next_queries"] = rows
+
+
 def _attach_search_identity_integrity(
     result: dict[str, Any],
     *,
@@ -222,16 +278,46 @@ def _attach_search_identity_integrity(
             )
         except (OSError, ValueError):
             verified = []
+        compact_verified = [
+            _compact_identity_verification(item)
+            for item in verified[:DEFAULT_SEARCH_IDENTITY_VERIFICATIONS]
+        ]
         integrity_rows.append(
             {
                 "source": path.name,
                 "scoped_identity_hints": hints[:DEFAULT_SEARCH_IDENTITY_VERIFICATIONS],
-                "identity_verification": [
-                    _compact_identity_verification(item)
-                    for item in verified[:DEFAULT_SEARCH_IDENTITY_VERIFICATIONS]
-                ],
+                "identity_verification": compact_verified,
             }
         )
+
+        if compact_verified:
+            for item in compact_verified:
+                gap = _gap_from_verification(item)
+                if gap is not None:
+                    _append_unique_gap(result, gap)
+                    _append_next_query(result, str(item.get("identifier_value") or ""))
+        else:
+            for hint in hints[:DEFAULT_SEARCH_IDENTITY_VERIFICATIONS]:
+                identifier = str(hint.get("identifier_value") or "").strip()
+                key_name = str(hint.get("identifier_key") or "").strip()
+                if not identifier or not key_name:
+                    continue
+                _append_unique_gap(
+                    result,
+                    {
+                        "kind": "scope_uniqueness_unverified",
+                        "detail": (
+                            f"{key_name}={identifier} is visible inside a scoped entity, but "
+                            "the stable source could not establish its uniqueness."
+                        ),
+                        "actionable": True,
+                        "identifier_key": key_name,
+                        "identifier_value": identifier,
+                        "source": path.name,
+                        "recommended_action": dict(hint.get("recommended_action") or {}),
+                    },
+                )
+                _append_next_query(result, identifier)
 
     if not integrity_rows:
         return
@@ -256,11 +342,11 @@ def enrich_search_leaf_context(
     after: int = DEFAULT_STRUCTURED_CONTEXT_AFTER,
     max_preview_chars: int = DEFAULT_STRUCTURED_CONTEXT_CHARS,
 ) -> dict[str, Any]:
-    """Preserve bounded parent/sibling context for structured search leaf hits.
+    """Preserve bounded parent/sibling context for canonical search leaf hits.
 
     Only exact, line-addressable search evidence with a local source path and
     matching SHA-256 is eligible. Ordinary prose/log hits are untouched. Any
-    integrity/read problem is a conservative no-op so an optional projection
+    integrity/read problem is a conservative no-op so evidence-fidelity work
     can never make canonical retrieval fail.
     """
 
