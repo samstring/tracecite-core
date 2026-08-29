@@ -5,15 +5,22 @@ wrapper adds product semantics without changing upper-layer request types:
 
 1. pointer novelty and line-coverage novelty stay distinct for RangeTarget;
 2. evidence transport defaults to adaptive DIRECT -> BOUNDED -> INVESTIGATE;
-3. truncated searches preserve a tiny high-signal navigation side channel so a
-   late panic/fatal/critical record cannot disappear merely because the normal
-   first-N evidence transport budget filled earlier in the source.
+3. DIRECT preserves lossless line-addressable source context for an unseen
+   source instead of forcing the Agent to reason from selected labels alone;
+4. truncated bounded searches retain a tiny high-signal navigation side channel
+   so a late panic/fatal/critical record cannot disappear merely because the
+   normal first-N evidence transport budget filled earlier in the source.
+
+Routing and selection are transport mechanisms only.  They must not infer or
+rank a root cause.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Mapping
+
+from tracecite_core.run import RunIntegrityError
 
 from . import tools as _tools
 from .agent_api import (
@@ -85,6 +92,22 @@ def _with_routing(result: RetrievalResult, decision: RoutingDecision) -> Retriev
     )
 
 
+def _bounded_decision(decision: RoutingDecision, reason: str) -> RoutingDecision:
+    return RoutingDecision(
+        route=EvidenceRoute.BOUNDED,
+        reasons=(*decision.reasons, reason),
+        source_bytes=decision.source_bytes,
+        estimated_direct_chars=decision.estimated_direct_chars,
+        aggregate_direct_chars=decision.aggregate_direct_chars,
+        direct_char_budget=decision.direct_char_budget,
+        previous_executions=decision.previous_executions,
+        source_count=decision.source_count,
+        max_match_records=decision.max_match_records,
+        repeated_evidence_ratio=decision.repeated_evidence_ratio,
+        next_route=decision.next_route,
+    )
+
+
 def _line_count(path: Path) -> int:
     count = 0
     last = b""
@@ -143,17 +166,83 @@ def _direct_source(
     )
     coverage = result.get("coverage") or {}
     if isinstance(coverage, Mapping) and bool(coverage.get("truncated")):
-        decision = RoutingDecision(
-            route=EvidenceRoute.BOUNDED,
-            reasons=(*decision.reasons, "direct_render_exceeded_budget"),
-            source_bytes=decision.source_bytes,
-            estimated_direct_chars=decision.estimated_direct_chars,
-            direct_char_budget=decision.direct_char_budget,
-            previous_executions=decision.previous_executions,
-            source_count=decision.source_count,
-            max_match_records=decision.max_match_records,
-            repeated_evidence_ratio=decision.repeated_evidence_ratio,
+        decision = _bounded_decision(decision, "direct_render_exceeded_budget")
+    return _with_routing(resolved, decision)
+
+
+def _qualify_raw_rows(rows: list[str], source_name: str) -> str:
+    qualified: list[str] = []
+    for row in rows:
+        line, sep, text = row.partition(": ")
+        if sep and line.isdigit():
+            qualified.append(f"{source_name}:{line} {text}")
+        else:
+            qualified.append(row)
+    return "".join(qualified)
+
+
+def _direct_query(
+    request: EvidenceRequest,
+    decision: RoutingDecision,
+    policy: EvidenceRoutingPolicy,
+) -> RetrievalResult:
+    """Preserve exact source context for a safe one-time DIRECT query.
+
+    Search still produces canonical EvidencePointers and Coverage.  DIRECT adds
+    the stable raw source view beside those pointers so the Agent is not forced
+    to reconstruct a simple incident from selected labels or summaries.  This
+    is intentionally limited to sources whose aggregate raw representation fit
+    the router's direct budget.
+    """
+
+    assert isinstance(request.target, QueryTarget)
+    path = Path(request.target.source).expanduser().resolve()
+    result = _retrieve(request)
+    if result.canonical_result.get("status") == "error" or not path.is_file():
+        return _with_routing(result, decision)
+
+    canonical = dict(result.canonical_result)
+    data = dict(canonical.get("data") or {})
+    expected = str(data.get("source_sha256") or "").strip().lower()
+    lines = _line_count(path)
+    if lines < 1:
+        return _with_routing(result, decision)
+    try:
+        digest, rows, last_seen = _tools._read_hashed_context(
+            path,
+            context_start=1,
+            context_end=lines,
         )
+    except (OSError, ValueError, RunIntegrityError):
+        return _with_routing(result, _bounded_decision(decision, "direct_raw_read_unavailable"))
+    if expected and digest.lower() != expected:
+        return _with_routing(result, _bounded_decision(decision, "source_changed_after_search"))
+
+    text = _qualify_raw_rows(rows, path.name)
+    if len(text) > policy.direct_char_budget:
+        return _with_routing(result, _bounded_decision(decision, "direct_raw_exceeded_budget"))
+
+    data["text"] = text
+    data["direct_raw"] = {
+        "fidelity": "lossless_line_addressable",
+        "source": path.name,
+        "sha256": digest,
+    }
+    canonical["data"] = data
+    coverage = dict(canonical.get("coverage") or {})
+    coverage["direct_raw_lines"] = last_seen
+    coverage["direct_raw_chars"] = len(text)
+    canonical["coverage"] = coverage
+    resolved = RetrievalResult(
+        operation=result.operation,
+        status=result.status,
+        canonical_result=canonical,
+        progress=result.progress,
+        new_evidence=result.new_evidence,
+        repeated_evidence=result.repeated_evidence,
+        stop_reason=result.stop_reason,
+    )
+    decision = refine_route_after_result(decision, canonical, policy=policy)
     return _with_routing(resolved, decision)
 
 
@@ -365,8 +454,11 @@ def retrieve(
             return _investigate_source(request, decision, policy)
         return _with_routing(_retrieve(request), decision)
 
+    if isinstance(request.target, QueryTarget) and decision.route == EvidenceRoute.DIRECT:
+        return _direct_query(request, decision, policy)
+
     routed_request = request
-    if isinstance(request.target, QueryTarget) and decision.route != EvidenceRoute.DIRECT:
+    if isinstance(request.target, QueryTarget):
         routed_request = _bounded_query(request, policy, route=decision.route)
     result = _correct_range_novelty(_retrieve(routed_request), routed_request)
     result = _attach_signal_hints(result, routed_request, policy)
