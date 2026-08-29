@@ -214,3 +214,28 @@ def test_verification_rejects_changed_source_hash(tmp_path: Path) -> None:
             visible,
             expected_sha256="0" * 64,
         )
+
+def test_bounded_sibling_selection_prefers_entities_near_direct_identifier_evidence(tmp_path: Path) -> None:
+    source = tmp_path / "evidence.log"
+    rows = [f"name: resource.example/widget-{1000 + i}" for i in range(1, 12)]
+    rows += ["noise"] * 80
+    rows += [
+        "name: resource.example/widget-9999",
+        "name: resource.example/widget-1001",
+        "resourceID: local-device",
+    ]
+    source.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    visible = "\n".join([
+        "name: resource.example/widget-1001",
+        "resourceID: local-device",
+    ])
+    result = verify_scoped_identity_gaps(
+        source,
+        visible,
+        expected_sha256=_sha256(source),
+        entity_limit=3,
+    )[0]
+    selected = [row["entity"] for row in result["sibling_entities"]]
+    assert "resource.example/widget-1001" in selected
+    assert "resource.example/widget-9999" in selected
+    assert result["sibling_selection_basis"] == "nearest_to_direct_identifier_association"

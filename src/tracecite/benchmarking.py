@@ -294,7 +294,13 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
     thresholds = gold.get("thresholds", {})
     min_concepts = float(thresholds.get("concept_recall", 1.0))
     min_evidence = float(thresholds.get("evidence_marker_recall", 0.0))
-    passed = bool(answer.strip()) and concept_recall >= min_concepts and evidence_recall >= min_evidence
+    reported_concept_recall = round(concept_recall, 4)
+    reported_evidence_recall = round(evidence_recall, 4)
+    passed = (
+        bool(answer.strip())
+        and reported_concept_recall >= min_concepts
+        and reported_evidence_recall >= min_evidence
+    )
 
     reported_usage, usage_source, usage_events = _reported_usage(events, tool_events)
     session = next((event for event in events if event.get("type") == "session"), {})
@@ -305,8 +311,8 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
         "model": session.get("model"),
         "passed": passed,
         "quality": {
-            "concept_recall": round(concept_recall, 4),
-            "evidence_marker_recall": round(evidence_recall, 4),
+            "concept_recall": reported_concept_recall,
+            "evidence_marker_recall": reported_evidence_recall,
             "concepts": concept_results,
             "evidence_markers": marker_results,
         },

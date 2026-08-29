@@ -226,25 +226,31 @@ def test_deep_query_uses_tighter_investigate_transport_cap(tmp_path) -> None:
     assert payload["coverage"]["evidence_truncated"] is True
 
 
-def test_large_first_source_uses_bounded_probe_instead_of_direct_dump(tmp_path) -> None:
+def test_large_first_source_uses_bounded_uniform_navigation_sample(tmp_path) -> None:
     source = tmp_path / "large.log"
-    source.write_text("x" * 12_000 + "\n", encoding="utf-8")
+    rows = [f"record {index}" for index in range(160)]
+    rows[80] = "MIDPOINT_STRUCTURAL_LANDMARK"
+    source.write_text("\n".join(rows) + "\n", encoding="utf-8")
     state_path = tmp_path / "investigation.json"
     InvestigationStore(state_path).create("inspect large source")
 
     result = retrieve(
         EvidenceRequest(SourceTarget(source), investigation_path=state_path),
         routing_policy=EvidenceRoutingPolicy(
-            fallback_direct_chars=2_000,
-            max_direct_chars=2_000,
+            fallback_direct_chars=200,
+            max_direct_chars=200,
         ),
     )
     payload = result.to_dict()
 
-    assert result.operation == "probe"
+    assert result.operation == "sample"
     assert payload["data"]["routing"]["mode"] == "bounded"
     assert "direct_output_exceeds_budget" in payload["data"]["routing"]["reasons"]
-    assert "text" not in payload["data"]
+    assert payload["data"]["strategy"] == "uniform"
+    assert payload["data"]["navigation_only"] is True
+    assert payload["coverage"]["sampled_records"] == 16
+    assert payload["coverage"]["returned_chars"] <= 12_000
+    assert payload["data"]["samples"]
 
 
 def test_deep_history_monotonically_escalates_source_inspection_to_investigate(tmp_path) -> None:

@@ -49,7 +49,9 @@ from .evidence_selection import select_signal_hints
 from .investigation import InvestigationStore
 
 
-_TRANSPORT_ONLY_OPERATIONS = frozenset({"probe", "search", "expand", "survey", "retrieve"})
+_TRANSPORT_ONLY_OPERATIONS = frozenset({"probe", "sample", "search", "expand", "survey", "retrieve"})
+_BOUNDED_SOURCE_SAMPLE_RECORDS = 16
+_BOUNDED_SOURCE_SAMPLE_CHARS = 12_000
 
 
 def _history(request: EvidenceRequest) -> tuple[Mapping[str, object], ...]:
@@ -285,6 +287,58 @@ def _direct_query(
     canonical["coverage"] = coverage
     resolved = _replace_canonical(result, canonical)
     decision = refine_route_after_result(decision, canonical, policy=policy)
+    return _with_routing(resolved, decision)
+
+
+def _bounded_source(
+    request: EvidenceRequest,
+    decision: RoutingDecision,
+) -> RetrievalResult:
+    """Return deterministic representative context for a bounded source inspection.
+
+    A metadata-only probe leaves the Agent blind on sources just above the
+    direct-context budget. Uniform bounded sampling exposes source structure and
+    navigation landmarks without diagnosing, ranking, or dumping the source.
+    ``snapshot=False`` keeps this a cheap navigation observation; exact evidence
+    remains recoverable through RangeTarget materialization.
+    """
+
+    assert isinstance(request.target, SourceTarget)
+    target = request.target
+    path = Path(target.source).expanduser().resolve()
+    if not path.is_file() or path.stat().st_size == 0:
+        return _with_routing(_retrieve(request), decision)
+
+    tracker = _restore_progress(request.investigation_path)
+    result = _tools.sample(
+        path,
+        strategy="uniform",
+        count=_BOUNDED_SOURCE_SAMPLE_RECORDS,
+        max_chars=_BOUNDED_SOURCE_SAMPLE_CHARS,
+        snapshot=False,
+        segmenter=target.segmenter,
+        investigation_path=request.investigation_path,
+        hypothesis_id=request.hypothesis_id,
+        test_id=request.test_id,
+        cache=request.cache,
+    )
+    readiness, new_rows, repeated = _observe_tool_result(tracker, result)
+    canonical = dict(result)
+    data = dict(canonical.get("data") or {})
+    data["navigation_only"] = True
+    data["navigation_note"] = (
+        "Uniform bounded source samples are navigation landmarks only; materialize "
+        "the relevant line range before treating it as cited Evidence."
+    )
+    canonical["data"] = data
+    resolved = RetrievalResult(
+        operation="sample",
+        status=str(canonical.get("status") or "unknown"),
+        canonical_result=canonical,
+        progress=readiness,
+        new_evidence=new_rows,
+        repeated_evidence=repeated,
+    )
     return _with_routing(resolved, decision)
 
 
@@ -647,7 +701,7 @@ def retrieve(
             return _direct_source(request, decision, policy)
         if decision.route == EvidenceRoute.INVESTIGATE:
             return _investigate_source(request, decision, policy)
-        return _with_routing(_retrieve(request), decision)
+        return _bounded_source(request, decision)
 
     if isinstance(request.target, QueryTarget) and decision.route == EvidenceRoute.DIRECT:
         return _direct_query(request, decision, policy)

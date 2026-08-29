@@ -341,11 +341,18 @@ def verify_scoped_identity_gaps(
                                 "occurrence_count": 0,
                                 "references": [],
                                 "first_line": number,
+                                "last_line": number,
                             }
                         row = siblings[entity]
                         row["occurrence_count"] += 1
+                        row["last_line"] = number
                         if len(row["references"]) < reference_limit:
                             row["references"].append(f"{path.name}:{number}")
+                        elif reference_limit > 1:
+                            # Preserve early provenance plus the most recent
+                            # occurrence so bounded selection can retain nearby
+                            # late-stage siblings without storing every match.
+                            row["references"][-1] = f"{path.name}:{number}"
 
                 for match in _IDENTIFIER_PAIR_RE.finditer(line):
                     key = match.group("key")
@@ -369,16 +376,19 @@ def verify_scoped_identity_gaps(
                             "occurrence_count": 0,
                             "references": [],
                             "first_line": entity_line,
+                            "last_line": entity_line,
                         }
                     row = entities[entity]
                     row["occurrence_count"] += 1
+                    row["last_line"] = entity_line
+                    reference = {
+                        "entity_ref": f"{path.name}:{entity_line}",
+                        "identifier_ref": f"{path.name}:{number}",
+                    }
                     if len(row["references"]) < reference_limit:
-                        row["references"].append(
-                            {
-                                "entity_ref": f"{path.name}:{entity_line}",
-                                "identifier_ref": f"{path.name}:{number}",
-                            }
-                        )
+                        row["references"].append(reference)
+                    elif reference_limit > 1:
+                        row["references"][-1] = reference
             read_complete = os.fstat(binary.fileno())
             current_path = path.stat()
         finally:
@@ -393,10 +403,24 @@ def verify_scoped_identity_gaps(
             slot["entities"].values(),
             key=lambda row: (int(row["first_line"]), str(row["entity"])),
         )
-        siblings = sorted(
-            slot["siblings"].values(),
-            key=lambda row: (int(row["first_line"]), str(row["entity"])),
-        )
+        anchor_lines = [
+            line
+            for row in ordered
+            for line in (int(row["first_line"]), int(row.get("last_line") or row["first_line"]))
+        ]
+        def _sibling_distance(row: dict[str, Any]) -> tuple[int, int, str]:
+            first = int(row["first_line"])
+            last = int(row.get("last_line") or first)
+            if not anchor_lines:
+                return (0, first, str(row["entity"]))
+            distance = min(
+                abs(candidate - anchor)
+                for candidate in (first, last)
+                for anchor in anchor_lines
+            )
+            return (distance, first, str(row["entity"]))
+
+        siblings = sorted(slot["siblings"].values(), key=_sibling_distance)
         entity_count = len(ordered)
         sibling_count = len(siblings)
         if entity_count >= 2:
@@ -437,12 +461,13 @@ def verify_scoped_identity_gaps(
                 "associated_occurrences": int(slot["associated_occurrences"]),
                 "entity_count_observed": entity_count,
                 "entities": [
-                    {key: value for key, value in row.items() if key != "first_line"}
+                    {key: value for key, value in row.items() if key not in {"first_line", "last_line"}}
                     for row in ordered[:entity_limit]
                 ],
                 "sibling_entity_count_observed": sibling_count,
+                "sibling_selection_basis": "nearest_to_direct_identifier_association",
                 "sibling_entities": [
-                    {key: value for key, value in row.items() if key != "first_line"}
+                    {key: value for key, value in row.items() if key not in {"first_line", "last_line"}}
                     for row in siblings[:entity_limit]
                 ],
                 "truncated": bool(

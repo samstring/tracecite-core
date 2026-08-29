@@ -185,3 +185,23 @@ def test_benchmark_counts_exact_duplicate_visible_output(tmp_path: Path) -> None
     assert result["context_cost"]["tool_output_chars"] == len(repeated) * 2
     assert result["context_cost"]["unique_tool_output_chars"] == len(repeated)
     assert result["context_cost"]["exact_duplicate_tool_output_chars"] == len(repeated)
+
+def test_score_threshold_uses_reported_four_decimal_precision(tmp_path: Path) -> None:
+    transcript = tmp_path / "precision.jsonl"
+    events = [
+        {"type": "session", "mode": "tracecite_context", "model": "test-model"},
+        {"type": "tool", "tool": "search", "output": "DrawCircularArc round_superellipse_geometry.cc"},
+        {
+            "type": "final",
+            "answer": (
+                "Impeller RoundSuperellipse DrawCircularArc. A use-after-free lifetime bug left a poisoned pointer; "
+                "the crashed thread is not the corrupting thread and is only a downstream manifestation."
+            ),
+            "evidence": [],
+        },
+    ]
+    transcript.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+    result = score_transcript(FLUTTER_CASE, transcript)
+    assert result["quality"]["concept_recall"] == 1.0
+    assert result["quality"]["evidence_marker_recall"] == 0.6667
+    assert result["passed"] is True
