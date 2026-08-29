@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 from tracecite.extension.evidence import EntityRef
 from tracecite.extension.retrieval import (
@@ -21,10 +22,17 @@ from tracecite.runtime import (
     investigate,
     retrieve,
 )
+from tracecite.runtime.retrieval_session import RetrievalSessionStore
 
 
 def _sha256(path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _clear_audit_executions(state_path) -> None:
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["executions"] = []
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_identity_keeps_record_event_and_group_layers_distinct() -> None:
@@ -113,6 +121,52 @@ def test_retrieve_query_suppresses_repeated_evidence(tmp_path) -> None:
     assert len(second.canonical_result["evidence"]) == 1
 
 
+def test_retrieval_session_remains_novelty_owner_without_audit_executions(tmp_path) -> None:
+    source = tmp_path / "runtime.log"
+    source.write_text("ERROR timeout request=7\n", encoding="utf-8")
+    state_path = tmp_path / "investigation.json"
+    InvestigationStore(state_path).create("novelty state ownership")
+
+    first = retrieve(
+        EvidenceRequest(QueryTarget(source, "timeout"), investigation_path=state_path)
+    )
+    session_store = RetrievalSessionStore.for_investigation(state_path)
+    assert session_store.path.is_file()
+    assert session_store.load().seen_evidence
+
+    _clear_audit_executions(state_path)
+    second = retrieve(
+        EvidenceRequest(QueryTarget(source, "timeout"), investigation_path=state_path)
+    )
+
+    assert first.new_evidence
+    assert second.status == "no_new_evidence"
+    assert second.repeated_evidence == 1
+
+
+def test_legacy_audit_progress_migrates_once_when_sidecar_is_missing(tmp_path) -> None:
+    source = tmp_path / "runtime.log"
+    source.write_text("ERROR timeout request=7\n", encoding="utf-8")
+    state_path = tmp_path / "investigation.json"
+    InvestigationStore(state_path).create("legacy progress migration")
+
+    first = retrieve(
+        EvidenceRequest(QueryTarget(source, "timeout"), investigation_path=state_path)
+    )
+    session_store = RetrievalSessionStore.for_investigation(state_path)
+    assert first.new_evidence
+    session_store.path.unlink()
+    assert not session_store.path.exists()
+
+    migrated = retrieve(
+        EvidenceRequest(QueryTarget(source, "timeout"), investigation_path=state_path)
+    )
+
+    assert session_store.path.is_file()
+    assert migrated.status == "no_new_evidence"
+    assert migrated.repeated_evidence == 1
+
+
 def test_retrieve_range_hard_stops_only_for_same_immutable_version(tmp_path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
@@ -165,6 +219,35 @@ def test_retrieve_range_hard_stops_only_for_same_immutable_version(tmp_path) -> 
     )
     assert changed.status == "error"
     assert changed.status != "no_new_evidence"
+
+
+def test_range_coverage_remains_owned_by_session_without_audit_executions(tmp_path) -> None:
+    source = tmp_path / "runtime.log"
+    source.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+    digest = _sha256(source)
+    state_path = tmp_path / "investigation.json"
+    InvestigationStore(state_path).create("range ownership")
+
+    first = retrieve(
+        EvidenceRequest(
+            RangeTarget(source, 3, before=1, after=1, expected_sha256=digest),
+            investigation_path=state_path,
+        )
+    )
+    store = RetrievalSessionStore.for_investigation(state_path)
+    assert store.load().covered_ranges
+    _clear_audit_executions(state_path)
+
+    second = retrieve(
+        EvidenceRequest(
+            RangeTarget(source, 3, before=1, after=1, expected_sha256=digest),
+            investigation_path=state_path,
+        )
+    )
+
+    assert first.status == "ok"
+    assert second.status == "no_new_evidence"
+    assert "requested_context_already_covered" in second.stop_reason.basis
 
 
 def test_range_context_growth_is_not_suppressed_by_prior_search_pointer(tmp_path) -> None:
