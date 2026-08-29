@@ -1,9 +1,15 @@
-"""Mechanical validation for proposed investigation Findings.
+"""Mechanical grounding checks for proposed investigation Findings.
 
-The validator intentionally checks only claims TraceCite can verify from
-InvestigationState. It does not interpret natural-language causality. Its job
-is to prevent a host from presenting an ungrounded decisive Finding as if it
-were TraceCite-validated.
+The validator intentionally checks only facts TraceCite can verify from
+InvestigationState: Test execution, Evidence provenance, immutable citations,
+Coverage, integrity, and whether the Agent explicitly assessed its declared
+Tests. It does not interpret natural-language causality and therefore does not
+certify that an Agent's semantic Finding is true.
+
+A successful validation means the Finding is mechanically evidence-grounded,
+not Runtime-proven. Deterministic semantic verification, when available, must
+come from an assertion/capability that can actually evaluate the relevant
+condition rather than from the Agent labeling its own interpretation.
 """
 
 from __future__ import annotations
@@ -25,12 +31,11 @@ _EVIDENCE_URI_RE = re.compile(
     r"#L(?P<start>[1-9][0-9]*)(?:-L(?P<end>[1-9][0-9]*))?$"
 )
 _DECISIVE_OUTCOMES = frozenset({"supported", "contradicted"})
-_BLOCKING_STATUSES = frozenset({"partial", "error", "no_match"})
 
 
 @dataclass(frozen=True)
 class FindingValidationResult:
-    """Result of validating one proposed Finding against persisted state."""
+    """Mechanical admissibility result for one proposed Finding."""
 
     valid: bool
     requested_outcome: str
@@ -40,6 +45,9 @@ class FindingValidationResult:
     test_ids: Sequence[str] = field(default_factory=tuple)
     execution_ids: Sequence[str] = field(default_factory=tuple)
     test_assessments: Mapping[str, str] = field(default_factory=dict)
+    test_assessment_sources: Mapping[str, str] = field(default_factory=dict)
+    semantic_verified: bool = False
+    validation_scope: str = "mechanical_grounding"
     supporting_evidence: Sequence[str] = field(default_factory=tuple)
     contradicting_evidence: Sequence[str] = field(default_factory=tuple)
 
@@ -53,6 +61,9 @@ class FindingValidationResult:
             "test_ids": list(self.test_ids),
             "execution_ids": list(self.execution_ids),
             "test_assessments": dict(self.test_assessments),
+            "test_assessment_sources": dict(self.test_assessment_sources),
+            "semantic_verified": self.semantic_verified,
+            "validation_scope": self.validation_scope,
             "supporting_evidence": list(self.supporting_evidence),
             "contradicting_evidence": list(self.contradicting_evidence),
         }
@@ -99,6 +110,18 @@ def _coverage_has_blocking_gap(value: Any) -> bool:
     return False
 
 
+def _assessment_source(execution: Mapping[str, Any]) -> str:
+    verification = execution.get("verification") or {}
+    if not isinstance(verification, Mapping):
+        return "legacy_unspecified"
+    return str(verification.get("assessment_source") or "legacy_unspecified").strip() or "legacy_unspecified"
+
+
+def _assessment_semantic_verified(execution: Mapping[str, Any]) -> bool:
+    verification = execution.get("verification") or {}
+    return isinstance(verification, Mapping) and verification.get("semantic_claim_verified") is True
+
+
 def validate_finding(
     store_or_state: InvestigationStore | InvestigationState,
     hypothesis_id: str,
@@ -108,13 +131,16 @@ def validate_finding(
     contradicting_evidence: Sequence[str] = (),
     coverage: Mapping[str, Any] | None = None,
 ) -> FindingValidationResult:
-    """Validate whether a proposed Finding may be treated as decisive.
+    """Check whether a proposed Finding is mechanically evidence-grounded.
 
     Decisive Findings must be grounded in executed Tests, cite only immutable
     line-addressable Evidence produced by those executions, have no explicit
-    execution/coverage gaps, and have an evidence-backed terminal assessment
-    for every declared Test. ``unknown`` remains valid with less evidence
+    execution/coverage gaps, and have an evidence-grounded terminal assessment
+    for every declared Test. ``unknown`` remains admissible with less evidence
     because uncertainty is the safe fallback.
+
+    ``valid=True`` does not mean TraceCite has verified the natural-language
+    causal semantics. See ``semantic_verified`` and ``test_assessment_sources``.
     """
 
     state = store_or_state.load() if isinstance(store_or_state, InvestigationStore) else store_or_state
@@ -146,6 +172,15 @@ def validate_finding(
         test_id: str(execution.get("outcome") or "unknown").strip().lower()
         for test_id, execution in latest_assessments.items()
     }
+    assessment_sources = {
+        test_id: _assessment_source(execution)
+        for test_id, execution in latest_assessments.items()
+    }
+    semantic_verified = bool(tests) and all(
+        test_id in latest_assessments
+        and _assessment_semantic_verified(latest_assessments[test_id])
+        for test_id in test_ids
+    )
 
     reasons: List[str] = []
     decisive = requested_outcome in _DECISIVE_OUTCOMES
@@ -235,16 +270,18 @@ def validate_finding(
         test_ids=tuple(test_ids),
         execution_ids=tuple(execution_ids),
         test_assessments=assessment_outcomes,
+        test_assessment_sources=assessment_sources,
+        semantic_verified=semantic_verified,
         supporting_evidence=tuple(support),
         contradicting_evidence=tuple(contradiction),
     )
 
 
-# Enforce the epistemic gate at the persistence boundary while preserving
-# exploration flexibility. Decisive findings that fail validation are rejected
-# without mutating InvestigationState, so the hypothesis remains open and the
-# Agent can continue investigating. Explicit ``unknown`` findings remain
-# writable through the original state transition.
+# Enforce only the mechanical evidence gate at the persistence boundary while
+# preserving exploration and semantic-reasoning freedom. Decisive findings that
+# fail provenance/coverage/integrity checks are rejected without mutating state.
+# Passing this gate does not make the Finding Runtime-certified as semantically
+# true; the assessment provenance remains in InvestigationState.
 _ORIGINAL_ADD_FINDING = InvestigationStore.add_finding
 
 
@@ -272,7 +309,7 @@ def _validated_add_finding(
         if not validation.valid:
             reasons = ", ".join(validation.reasons) or "unknown"
             raise InvestigationError(
-                "Finding Validation 拒绝未经验证的决定性结论；"
+                "Finding Validation 拒绝不满足机械证据约束的决定性结论；"
                 f"requested_outcome={requested_outcome}, reasons={reasons}. "
                 "调查状态未修改，可继续探索或显式记录 unknown Finding。"
             )
