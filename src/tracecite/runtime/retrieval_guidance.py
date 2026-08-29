@@ -4,23 +4,13 @@ This module is deliberately domain-neutral. It does not infer a cause or choose
 between hypotheses. It post-processes canonical Runtime evidence-integrity state
 into explicit correlation constraints and one prioritized mechanical retrieval
 action for Agent hosts.
-
-The guidance is transport/retrieval control state:
-
-- only Runtime-observed gaps and verification facts are used;
-- a local identifier nested under a scoped entity is never promoted to a
-  globally unique identity merely because a source-wide search found no second
-  explicit association;
-- follow-up actions are derived only from already-observed identifier/entity
-  values and never from benchmark labels, expected answers, or causal guesses;
-- no source is reopened and no new Evidence is discovered here;
-- heuristic ``next_queries`` remain available, but gap-closing queries are
-  moved ahead of them so known integrity work is not buried by generic terms.
 """
 
 from __future__ import annotations
 
 import copy
+import os
+import re
 from typing import Any, Mapping
 
 from .agent_api import RetrievalResult
@@ -35,11 +25,7 @@ def _action_from_gap(gap: Mapping[str, Any]) -> dict[str, Any] | None:
     operation = str(raw.get("operation") or "").strip()
     if not operation:
         return None
-    action = {
-        key: copy.deepcopy(value)
-        for key, value in raw.items()
-        if value not in (None, "", [], ())
-    }
+    action = {key: copy.deepcopy(value) for key, value in raw.items() if value not in (None, "", [], ())}
     action["operation"] = operation
     action["gap_kind"] = str(gap.get("kind") or "").strip() or "evidence_gap"
     source = str(gap.get("source") or "").strip()
@@ -49,11 +35,7 @@ def _action_from_gap(gap: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _identity_key(item: Mapping[str, Any]) -> tuple[str, str, str]:
-    return (
-        str(item.get("source") or "").strip(),
-        str(item.get("identifier_key") or "").strip(),
-        str(item.get("identifier_value") or "").strip(),
-    )
+    return (str(item.get("source") or "").strip(), str(item.get("identifier_key") or "").strip(), str(item.get("identifier_value") or "").strip())
 
 
 def _scoped_identity_contract(item: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -65,202 +47,102 @@ def _scoped_identity_contract(item: Mapping[str, Any]) -> dict[str, Any] | None:
         return None
     entity_count = int(item.get("entity_count_observed") or 0)
     sibling_count = int(item.get("sibling_entity_count_observed") or 0)
-    entities = [
-        str(row.get("entity") or "").strip()
-        for row in item.get("entities") or []
-        if isinstance(row, Mapping) and str(row.get("entity") or "").strip()
-    ]
+    entities = [str(row.get("entity") or "").strip() for row in item.get("entities") or [] if isinstance(row, Mapping) and str(row.get("entity") or "").strip()]
     return {
-        "kind": "scoped_local_identifier",
-        "identifier_key": identifier_key,
-        "identifier_value": identifier_value,
-        "scoped_entities": entities,
-        "sibling_entity_count_observed": sibling_count,
+        "kind": "scoped_local_identifier", "identifier_key": identifier_key, "identifier_value": identifier_value,
+        "scoped_entities": entities, "sibling_entity_count_observed": sibling_count,
         "source_uniqueness": "disproved" if entity_count >= 2 else "unverified",
-        "identifier_only_correlation_safe": False,
-        "required_correlation_components": ["scoped_entity", identifier_key],
-        "negative_evidence_note": (
-            "A source-wide absence of a second explicit identifier association does not prove "
-            "that the identifier is globally unique. Preserve the scoped entity together with "
-            "the local identifier for correlation unless an external identity contract proves "
-            "identifier-only uniqueness."
-        ),
+        "identifier_only_correlation_safe": False, "required_correlation_components": ["scoped_entity", identifier_key],
+        "negative_evidence_note": "A source-wide absence of a second explicit identifier association does not prove that the identifier is globally unique. Preserve the scoped entity together with the local identifier for correlation unless an external identity contract proves identifier-only uniqueness.",
     }
 
 
-def _enrich_identity_contracts(
-    data: Mapping[str, Any],
-) -> tuple[dict[str, Any], dict[tuple[str, str, str], dict[str, Any]]]:
-    enriched = copy.deepcopy(dict(data))
-    integrity = enriched.get("evidence_integrity")
-    if not isinstance(integrity, Mapping):
+def _enrich_identity_contracts(data: Mapping[str, Any]) -> tuple[dict[str, Any], dict[tuple[str, str, str], dict[str, Any]]]:
+    enriched = copy.deepcopy(dict(data)); integrity = enriched.get("evidence_integrity")
+    if not isinstance(integrity, Mapping) or not isinstance(integrity.get("scoped_identity"), list):
         return enriched, {}
-    scoped_rows = integrity.get("scoped_identity")
-    if not isinstance(scoped_rows, list):
-        return enriched, {}
-
-    verification_index: dict[tuple[str, str, str], dict[str, Any]] = {}
-    constraints: list[dict[str, Any]] = []
-    updated_scoped: list[Any] = []
-    for scoped in scoped_rows:
-        if not isinstance(scoped, Mapping):
-            updated_scoped.append(copy.deepcopy(scoped))
-            continue
-        scoped_copy = copy.deepcopy(dict(scoped))
-        source = str(scoped_copy.get("source") or "").strip()
-        updated_verification: list[Any] = []
+    verification_index: dict[tuple[str, str, str], dict[str, Any]] = {}; constraints=[]; updated=[]
+    for scoped in integrity.get("scoped_identity") or []:
+        if not isinstance(scoped, Mapping): updated.append(copy.deepcopy(scoped)); continue
+        scoped_copy=copy.deepcopy(dict(scoped)); source=str(scoped_copy.get("source") or "").strip(); rows=[]
         for raw in scoped_copy.get("identity_verification") or []:
-            if not isinstance(raw, Mapping):
-                updated_verification.append(copy.deepcopy(raw))
-                continue
-            item = copy.deepcopy(dict(raw))
-            if source and not item.get("source"):
-                item["source"] = source
-            contract = _scoped_identity_contract(item)
+            if not isinstance(raw, Mapping): rows.append(copy.deepcopy(raw)); continue
+            item=copy.deepcopy(dict(raw)); item.setdefault("source", source)
+            contract=_scoped_identity_contract(item)
             if contract is not None:
-                item["identity_contract"] = contract
-                constraints.append(copy.deepcopy(contract))
-                verification_index[_identity_key(item)] = item
-            updated_verification.append(item)
-        scoped_copy["identity_verification"] = updated_verification
-        updated_scoped.append(scoped_copy)
-
-    integrity_copy = copy.deepcopy(dict(integrity))
-    integrity_copy["scoped_identity"] = updated_scoped
-    enriched["evidence_integrity"] = integrity_copy
+                item["identity_contract"]=contract; constraints.append(copy.deepcopy(contract)); verification_index[_identity_key(item)]=item
+            rows.append(item)
+        scoped_copy["identity_verification"]=rows; updated.append(scoped_copy)
+    integrity_copy=copy.deepcopy(dict(integrity)); integrity_copy["scoped_identity"]=updated; enriched["evidence_integrity"]=integrity_copy
     if constraints:
-        enriched["correlation_constraints"] = constraints
-        enriched["correlation_constraints_note"] = (
-            "Mechanical identity safety only. These constraints prevent unsafe identifier-only "
-            "correlation; they do not claim that a collision occurred or identify a root cause."
-        )
+        enriched["correlation_constraints"]=constraints
+        enriched["correlation_constraints_note"]="Mechanical identity safety only. These constraints prevent unsafe identifier-only correlation; they do not claim that a collision occurred or identify a root cause."
     return enriched, verification_index
 
 
-def _refine_scoped_gap_action(
-    gap: dict[str, Any],
-    *,
-    current_query: str,
-    verification: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    if str(gap.get("kind") or "") != "scope_uniqueness_unverified" or verification is None:
-        return gap
-    status = str(verification.get("status") or "").strip()
+def _entity_family_query(verification: Mapping[str, Any]) -> str | None:
+    """Derive a stable sibling-family query only from Runtime-observed entities."""
+    values=[]
+    for key in ("entities", "sibling_entities"):
+        for row in verification.get(key) or []:
+            if isinstance(row, Mapping):
+                value=str(row.get("entity") or "").strip()
+                if value: values.append(value)
+    values=list(dict.fromkeys(values))
+    if len(values) < 2: return None
+    prefix=os.path.commonprefix(values).rstrip("0123456789-_.:/")
+    # Preserve a delimiter when it is shared and the differing tail is an instance-like suffix.
+    original=os.path.commonprefix(values)
+    if len(original) > len(prefix) and original[len(prefix):]:
+        prefix=original
+    prefix=re.sub(r"\d+$", "", prefix)
+    if len(prefix) < 6 or all(value == prefix for value in values): return None
+    return prefix
+
+
+def _refine_scoped_gap_action(gap: dict[str, Any], *, current_query: str, verification: Mapping[str, Any] | None) -> dict[str, Any]:
+    if str(gap.get("kind") or "") != "scope_uniqueness_unverified" or verification is None: return gap
+    status=str(verification.get("status") or "").strip()
     if status == "multiple_scoped_entities_observed":
-        gap["actionable"] = False
-        gap.pop("recommended_action", None)
-        gap["detail"] = (
-            "The same local identifier is directly associated with multiple scoped entities in "
-            "the stable source; identifier-only correlation is therefore unsafe."
-        )
+        gap["actionable"]=False; gap.pop("recommended_action",None)
+        gap["detail"]="The same local identifier is directly associated with multiple scoped entities in the stable source; identifier-only correlation is therefore unsafe."
         return gap
-
-    identifier = str(gap.get("identifier_value") or "").strip()
-    entities = [
-        str(row.get("entity") or "").strip()
-        for row in verification.get("entities") or []
-        if isinstance(row, Mapping) and str(row.get("entity") or "").strip()
-    ]
-    contract = verification.get("identity_contract")
-    if isinstance(contract, Mapping):
-        gap["correlation_constraint"] = copy.deepcopy(dict(contract))
-
-    # A full-source identifier search that still cannot establish uniqueness
-    # has exhausted that exact query as a useful next step. Follow the already
-    # observed scoped entity instead so the Agent can recover its event trail.
-    # This is generic evidence navigation, not a claim that another entity
-    # reused the identifier or that any observed event is causal.
-    if (
-        status == "uniqueness_unverified_with_sibling_scope_fanout"
-        and identifier
-        and current_query == identifier
-        and entities
-    ):
-        entity = entities[0]
-        gap["detail"] = (
-            f"{gap.get('identifier_key')}={identifier} remains scope-ambiguous after the stable "
-            "source identifier scan. Absence of a second explicit association does not establish "
-            "global uniqueness; trace the observed scoped entity before using identifier-only correlation."
-        )
-        gap["recommended_action"] = {
-            "operation": "search",
-            "query": entity,
-            "purpose": "trace_scoped_entity_references",
-        }
+    identifier=str(gap.get("identifier_value") or "").strip()
+    entities=[str(row.get("entity") or "").strip() for row in verification.get("entities") or [] if isinstance(row,Mapping) and str(row.get("entity") or "").strip()]
+    contract=verification.get("identity_contract")
+    if isinstance(contract,Mapping): gap["correlation_constraint"]=copy.deepcopy(dict(contract))
+    if status == "uniqueness_unverified_with_sibling_scope_fanout" and identifier and current_query == identifier and entities:
+        entity=entities[0]
+        gap["detail"]=f"{gap.get('identifier_key')}={identifier} remains scope-ambiguous after the stable source identifier scan. Absence of a second explicit association does not establish global uniqueness; trace the observed scoped entity before using identifier-only correlation."
+        gap["recommended_action"]={"operation":"search","query":entity,"purpose":"trace_scoped_entity_references"}
+    elif status == "uniqueness_unverified_with_sibling_scope_fanout" and current_query in entities:
+        family=_entity_family_query(verification)
+        if family and family != current_query:
+            gap["detail"]="The observed scoped entity has been traced, but identifier uniqueness remains unresolved while sibling entities coexist. Search the Runtime-observed sibling entity family to recover cross-entity event/correlation evidence before closing the identity gap."
+            gap["recommended_action"]={"operation":"search","query":family,"purpose":"trace_sibling_entity_family_references"}
     return gap
 
 
 def prioritize_actionable_retrieval(result: RetrievalResult) -> RetrievalResult:
-    """Expose identity constraints and one deterministic next retrieval action.
-
-    The function never reads a source and never adds causal semantics. When a
-    caller has already executed the exact local-identifier search but source
-    uniqueness remains unverified, the next action advances mechanically to the
-    already-observed scoped entity instead of repeating the exhausted query.
-    """
-
-    if not isinstance(result, RetrievalResult):
-        raise TypeError("prioritize_actionable_retrieval requires RetrievalResult")
-
-    canonical = copy.deepcopy(dict(result.canonical_result))
-    data, verification_index = _enrich_identity_contracts(canonical.get("data") or {})
-    current_query = str(data.get("query") or "").strip()
-
-    rewritten_gaps: list[Any] = []
+    if not isinstance(result, RetrievalResult): raise TypeError("prioritize_actionable_retrieval requires RetrievalResult")
+    canonical=copy.deepcopy(dict(result.canonical_result)); data,index=_enrich_identity_contracts(canonical.get("data") or {}); current_query=str(data.get("query") or "").strip()
+    rewritten=[]
     for raw in canonical.get("missing_evidence") or []:
-        if not isinstance(raw, Mapping):
-            rewritten_gaps.append(copy.deepcopy(raw))
-            continue
-        gap = copy.deepcopy(dict(raw))
-        key = (
-            str(gap.get("source") or "").strip(),
-            str(gap.get("identifier_key") or "").strip(),
-            str(gap.get("identifier_value") or "").strip(),
-        )
-        gap = _refine_scoped_gap_action(
-            gap,
-            current_query=current_query,
-            verification=verification_index.get(key),
-        )
-        rewritten_gaps.append(gap)
-    canonical["missing_evidence"] = rewritten_gaps
-
-    gaps = [
-        dict(item)
-        for item in rewritten_gaps
-        if isinstance(item, Mapping) and item.get("actionable") is True
-    ]
-    action = next((value for item in gaps if (value := _action_from_gap(item)) is not None), None)
+        if not isinstance(raw,Mapping): rewritten.append(copy.deepcopy(raw)); continue
+        gap=copy.deepcopy(dict(raw)); key=(str(gap.get("source") or "").strip(),str(gap.get("identifier_key") or "").strip(),str(gap.get("identifier_value") or "").strip())
+        rewritten.append(_refine_scoped_gap_action(gap,current_query=current_query,verification=index.get(key)))
+    canonical["missing_evidence"]=rewritten
+    gaps=[dict(item) for item in rewritten if isinstance(item,Mapping) and item.get("actionable") is True]
+    action=next((value for item in gaps if (value:=_action_from_gap(item)) is not None),None)
     if action is not None:
-        data["actionable_retrieval"] = action
-        data["actionable_retrieval_note"] = (
-            "Mechanical evidence-gap closure only. Execute this retrieval action before treating "
-            "the corresponding integrity gap as closed; it is not a root-cause recommendation."
-        )
-        query = str(action.get("query") or "").strip()
+        data["actionable_retrieval"]=action; data["actionable_retrieval_note"]="Mechanical evidence-gap closure only. Execute this retrieval action before treating the corresponding integrity gap as closed; it is not a root-cause recommendation."
+        query=str(action.get("query") or "").strip()
         if query:
-            existing = [
-                str(item)
-                for item in canonical.get("next_queries") or []
-                if str(item).strip() and str(item) != query
-            ]
-            canonical["next_queries"] = [query, *existing]
+            existing=[str(item) for item in canonical.get("next_queries") or [] if str(item).strip() and str(item)!=query]; canonical["next_queries"]=[query,*existing]
     else:
-        data.pop("actionable_retrieval", None)
-        data.pop("actionable_retrieval_note", None)
-    canonical["data"] = data
+        data.pop("actionable_retrieval",None); data.pop("actionable_retrieval_note",None)
+    canonical["data"]=data
+    if canonical == result.canonical_result: return result
+    return RetrievalResult(operation=result.operation,status=result.status,canonical_result=canonical,progress=result.progress,new_evidence=result.new_evidence,repeated_evidence=result.repeated_evidence,stop_reason=result.stop_reason)
 
-    if canonical == result.canonical_result:
-        return result
-    return RetrievalResult(
-        operation=result.operation,
-        status=result.status,
-        canonical_result=canonical,
-        progress=result.progress,
-        new_evidence=result.new_evidence,
-        repeated_evidence=result.repeated_evidence,
-        stop_reason=result.stop_reason,
-    )
-
-
-__all__ = ["prioritize_actionable_retrieval"]
+__all__=["prioritize_actionable_retrieval"]
