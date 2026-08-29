@@ -116,6 +116,19 @@ class EvidenceContractRuntime(canonical.CanonicalRuntime):
     def _store(self) -> InvestigationStore:
         return InvestigationStore(self._investigation_path)
 
+    def _render(self, result: Any, *, prefix: str = "") -> str:
+        payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+        refs = [
+            str(item.get("uri") or "").strip()
+            for item in payload.get("evidence") or []
+            if isinstance(item, Mapping) and str(item.get("uri") or "").strip()
+        ]
+        rendered = super()._render(result, prefix=prefix)
+        if not refs:
+            return rendered
+        ref_block = "\n".join(f"@EVIDENCE_REF {ref}" for ref in dict.fromkeys(refs))
+        return f"{ref_block}\n{rendered}"
+
     def _links(self, args: Mapping[str, Any]) -> tuple[str | None, str | None]:
         hypothesis_id = str(args.get("hypothesis_id") or "").strip() or None
         test_id = str(args.get("test_id") or "").strip() or None
@@ -210,8 +223,6 @@ class EvidenceContractRuntime(canonical.CanonicalRuntime):
 
     def _tracecite_state(self, _args: Mapping[str, Any]) -> str:
         state = self._store.load()
-        assessments = latest_test_assessments(state, "")
-        # latest_test_assessments is hypothesis-scoped; construct a bounded all-test view here.
         all_assessments: dict[str, str] = {}
         for hypothesis in state.hypotheses:
             hypothesis_id = str(hypothesis.get("id") or "")
@@ -399,7 +410,7 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
         ),
         common._function_tool(
             "tracecite_assess_test",
-            "Assess one declared Test. supported/contradicted require immutable Evidence URIs produced by retrievals linked to the same Test; use unknown when evidence is insufficient.",
+            "Assess one declared Test. supported/contradicted require an exact @EVIDENCE_REF produced by a retrieval linked to the same Test; use unknown when evidence is insufficient.",
             {
                 "test_id": {"type": "string"},
                 "outcome": {
