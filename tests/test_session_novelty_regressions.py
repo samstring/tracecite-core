@@ -179,5 +179,6 @@ def test_pi_extension_treats_stop_as_agent_owned_and_exposes_replay() -> None:
     assert "STOP TraceCite retrieval" not in extension
     assert "decide when the Agent should stop" in extension
     assert "data.new_text" in extension
+    assert "source_sha256" in extension
     assert "replay=true" in extension
     assert 'args.push("--replay")' in extension
