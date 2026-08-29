@@ -104,17 +104,19 @@ def test_stop_policy_keeps_only_epistemic_closure_tools_without_finding(tmp_path
         "messages = [\n"
         " {'role':'system','content':'s'}, {'role':'user','content':'u'},\n"
         " {'role':'assistant','content':'','tool_calls':[{'id':'1'}]},\n"
-        " {'role':'tool','content':'{\\\"status\\\":\\\"no_new_evidence\\\",\\\"data\\\":{} }'},\n"
+        " {'role':'tool','content':'{\"status\":\"no_new_evidence\",\"data\":{} }'},\n"
         " {'role':'assistant','content':'','tool_calls':[{'id':'2'}]},\n"
-        " {'role':'tool','content':'{\\\"status\\\":\\\"no_new_evidence\\\",\\\"data\\\":{} }'},\n"
+        " {'role':'tool','content':'{\"status\":\"no_new_evidence\",\"data\":{} }'},\n"
         "]\n"
         "tools = host._tools_for_mode('tracecite', runtime.files)\n"
         "request, event = host._closure_only_stop_policy({'messages':messages,'tools':tools,'tool_choice':'auto'})\n"
         "assert event is not None and event['event'] == 'force_epistemic_closure'\n"
         "names = {tool['name'] for tool in request['tools']}\n"
         "assert names == host._CLOSURE_TOOL_NAMES\n"
+        "assert 'tracecite_confirm_evidence' in names\n"
         "assert 'tracecite_search' not in names and 'tracecite_get' not in names\n"
         "assert request['tool_choice'] == 'required'\n"
+        "assert 'tracecite_confirm_evidence' in request['messages'][-1]['content']\n"
         "assert 'Never upgrade retrieval exhaustion into proof' in request['messages'][-1]['content']\n"
         "print('ok')\n",
     )
@@ -143,6 +145,28 @@ def test_repeated_evidence_remains_referenceable_when_formal_test_starts_late(tm
     assert output.strip() == "ok"
 
 
+def test_free_exploration_evidence_can_be_confirmed_without_retrieval_retry(tmp_path: Path) -> None:
+    _setup(tmp_path)
+    output = _run_host_script(
+        tmp_path,
+        "runtime = host.EvidenceContractRuntime(mode='tracecite', input_root=tmp/'inputs', scratch=tmp/'scratch', context_id='')\n"
+        "explore = runtime.call('tracecite_search', {'file':'runtime.log','query':'checksum','regex':False,'hypothesis_id':None,'test_id':None})\n"
+        "import re\n"
+        "ref = re.search(r'@EVIDENCE_REF (evidence://sha256/[0-9a-f]{64}#L\\d+(?:-L\\d+)?)', explore).group(1)\n"
+        "runtime.call('tracecite_hypothesis', {'claim':'checksum failure caused request failure','hypothesis_id':'H1','rationale':''})\n"
+        "runtime.call('tracecite_test', {'hypothesis_id':'H1','intent':'inspect checksum failure','expected_observation':'checksum failure is present','contradicting_observation':'request has no checksum failure','test_id':'T1'})\n"
+        "confirmed = json.loads(runtime.call('tracecite_confirm_evidence', {'test_id':'T1','evidence_refs':[ref]}))\n"
+        "assert confirmed['evidence_refs'] == [ref]\n"
+        "assert confirmed['origin_execution_ids']\n"
+        "assessment = json.loads(runtime.call('tracecite_assess_test', {'test_id':'T1','outcome':'supported','evidence_refs':[ref]}))\n"
+        "assert assessment['outcome'] == 'supported'\n"
+        "finding = json.loads(runtime.call('tracecite_finding', {'hypothesis_id':'H1','outcome':'supported','summary':'checksum failure observed','supporting_evidence':[ref],'contradicting_evidence':[],'limitations':[]}))\n"
+        "assert finding['outcome'] == 'supported'\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
 def test_transport_requires_tools_until_finding_exists(tmp_path: Path) -> None:
     _setup(tmp_path)
     output = _run_host_script(
@@ -158,6 +182,27 @@ def test_transport_requires_tools_until_finding_exists(tmp_path: Path) -> None:
         "runtime.call('tracecite_finding', {'hypothesis_id':'H1','outcome':'unknown','summary':'insufficient evidence','supporting_evidence':[],'contradicting_evidence':[],'limitations':['not enough evidence']})\n"
         "second = host._required_tool_transport({'messages':[],'tools':[{'name':'tracecite_state'}],'tool_choice':'auto'})\n"
         "assert second['tool_choice'] == 'auto'\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
+def test_unknown_finding_caps_final_prose_answer(tmp_path: Path) -> None:
+    _setup(tmp_path)
+    output = _run_host_script(
+        tmp_path,
+        "os.environ['TRACECITE_BENCH_SCRATCH'] = str(tmp/'scratch')\n"
+        "runtime = host.EvidenceContractRuntime(mode='tracecite', input_root=tmp/'inputs', scratch=tmp/'scratch', context_id='')\n"
+        "runtime.call('tracecite_hypothesis', {'claim':'unknown cause','hypothesis_id':'H1','rationale':''})\n"
+        "runtime.call('tracecite_test', {'hypothesis_id':'H1','intent':'determine cause','expected_observation':'evidence supports the proposed cause','contradicting_observation':'evidence contradicts or cannot establish the cause','test_id':'T1'})\n"
+        "runtime.call('tracecite_assess_test', {'test_id':'T1','outcome':'unknown','evidence_refs':[]})\n"
+        "runtime.call('tracecite_finding', {'hypothesis_id':'H1','outcome':'unknown','summary':'insufficient evidence','supporting_evidence':[],'contradicting_evidence':[],'limitations':['not enough evidence']})\n"
+        "host._ORIGINAL_TRANSPORT = lambda payload: {'choices':[{'message':{'role':'assistant','content':'The root cause is definitely X.'},'finish_reason':'stop'}]}\n"
+        "response = host._required_tool_transport({'messages':[],'tools':[{'name':'tracecite_state'}],'tool_choice':'auto'})\n"
+        "content = response['choices'][0]['message']['content']\n"
+        "assert 'Investigation result: unknown' in content\n"
+        "assert 'definitely X' not in content\n"
+        "assert response['choices'][0]['finish_reason'] == 'stop'\n"
         "print('ok')\n",
     )
     assert output.strip() == "ok"
