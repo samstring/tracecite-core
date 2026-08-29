@@ -275,3 +275,36 @@ def test_positive_get_radius_expands_to_fidelity_neighborhood(tmp_path: Path) ->
         "print('ok')\n",
     )
     assert output.strip() == "ok"
+
+
+
+def test_completed_identity_constraint_requires_one_review_turn(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "host._PROMPTED_CONSTRAINTS.clear()\n"
+        "constraint = {'kind':'scoped_local_identifier','identifier_key':'resourceID','identifier_value':'local-device','source_uniqueness':'unverified','identifier_only_correlation_safe':False,'required_correlation_components':['scoped_entity','resourceID'],'minimum_safe_correlation_key':['scoped_entity','resourceID'],'scoped_entities':['vendor.example/device-run-3083'],'sibling_entity_count_observed':5}\n"
+        "tool_payload = {'status':'ok','data':{'evidence_source':{'path':'/tmp/inputs/runtime.log'},'correlation_constraints':[constraint]},'missing_evidence':[{'kind':'scope_uniqueness_unverified','actionable':False}]}\n"
+        "messages = [{'role':'user','content':'Why did the update target the wrong object?'},{'role':'assistant','content':'','tool_calls':[{'id':'1'}]},{'role':'tool','content':json.dumps(tool_payload)}]\n"
+        "request, event = host._apply_constraint_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
+        "assert event is not None and event['event'] == 'require_correlation_constraint_review'\n"
+        "prompt = request['messages'][-1]['content']\n"
+        "assert 'TRACECITE_CONSTRAINT_REQUIRED' in prompt\n"
+        "assert 'minimum safe correlation key is [scoped_entity, resourceID]' in prompt\n"
+        "assert 'does NOT identify a root cause' in prompt\n"
+        "second, second_event = host._apply_constraint_policy({'messages':messages,'tools':[{'type':'function'}],'tool_choice':'auto'})\n"
+        "assert second_event is None\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"
+
+
+def test_constraint_review_waits_until_runtime_action_is_closed(tmp_path: Path) -> None:
+    output = _run_host_script(
+        tmp_path,
+        "host._PROMPTED_CONSTRAINTS.clear()\n"
+        "constraint = {'kind':'scoped_local_identifier','identifier_key':'resourceID','identifier_value':'local-device','source_uniqueness':'unverified','identifier_only_correlation_safe':False,'required_correlation_components':['scoped_entity','resourceID'],'sibling_entity_count_observed':5}\n"
+        "tool_payload = {'status':'ok','data':{'actionable_retrieval':{'operation':'search','source':'runtime.log','query':'local-device'},'correlation_constraints':[constraint]}}\n"
+        "assert host._integrity_constraint_from_tool_output(json.dumps(tool_payload)) is None\n"
+        "print('ok')\n",
+    )
+    assert output.strip() == "ok"

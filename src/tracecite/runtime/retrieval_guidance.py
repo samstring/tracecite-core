@@ -69,6 +69,9 @@ def _scoped_identity_contract(item: Mapping[str, Any]) -> dict[str, Any] | None:
         "source_uniqueness": "disproved" if entity_count >= 2 else "unverified",
         "identifier_only_correlation_safe": False,
         "required_correlation_components": ["scoped_entity", identifier_key],
+        "unsafe_correlation_key": [identifier_key],
+        "minimum_safe_correlation_key": ["scoped_entity", identifier_key],
+        "scope_fanout_observed": sibling_count > 1,
         "negative_evidence_note": (
             "A source-wide absence of a second explicit identifier association does not prove "
             "that the identifier is globally unique. Preserve the scoped entity together with "

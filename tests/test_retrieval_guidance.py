@@ -140,6 +140,9 @@ def test_scoped_local_identifier_contract_never_promotes_negative_evidence_to_un
     assert contract["source_uniqueness"] == "unverified"
     assert contract["identifier_only_correlation_safe"] is False
     assert contract["required_correlation_components"] == ["scoped_entity", "resourceID"]
+    assert contract["unsafe_correlation_key"] == ["resourceID"]
+    assert contract["minimum_safe_correlation_key"] == ["scoped_entity", "resourceID"]
+    assert contract["scope_fanout_observed"] is True
     assert "does not prove" in contract["negative_evidence_note"]
 
 
