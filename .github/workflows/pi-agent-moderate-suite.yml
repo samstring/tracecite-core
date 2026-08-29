@@ -2,16 +2,6 @@ name: Pi Agent Moderate Suite
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - experiment/evidence-intelligence
-    paths:
-      - benchmarks/agent-investigation/moderate-suite.json
-      - benchmarks/agent-investigation/pi_tracecite_extension.ts
-      - benchmarks/agent-investigation/pi_tracecite_bridge.py
-      - benchmarks/agent-investigation/pi_ab_runtime.py
-      - benchmarks/agent-investigation/scale-cases/kubernetes-139417/**
-      - .github/workflows/pi-agent-moderate-suite.yml
 
 permissions:
   contents: read
@@ -169,12 +159,12 @@ jobs:
           set -e
           echo "$code" > "$RESULT/pi-native-exit.txt"
 
-      - name: Run Pi with actual TraceCite use
+      - name: Run Pi with TraceCite available
         shell: bash
         run: |
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
-          SYSTEM_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, investigation order, and the final conclusion. Native tools and TraceCite evidence tools are available. During this investigation, actually use tracecite_search at least once and tracecite_expand at least once; you choose the queries, anchor lines, and all other tools yourself. TraceCite provides evidence, coverage, and literal relationships only; it does not decide root cause. Treat TraceCite progress.stop.recommended or explicit no-new-evidence guidance as a stop signal for that evidence scope; do not broaden merely to discover a deeper cause. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly say when the supplied evidence is insufficient for a deeper claim.'
+          SYSTEM_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, investigation order, and the final conclusion. Native tools and TraceCite evidence tools are available, but you decide whether they are useful and whether to call them at all. TraceCite provides evidence, provenance, bounded context, and session-scoped novelty facts only; it does not decide root cause or when you should stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly say when the supplied evidence is insufficient for a deeper claim.'
           mkdir -p "$RESULT/pi-tracecite-session"
           cd "$INPUT_ROOT"
           set +e
@@ -191,7 +181,7 @@ jobs:
           set -e
           echo "$code" > "$RESULT/pi-tracecite-exit.txt"
 
-      - name: Convert, validate actual use, and score
+      - name: Convert and score
         if: always()
         shell: bash
         run: |
@@ -282,20 +272,16 @@ jobs:
 
           native = arm('native')
           trace = arm('tracecite')
-          trace_used = (
-              trace['tool_names'].get('tracecite_search', 0) >= 1 and
-              trace['tool_names'].get('tracecite_expand', 0) >= 1
-          )
           comparison_valid = native['valid_for_comparison'] and trace['valid_for_comparison']
           comparison = {
-              'schema_version': 2,
+              'schema_version': 3,
               'suite_id': 'agent-evidence-moderate-v1',
               'case_id': os.environ['CASE_ID'],
               'tier': next((c['tier'] for c in json.loads(Path('benchmarks/agent-investigation/moderate-suite.json').read_text())['cases'] if c['id'] == os.environ['CASE_ID']), None),
               'scorer': scorer,
               'primary_correctness_eligible': primary,
               'comparison_valid': comparison_valid,
-              'tracecite_actual_use_valid': trace_used,
+              'tracecite_use_optional': True,
               'native': native,
               'tracecite': trace,
           }
@@ -308,8 +294,6 @@ jobs:
                   if not row['valid_for_comparison']
               ]
               raise SystemExit('Infrastructure-invalid Pi A/B comparison: ' + ', '.join(failures))
-          if not trace_used:
-              raise SystemExit('TraceCite arm is invalid: tracecite_search and tracecite_expand were not both used')
           PY
 
       - name: Upload case comparison artifact
