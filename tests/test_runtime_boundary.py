@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import tracecite.runtime as runtime
+
 
 ROOT = Path(__file__).parents[1]
 
@@ -34,3 +36,10 @@ def test_unpublished_agent_compatibility_package_is_absent() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "tracecite-agent =" not in pyproject
     assert not (ROOT / "src" / "tracecite_agent").exists()
+
+
+def test_unused_requirement_primitive_is_not_advertised_as_runtime_api() -> None:
+    assert "EvidenceRequirement" not in runtime.__all__
+    assert "RequirementStatus" not in runtime.__all__
+    assert not hasattr(runtime, "EvidenceRequirement")
+    assert not hasattr(runtime, "RequirementStatus")
