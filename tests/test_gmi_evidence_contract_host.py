@@ -64,10 +64,15 @@ def test_linked_test_can_be_assessed_and_closed(tmp_path: Path) -> None:
         "ref = match.group(0)\n"
         "assessment = json.loads(runtime.call('tracecite_assess_test', {'test_id':'T1','outcome':'supported','evidence_refs':[ref]}))\n"
         "assert assessment['outcome'] == 'supported'\n"
+        "assert assessment['assessment_source'] == 'agent'\n"
+        "assert assessment['semantic_claim_verified'] is False\n"
         "finding = json.loads(runtime.call('tracecite_finding', {'hypothesis_id':'H1','outcome':'supported','summary':'checksum failure observed','supporting_evidence':[ref],'contradicting_evidence':[],'limitations':[]}))\n"
         "assert finding['outcome'] == 'supported'\n"
         "state = json.loads(runtime.call('tracecite_state', {}))\n"
-        "assert state['tests'][0]['assessment'] == 'supported'\n"
+        "assessment_state = state['tests'][0]['assessment']\n"
+        "assert assessment_state['outcome'] == 'supported'\n"
+        "assert assessment_state['assessment_source'] == 'agent'\n"
+        "assert assessment_state['semantic_verified'] is False\n"
         "assert state['findings'][0]['outcome'] == 'supported'\n"
         "print('ok')\n",
     )
@@ -160,6 +165,8 @@ def test_free_exploration_evidence_can_be_confirmed_without_retrieval_retry(tmp_
         "assert confirmed['origin_execution_ids']\n"
         "assessment = json.loads(runtime.call('tracecite_assess_test', {'test_id':'T1','outcome':'supported','evidence_refs':[ref]}))\n"
         "assert assessment['outcome'] == 'supported'\n"
+        "assert assessment['assessment_source'] == 'agent'\n"
+        "assert assessment['semantic_claim_verified'] is False\n"
         "finding = json.loads(runtime.call('tracecite_finding', {'hypothesis_id':'H1','outcome':'supported','summary':'checksum failure observed','supporting_evidence':[ref],'contradicting_evidence':[],'limitations':[]}))\n"
         "assert finding['outcome'] == 'supported'\n"
         "print('ok')\n",
@@ -187,7 +194,7 @@ def test_transport_requires_tools_until_finding_exists(tmp_path: Path) -> None:
     assert output.strip() == "ok"
 
 
-def test_unknown_finding_caps_final_prose_answer(tmp_path: Path) -> None:
+def test_unknown_finding_does_not_rewrite_final_prose_answer(tmp_path: Path) -> None:
     _setup(tmp_path)
     output = _run_host_script(
         tmp_path,
@@ -200,8 +207,7 @@ def test_unknown_finding_caps_final_prose_answer(tmp_path: Path) -> None:
         "host._ORIGINAL_TRANSPORT = lambda payload: {'choices':[{'message':{'role':'assistant','content':'The root cause is definitely X.'},'finish_reason':'stop'}]}\n"
         "response = host._required_tool_transport({'messages':[],'tools':[{'name':'tracecite_state'}],'tool_choice':'auto'})\n"
         "content = response['choices'][0]['message']['content']\n"
-        "assert 'Investigation result: unknown' in content\n"
-        "assert 'definitely X' not in content\n"
+        "assert content == 'The root cause is definitely X.'\n"
         "assert response['choices'][0]['finish_reason'] == 'stop'\n"
         "print('ok')\n",
     )
