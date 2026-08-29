@@ -70,3 +70,167 @@ def test_guidance_never_invents_action_for_non_actionable_or_actionless_gap() ->
     assert guided is original
     assert "actionable_retrieval" not in original.canonical_result["data"]
     assert original.canonical_result["next_queries"] == ["existing"]
+
+
+def test_scoped_local_identifier_contract_never_promotes_negative_evidence_to_uniqueness() -> None:
+    canonical = {
+        "operation": "search",
+        "status": "ok",
+        "data": {
+            "query": "local-device",
+            "evidence_integrity": {
+                "scoped_identity": [
+                    {
+                        "source": "evidence.log",
+                        "identity_verification": [
+                            {
+                                "kind": "scoped_identifier_verification",
+                                "identifier_key": "resourceID",
+                                "identifier_value": "local-device",
+                                "status": "uniqueness_unverified_with_sibling_scope_fanout",
+                                "source": "evidence.log",
+                                "entity_count_observed": 1,
+                                "entities": [
+                                    {"entity": "vendor.example/device-a", "scope": "vendor.example/"}
+                                ],
+                                "sibling_entity_count_observed": 4,
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+        "missing_evidence": [
+            {
+                "kind": "scope_uniqueness_unverified",
+                "actionable": True,
+                "source": "evidence.log",
+                "identifier_key": "resourceID",
+                "identifier_value": "local-device",
+                "recommended_action": {
+                    "operation": "search",
+                    "query": "local-device",
+                    "purpose": "verify_identifier_uniqueness_across_scopes",
+                },
+            }
+        ],
+        "next_queries": ["local-device", "generic"],
+    }
+
+    guided = prioritize_actionable_retrieval(_result(canonical))
+    data = guided.canonical_result["data"]
+    contract = data["correlation_constraints"][0]
+    assert contract["kind"] == "scoped_local_identifier"
+    assert contract["source_uniqueness"] == "unverified"
+    assert contract["identifier_only_correlation_safe"] is False
+    assert contract["required_correlation_components"] == ["scoped_entity", "resourceID"]
+    assert "does not prove" in contract["negative_evidence_note"]
+
+    verification = data["evidence_integrity"]["scoped_identity"][0]["identity_verification"][0]
+    assert verification["identity_contract"] == contract
+
+
+def test_identifier_search_advances_to_observed_scoped_entity_instead_of_repeating() -> None:
+    canonical = {
+        "operation": "search",
+        "status": "ok",
+        "data": {
+            "query": "local-device",
+            "evidence_integrity": {
+                "scoped_identity": [
+                    {
+                        "source": "evidence.log",
+                        "identity_verification": [
+                            {
+                                "kind": "scoped_identifier_verification",
+                                "identifier_key": "resourceID",
+                                "identifier_value": "local-device",
+                                "status": "uniqueness_unverified_with_sibling_scope_fanout",
+                                "source": "evidence.log",
+                                "entity_count_observed": 1,
+                                "entities": [
+                                    {"entity": "vendor.example/device-a", "scope": "vendor.example/"}
+                                ],
+                                "sibling_entity_count_observed": 5,
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+        "missing_evidence": [
+            {
+                "kind": "scope_uniqueness_unverified",
+                "actionable": True,
+                "source": "evidence.log",
+                "identifier_key": "resourceID",
+                "identifier_value": "local-device",
+                "recommended_action": {
+                    "operation": "search",
+                    "query": "local-device",
+                    "purpose": "verify_identifier_uniqueness_across_scopes",
+                },
+            }
+        ],
+        "next_queries": ["local-device", "generic"],
+    }
+
+    guided = prioritize_actionable_retrieval(_result(canonical))
+    action = guided.canonical_result["data"]["actionable_retrieval"]
+    assert action["query"] == "vendor.example/device-a"
+    assert action["purpose"] == "trace_scoped_entity_references"
+    assert guided.canonical_result["next_queries"][0] == "vendor.example/device-a"
+    assert guided.canonical_result["missing_evidence"][0]["correlation_constraint"][
+        "identifier_only_correlation_safe"
+    ] is False
+
+
+def test_direct_multi_entity_observation_closes_uniqueness_gap_without_causal_claim() -> None:
+    canonical = {
+        "operation": "search",
+        "status": "ok",
+        "data": {
+            "query": "local-device",
+            "evidence_integrity": {
+                "scoped_identity": [
+                    {
+                        "source": "evidence.log",
+                        "identity_verification": [
+                            {
+                                "kind": "scoped_identifier_verification",
+                                "identifier_key": "resourceID",
+                                "identifier_value": "local-device",
+                                "status": "multiple_scoped_entities_observed",
+                                "source": "evidence.log",
+                                "entity_count_observed": 2,
+                                "entities": [
+                                    {"entity": "vendor.example/device-a"},
+                                    {"entity": "vendor.example/device-b"},
+                                ],
+                                "sibling_entity_count_observed": 2,
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+        "missing_evidence": [
+            {
+                "kind": "scope_uniqueness_unverified",
+                "actionable": True,
+                "source": "evidence.log",
+                "identifier_key": "resourceID",
+                "identifier_value": "local-device",
+                "recommended_action": {"operation": "search", "query": "local-device"},
+            }
+        ],
+        "next_queries": ["local-device"],
+    }
+
+    guided = prioritize_actionable_retrieval(_result(canonical))
+    assert guided.canonical_result["missing_evidence"][0]["actionable"] is False
+    assert "actionable_retrieval" not in guided.canonical_result["data"]
+    contract = guided.canonical_result["data"]["correlation_constraints"][0]
+    assert contract["source_uniqueness"] == "disproved"
+    assert contract["identifier_only_correlation_safe"] is False
+    assert "root cause" in guided.canonical_result["data"]["correlation_constraints_note"]
