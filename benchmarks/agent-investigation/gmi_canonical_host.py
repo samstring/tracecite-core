@@ -34,6 +34,7 @@ _MAX_GET_RADIUS = 8
 _REQUEST_INDEX = 0
 _DEFAULT_MAX_ROUNDS = 12
 _DEFAULT_NO_GROWTH_ROUNDS = 2
+_ACTION_PROMPT_MARKER = "TRACECITE_ACTION_REQUIRED"
 _FINAL_ONLY_PROMPT = (
     "Evidence acquisition has stopped because the configured mechanical exploration limit was reached. "
     "Do not call more tools. Produce the best supported final root-cause answer from evidence already visible, "
@@ -136,6 +137,141 @@ def _tool_output_no_growth(output: Any) -> bool:
     }
 
 
+def _action_from_tool_output(output: Any) -> dict[str, Any] | None:
+    payload = _tool_output_payload(output)
+    if payload is None:
+        return None
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return None
+    raw = data.get("actionable_retrieval")
+    if not isinstance(raw, Mapping):
+        return None
+    operation = str(raw.get("operation") or "").strip()
+    source = str(raw.get("source") or "").strip()
+    query = str(raw.get("query") or "").strip()
+    if operation != "search" or not source or not query:
+        return None
+    return {
+        "operation": operation,
+        "source": source,
+        "query": query,
+        "purpose": str(raw.get("purpose") or "").strip(),
+        "gap_kind": str(raw.get("gap_kind") or "").strip(),
+    }
+
+
+def _tool_call_signature(call: Mapping[str, Any]) -> tuple[str, str, str] | None:
+    function = call.get("function") or {}
+    if not isinstance(function, Mapping):
+        return None
+    name = str(function.get("name") or "").strip()
+    raw_arguments = function.get("arguments") or "{}"
+    if isinstance(raw_arguments, Mapping):
+        arguments = raw_arguments
+    else:
+        try:
+            arguments = json.loads(str(raw_arguments))
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(arguments, Mapping):
+        return None
+    if name != "tracecite_search":
+        return None
+    source = str(arguments.get("file") or "").strip()
+    query = str(arguments.get("query") or "").strip()
+    if not source or not query:
+        return None
+    return ("search", source, query)
+
+
+def _action_signature(action: Mapping[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(action.get("operation") or "").strip(),
+        str(action.get("source") or "").strip(),
+        str(action.get("query") or "").strip(),
+    )
+
+
+def _pending_action(messages: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """Return the newest Runtime action that has not yet been attempted once.
+
+    An action is considered mechanically attempted when a later/equal canonical
+    tool call uses the same operation, source and query. If that retrieval still
+    leaves a semantic question open, the Agent may reason about it, but the host
+    must not blindly repeat the same mechanical action forever.
+    """
+
+    attempted: set[tuple[str, str, str]] = set()
+    pending: dict[str, Any] | None = None
+    for message in messages:
+        role = str(message.get("role") or "")
+        if role == "assistant":
+            for raw_call in message.get("tool_calls") or []:
+                if not isinstance(raw_call, Mapping):
+                    continue
+                signature = _tool_call_signature(raw_call)
+                if signature is not None:
+                    attempted.add(signature)
+                    if pending is not None and signature == _action_signature(pending):
+                        pending = None
+            continue
+        if role != "tool":
+            continue
+        action = _action_from_tool_output(message.get("content") or "")
+        if action is None:
+            continue
+        if _action_signature(action) not in attempted:
+            pending = action
+    return pending
+
+
+def _action_prompt(action: Mapping[str, Any]) -> str:
+    signature = "|".join(_action_signature(action))
+    purpose = str(action.get("purpose") or "mechanical_evidence_gap_closure").strip()
+    return (
+        f"{_ACTION_PROMPT_MARKER} {signature}\n"
+        "The canonical Runtime reports an unresolved actionable evidence gap. Before concluding or exploring "
+        "unrelated queries, execute this mechanical gap-closing retrieval once: "
+        f"tracecite_search(file={action['source']!r}, query={action['query']!r}, regex=false). "
+        f"Purpose: {purpose}. This is evidence-integrity verification only; it is not a causal or root-cause recommendation."
+    )
+
+
+def _apply_action_policy(payload: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    request = dict(payload)
+    raw_messages = payload.get("messages") or []
+    if not isinstance(raw_messages, list) or not payload.get("tools"):
+        return request, None
+    messages = [dict(item) for item in raw_messages if isinstance(item, Mapping)]
+    if len(messages) != len(raw_messages):
+        return request, None
+    action = _pending_action(messages)
+    if action is None:
+        return request, None
+
+    signature = "|".join(_action_signature(action))
+    marker = f"{_ACTION_PROMPT_MARKER} {signature}"
+    already_prompted = any(
+        str(item.get("role") or "") == "user" and marker in str(item.get("content") or "")
+        for item in messages
+    )
+    if already_prompted:
+        return request, None
+
+    messages.append({"role": "user", "content": _action_prompt(action)})
+    request["messages"] = messages
+    return request, {
+        "type": "protocol",
+        "event": "prioritize_actionable_retrieval",
+        "operation": action["operation"],
+        "source": action["source"],
+        "query": action["query"],
+        "purpose": action.get("purpose") or "",
+        "gap_kind": action.get("gap_kind") or "",
+    }
+
+
 def _trailing_no_growth_rounds(messages: Sequence[Mapping[str, Any]]) -> int:
     index = len(messages) - 1
     rounds = 0
@@ -202,9 +338,18 @@ def _apply_stop_policy(payload: Mapping[str, Any]) -> tuple[dict[str, Any], dict
 
 def _post_chat_measured(payload: Mapping[str, Any]) -> dict[str, Any]:
     transcript_value = os.environ.get("TRACECITE_BENCH_TRANSCRIPT", "").strip()
-    request_payload, stop_event = _apply_stop_policy(payload)
+    request_payload, action_event = _apply_action_policy(payload)
+    if action_event is None:
+        request_payload, stop_event = _apply_stop_policy(request_payload)
+    else:
+        # Give a newly surfaced Runtime-owned mechanical action one model turn
+        # before applying the exploration safety cap. If the model ignores the
+        # one-time prompt, the normal cap applies on the following request.
+        stop_event = None
     if transcript_value:
         transcript = Path(transcript_value)
+        if action_event is not None:
+            common._append_event(transcript, action_event)
         if stop_event is not None:
             common._append_event(transcript, stop_event)
         common._append_event(transcript, _request_context_event(request_payload))
@@ -349,7 +494,8 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
             "tracecite_search",
             (
                 "Search one source for a genuinely new semantic hypothesis through the canonical Runtime. "
-                "Searches that return only previously seen Evidence produce NO_NEW_EVIDENCE."
+                "Searches that return only previously seen Evidence produce NO_NEW_EVIDENCE. If canonical output reports "
+                "data.actionable_retrieval, execute that mechanical gap-closing action before unrelated exploration or conclusion."
             ),
             {
                 "file": file_property,
@@ -362,7 +508,8 @@ def _tools_for_mode(mode: str, files: Sequence[Path]) -> list[dict[str, Any]]:
             "tracecite_get",
             (
                 "Recover exact line-addressable context around a known line through the canonical Runtime. radius is bounded to 0-8; "
-                "slight model overshoot is normalized to 8 instead of wasting a model turn."
+                "slight model overshoot is normalized to 8 instead of wasting a model turn. If canonical output reports "
+                "data.actionable_retrieval, execute that mechanical gap-closing action before unrelated exploration or conclusion."
             ),
             {
                 "file": file_property,
