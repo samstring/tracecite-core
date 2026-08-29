@@ -1,8 +1,8 @@
 """Evidence-only public projection for canonical retrieval results.
 
 TraceCite may internally compute routing or integrity state, but the public
-retrieval contract must describe evidence, provenance, coverage, and uncertainty
-without planning the Agent's next move.
+retrieval contract must describe evidence, provenance, coverage, uncertainty,
+and bounded evidence candidates without planning the Agent's next move.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ _PLANNER_DATA_KEYS = frozenset(
         "relationship_action",
         "relationship_frontier",
         "relationship_frontier_note",
-        "signal_hints",
     }
 )
 _PLANNER_GAP_KEYS = frozenset(
@@ -33,7 +32,13 @@ _PLANNER_GAP_KEYS = frozenset(
 
 
 def evidence_only(result: RetrievalResult) -> RetrievalResult:
-    """Strip planner/navigation instructions while preserving evidence facts."""
+    """Strip planner/navigation instructions while preserving evidence facts.
+
+    ``signal_hints`` are deliberately retained. They are bounded line-addressable
+    candidates already observed by the retrieval layer when an evidence result
+    is truncated; they are not a recommended operation or investigation plan,
+    and callers must still materialize the referenced line before citing it.
+    """
 
     if not isinstance(result, RetrievalResult):
         raise TypeError("evidence_only requires RetrievalResult")
