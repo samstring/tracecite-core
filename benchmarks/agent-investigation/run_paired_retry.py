@@ -21,6 +21,7 @@ DEFAULT_PASS_ENV = (
     "TRACECITE_BENCH_MAX_ROUNDS",
     "TRACECITE_BENCH_NO_GROWTH_ROUNDS",
 )
+DEFAULT_HOST_SCRIPT = Path("benchmarks/agent-investigation/gmi_canonical_host.py")
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -64,6 +65,15 @@ def _attempted_context(transcript: Path) -> tuple[int, int]:
         if isinstance(value, int) and value >= 0:
             values.append(value)
     return sum(values), max(values, default=0)
+
+
+def _resolve_host_script(repo_root: Path, requested: Path | None) -> Path:
+    candidate = DEFAULT_HOST_SCRIPT if requested is None else requested
+    resolved = candidate if candidate.is_absolute() else repo_root / candidate
+    resolved = resolved.resolve()
+    if not resolved.is_file():
+        raise ValueError(f"benchmark host script not found: {resolved}")
+    return resolved
 
 
 def _run_until_provider_available(
@@ -213,14 +223,26 @@ def main() -> int:
     parser.add_argument("--result-dir", type=Path, required=True)
     parser.add_argument("--retry-delay-seconds", type=int, default=120)
     parser.add_argument("--timeout-seconds", type=int, default=900)
+    parser.add_argument(
+        "--host-script",
+        type=Path,
+        default=None,
+        help=(
+            "Host script relative to the repository root or an absolute path. "
+            "Defaults to the canonical benchmark host."
+        ),
+    )
     args = parser.parse_args()
 
     if args.retry_delay_seconds < 1:
         parser.error("--retry-delay-seconds must be at least 1")
 
     repo_root = Path(__file__).resolve().parents[2]
-    canonical_host = repo_root / "benchmarks" / "agent-investigation" / "gmi_canonical_host.py"
-    host_command = [sys.executable, str(canonical_host)]
+    try:
+        host_script = _resolve_host_script(repo_root, args.host_script)
+    except ValueError as exc:
+        parser.error(str(exc))
+    host_command = [sys.executable, str(host_script)]
     args.result_dir.mkdir(parents=True, exist_ok=True)
 
     outcomes: list[dict[str, Any]] = []
