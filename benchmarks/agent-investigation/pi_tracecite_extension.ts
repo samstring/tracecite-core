@@ -38,8 +38,66 @@ async function runBridge(args: string[], cwd: string, signal?: AbortSignal): Pro
   }
 }
 
+function shorten(value: any, max = 420): string | undefined {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return undefined;
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(1, max - 1))}…`;
+}
+
+function compactEvidence(value: any) {
+  if (!value || typeof value !== "object") return value;
+  const start = Number(value.start_line || 0);
+  const end = Number(value.end_line || start || 0);
+  const source = String(value.source_path || "").split(/[\\/]/).pop() || "evidence";
+  const ref = start > 0
+    ? `${source}:L${start}${end > start ? `-L${end}` : ""}`
+    : undefined;
+  return {
+    ref,
+    preview: shorten(value.label),
+  };
+}
+
+function compactCoverage(value: any) {
+  if (!value || typeof value !== "object") return undefined;
+  const out: any = {};
+  for (const key of [
+    "context_start_line",
+    "context_end_line",
+    "match_lines",
+    "evidence_returned",
+    "evidence_truncated",
+    "truncated",
+    "new_evidence",
+    "repeated_evidence",
+  ]) {
+    if (value[key] !== undefined && value[key] !== null) out[key] = value[key];
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function compactProgress(value: any) {
+  if (!value || typeof value !== "object") return undefined;
+  const delta = value.delta && typeof value.delta === "object" ? value.delta : undefined;
+  const out: any = {
+    delta: delta ? {
+      new_evidence: delta.new_evidence,
+      new_relations: delta.new_relations,
+      new_lines: delta.new_lines,
+    } : undefined,
+    seen_evidence: value.seen_evidence,
+    seen_lines: value.seen_lines,
+  };
+  if (value.stop?.recommended) out.stop = value.stop;
+  return out;
+}
+
 function compactConstraint(value: any) {
   if (!value || typeof value !== "object") return value;
+  const scopes = Array.isArray(value.scoped_entities)
+    ? value.scoped_entities.slice(0, 12)
+    : [];
   return {
     kind: value.kind,
     identifier_key: value.identifier_key,
@@ -47,7 +105,13 @@ function compactConstraint(value: any) {
     identifier_only_correlation_safe: value.identifier_only_correlation_safe,
     minimum_safe_correlation_key: value.minimum_safe_correlation_key,
     sibling_entity_count_observed: value.sibling_entity_count_observed,
+    scope_fanout_observed: value.scope_fanout_observed,
     source_uniqueness: value.source_uniqueness,
+    scoped_entities: scopes.length ? scopes : undefined,
+    scoped_entities_truncated:
+      Array.isArray(value.scoped_entities) && value.scoped_entities.length > scopes.length
+        ? value.scoped_entities.length - scopes.length
+        : undefined,
   };
 }
 
@@ -55,10 +119,19 @@ function compactGap(value: any) {
   if (!value || typeof value !== "object") return value;
   return {
     kind: value.kind,
-    detail: value.detail,
-    source: value.source,
+    detail: shorten(value.detail, 260),
     identifier_key: value.identifier_key,
     identifier_value: value.identifier_value,
+  };
+}
+
+function compactRelation(value: any) {
+  if (!value || typeof value !== "object") return value;
+  return {
+    relation: value.relation,
+    subject: value.subject,
+    object: value.object,
+    visible_lines: value.visible_lines,
   };
 }
 
@@ -73,6 +146,7 @@ function projectForPi(text: string): string {
 
   const operation = String(payload.operation || "");
   const data = payload.data && typeof payload.data === "object" ? payload.data : {};
+  const status = String(payload.status || "");
 
   if (operation === "search") {
     const constraints = Array.isArray(data.correlation_constraints)
@@ -81,19 +155,18 @@ function projectForPi(text: string): string {
     const gaps = Array.isArray(payload.missing_evidence)
       ? payload.missing_evidence.map(compactGap)
       : [];
+    const evidence = Array.isArray(payload.evidence)
+      ? payload.evidence.map(compactEvidence)
+      : [];
 
     return JSON.stringify({
-      operation: payload.operation,
-      status: payload.status,
-      outcome: payload.outcome,
-      evidence: payload.evidence,
-      coverage: payload.coverage,
-      progress: data.progress,
-      stop_reason: data.stop_reason,
-      evidence_source: data.evidence_source,
+      status,
+      evidence,
+      coverage: compactCoverage(payload.coverage),
+      progress: compactProgress(data.progress),
       correlation_constraints: constraints.length ? constraints : undefined,
       missing_evidence: gaps.length ? gaps : undefined,
-      routing: data.routing,
+      stop_reason: status !== "ok" ? data.stop_reason : undefined,
     });
   }
 
@@ -101,17 +174,24 @@ function projectForPi(text: string): string {
     const observedReferences = Array.isArray(data.observed_references)
       ? data.observed_references.slice(0, 6)
       : [];
+    const observedRelations = Array.isArray(data.observed_relations)
+      ? data.observed_relations.slice(0, 8).map(compactRelation)
+      : [];
+    const evidence = Array.isArray(payload.evidence)
+      ? payload.evidence.map(compactEvidence)
+      : [];
     return JSON.stringify({
-      operation: payload.operation,
-      status: payload.status,
-      outcome: payload.outcome,
-      evidence: payload.evidence,
-      coverage: payload.coverage,
-      progress: data.progress,
-      stop_reason: data.stop_reason,
+      status,
+      evidence,
+      coverage: compactCoverage(payload.coverage),
+      progress: compactProgress(data.progress),
       text: data.text,
       observed_references: observedReferences.length ? observedReferences : undefined,
-      observed_references_note: observedReferences.length ? data.observed_references_note : undefined,
+      observed_relations: observedRelations.length ? observedRelations : undefined,
+      evidence_semantics: observedRelations.length
+        ? "observed_relations describe literal textual structure only; Agent owns identity and causal interpretation"
+        : undefined,
+      stop_reason: status !== "ok" ? data.stop_reason : undefined,
     });
   }
 
@@ -123,13 +203,13 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_search",
     label: "TraceCite Search",
     description:
-      "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns bounded line-addressable evidence, provenance/coverage state, novelty, and mechanical identity/correlation facts. It does not plan the investigation or decide root cause.",
+      "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns compact line-addressable evidence plus provenance/coverage and mechanical identity-safety facts. It does not plan the investigation or decide root cause.",
     promptSnippet:
-      "tracecite_search returns evidence and evidence-state facts; you remain responsible for hypotheses, tool choice, investigation order, and conclusions.",
+      "tracecite_search returns compact evidence and evidence-state facts; you remain responsible for hypotheses, tool choice, investigation order, and conclusions.",
     promptGuidelines: [
       "Treat a search hit as an observation, not support for a causal hypothesis by itself.",
-      "Treat correlation constraints as identity-safety facts, not root-cause claims or instructions.",
-      "Use materialized line context when making exact citations from compact evidence pointers.",
+      "Treat correlation constraints and scoped entities as identity-safety facts, not root-cause claims or instructions.",
+      "Use tracecite_expand or native read before making exact claims from a compact search preview.",
     ],
     parameters: Type.Object({
       file: Type.String({ description: "Path to the local source file, relative to the current working directory or absolute." }),
@@ -150,6 +230,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
           canonical_retrieve: true,
           independent_retrieval_session: true,
           evidence_only: true,
+          compact_agent_view: true,
         },
       };
     },
@@ -159,11 +240,12 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_expand",
     label: "TraceCite Expand",
     description:
-      "Materialize bounded source context through TraceCite's canonical retrieval contract around a line chosen by the Agent. Returns exact text, provenance/coverage state, and reference-like fields literally observed in that text; it does not recommend another action.",
+      "Materialize bounded exact source context around a line chosen by the Agent. Returns exact text plus literal reference and structural-relation facts; it does not recommend another action.",
     promptSnippet:
-      "tracecite_expand materializes exact evidence context; observed references are facts from that context, not investigation instructions.",
+      "tracecite_expand materializes exact evidence context; observed references and structural relations are evidence facts, not investigation instructions.",
     promptGuidelines: [
-      "Treat observed_references as literal fields found in the materialized evidence only; they do not establish identity, importance, or causality.",
+      "Treat observed_references as literal fields found in the materialized evidence only.",
+      "Treat observed_relations as textual co-observation or structured-block membership only; they do not establish identity, importance, or causality.",
     ],
     parameters: Type.Object({
       file: Type.String({ description: "Path to the same local source file." }),
@@ -172,7 +254,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
       sha256: Type.Optional(Type.String({ description: "Optional expected source SHA-256 from prior evidence." })),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const args = ["expand", params.file, String(params.line), "--radius", String(params.radius ?? 8), "--max-chars", "16000"];
+      const args = ["expand", params.file, String(params.line), "--radius", String(params.radius ?? 8), "--max-chars", "12000"];
       if (params.sha256) args.push("--sha256", params.sha256);
       const text = projectForPi(await runBridge(args, ctx.cwd, signal));
       return {
@@ -185,6 +267,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
           canonical_retrieve: true,
           independent_retrieval_session: true,
           evidence_only: true,
+          compact_agent_view: true,
         },
       };
     },
