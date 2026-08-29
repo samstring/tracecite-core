@@ -12,9 +12,9 @@ permissions:
   contents: read
 
 jobs:
-  kubernetes-140268:
+  kubernetes-140268-used-vs-native:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
@@ -25,6 +25,9 @@ jobs:
       CASE_DIR: benchmarks/agent-investigation/scale-cases/kubernetes-140268
       RESULT: /tmp/pi-focused-kubernetes-140268
       PREP: /tmp/pi-focused-kubernetes-140268/prepared
+      COMMON_SYSTEM_PROMPT: >-
+        You are a real coding agent investigating one supplied CI log. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, investigation order, and the final conclusion. Keep exploration bounded. Every material factual claim in the final answer must cite exact line numbers you actually observed, preferably as build-log.txt:L123. Distinguish direct observation from inference. Finish with a concise answer containing only the requested conclusions and evidence, not an internal monologue.
+
     steps:
       - uses: actions/checkout@v4
 
@@ -57,11 +60,30 @@ jobs:
           import json
           import os
           from pathlib import Path
+
           target = Path(os.environ["PI_CODING_AGENT_DIR"]) / "models.json"
           model = os.environ["BENCH_MODEL"]
           if not model:
               raise SystemExit("BENCH_MODEL is empty")
-          payload = {"providers":{"gmi":{"name":"GMI OpenAI-compatible","baseUrl":os.environ["OPENAI_BASE_URL"],"api":"openai-completions","models":[{"id":model,"name":model,"reasoning":False,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":1_000_000,"maxTokens":4_096,"compat":{"supportsDeveloperRole":False,"supportsReasoningEffort":False}}]}}}
+          payload = {
+              "providers": {
+                  "gmi": {
+                      "name": "GMI OpenAI-compatible",
+                      "baseUrl": os.environ["OPENAI_BASE_URL"],
+                      "api": "openai-completions",
+                      "models": [{
+                          "id": model,
+                          "name": model,
+                          "reasoning": False,
+                          "input": ["text"],
+                          "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                          "contextWindow": 1_000_000,
+                          "maxTokens": 4_096,
+                          "compat": {"supportsDeveloperRole": False, "supportsReasoningEffort": False},
+                      }],
+                  }
+              }
+          }
           target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
           PY
 
@@ -79,6 +101,7 @@ jobs:
           import json
           import sys
           from pathlib import Path
+
           prepared = Path(sys.argv[1])
           payload = json.loads(prepared.read_text(encoding="utf-8"))
           inputs = payload.get("inputs") or []
@@ -89,15 +112,41 @@ jobs:
           print(f"QUESTION_FILE={Path(payload['question']).resolve()}")
           PY
 
-      - name: Run real Pi with TraceCite tools
+      - name: Run Pi without TraceCite
         shell: bash
         run: |
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
-          SYSTEM_PROMPT=$(cat <<'EOF'
-          You are a real coding agent investigating one supplied CI log. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, and the final conclusion. Native read, grep, find, ls, and bash tools are available. You also have first-class tracecite_search and tracecite_expand tools for deterministic bounded evidence retrieval. TraceCite is not a reasoner: its results are evidence/navigation with explicit coverage, not root-cause truth. Prefer tracecite_search when native grep would create broad/high-volume context, and tracecite_expand before relying on a decisive compact hit. Every material factual claim in the final answer must cite exact line numbers you actually observed. Distinguish direct observation from inference. Finish with a concise answer containing only the requested conclusions and evidence.
-          EOF
-          )
+          mkdir -p "$RESULT/pi-native-session"
+          cd "$INPUT_ROOT"
+          set +e
+          timeout 900s pi \
+            --provider gmi \
+            --model "$BENCH_MODEL" \
+            --api-key "$OPENAI_API_KEY" \
+            --thinking off \
+            --mode text \
+            --print \
+            --session-dir "$RESULT/pi-native-session" \
+            --tools read,bash,grep,find,ls \
+            --no-extensions \
+            --no-skills \
+            --no-prompt-templates \
+            --no-context-files \
+            --system-prompt "$COMMON_SYSTEM_PROMPT" \
+            "$QUESTION" \
+            > "$RESULT/pi-native-answer.md" 2> "$RESULT/pi-native-stderr.log"
+          code=$?
+          set -e
+          echo "$code" > "$RESULT/pi-native-exit.txt"
+          cat "$RESULT/pi-native-answer.md"
+
+      - name: Run Pi with actual TraceCite use
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          TRACECITE_SYSTEM_PROMPT="$COMMON_SYSTEM_PROMPT You have tracecite_search and tracecite_expand for deterministic bounded evidence retrieval. Before giving your final answer, actually use tracecite_search at least once and tracecite_expand at least once. TraceCite only supplies evidence; you still own all hypotheses, investigation choices, causal reasoning, and conclusions."
           mkdir -p "$RESULT/pi-tracecite-session"
           cd "$INPUT_ROOT"
           set +e
@@ -114,7 +163,7 @@ jobs:
             --no-skills \
             --no-prompt-templates \
             --no-context-files \
-            --system-prompt "$SYSTEM_PROMPT" \
+            --system-prompt "$TRACECITE_SYSTEM_PROMPT" \
             "$QUESTION" \
             > "$RESULT/pi-tracecite-answer.md" 2> "$RESULT/pi-tracecite-stderr.log"
           code=$?
@@ -122,27 +171,102 @@ jobs:
           echo "$code" > "$RESULT/pi-tracecite-exit.txt"
           cat "$RESULT/pi-tracecite-answer.md"
 
-      - name: Convert and score
+      - name: Convert, validate actual use, and score
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          SESSION="$(find "$RESULT/pi-tracecite-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
-          ANSWER="$RESULT/pi-tracecite-answer.md"
-          if [[ -n "$SESSION" && -f "$ANSWER" ]]; then
+          for arm in native tracecite; do
+            SESSION_DIR="$RESULT/pi-${arm}-session"
+            ANSWER="$RESULT/pi-${arm}-answer.md"
+            SESSION="$(find "$SESSION_DIR" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+            if [[ -z "$SESSION" || ! -f "$ANSWER" ]]; then
+              echo "missing session or answer for $arm" > "$RESULT/pi-${arm}-score-error.txt"
+              continue
+            fi
             python benchmarks/agent-investigation/pi_session_to_transcript.py \
-              "$SESSION" "$ANSWER" "$RESULT/pi-tracecite-transcript.jsonl" \
-              --mode pi-tracecite --model "$BENCH_MODEL"
+              "$SESSION" "$ANSWER" "$RESULT/pi-${arm}-transcript.jsonl" \
+              --mode "pi-${arm}" --model "$BENCH_MODEL"
             python -m tracecite.root_cause_benchmarking score \
-              "$CASE_DIR" "$RESULT/pi-tracecite-transcript.jsonl" \
-              > "$RESULT/pi-tracecite-score.json" || true
-            cat "$RESULT/pi-tracecite-score.json"
-          fi
+              "$CASE_DIR" "$RESULT/pi-${arm}-transcript.jsonl" \
+              > "$RESULT/pi-${arm}-score.json" || true
+          done
 
-      - name: Upload focused artifact
+          python - <<'PY'
+          import json
+          import os
+          from collections import Counter
+          from pathlib import Path
+
+          result = Path(os.environ["RESULT"])
+          summary = {"pi_version": "0.84.4", "model": os.environ.get("BENCH_MODEL"), "arms": {}}
+          for arm in ("native", "tracecite"):
+              row = {
+                  "exit_code": None,
+                  "valid": None,
+                  "invalid_reason": None,
+                  "passed": None,
+                  "dimension_recall": None,
+                  "supported_dimension_recall": None,
+                  "citation_accuracy": None,
+                  "model_calls": None,
+                  "tool_calls": None,
+                  "tool_names": {},
+                  "reported_input_tokens": None,
+                  "reported_cache_read_input_tokens": None,
+                  "reported_output_tokens": None,
+                  "tool_output_chars": None,
+              }
+              exit_path = result / f"pi-{arm}-exit.txt"
+              if exit_path.is_file():
+                  row["exit_code"] = int(exit_path.read_text().strip())
+              score_path = result / f"pi-{arm}-score.json"
+              if score_path.is_file():
+                  score = json.loads(score_path.read_text(encoding="utf-8"))
+                  row["passed"] = score.get("passed")
+                  quality = score.get("quality") or {}
+                  row["dimension_recall"] = quality.get("dimension_recall")
+                  row["supported_dimension_recall"] = quality.get("supported_dimension_recall")
+                  row["citation_accuracy"] = (quality.get("citation") or {}).get("accuracy")
+                  cost = score.get("context_cost") or {}
+                  for key in (
+                      "model_calls",
+                      "tool_calls",
+                      "reported_input_tokens",
+                      "reported_cache_read_input_tokens",
+                      "reported_output_tokens",
+                      "tool_output_chars",
+                  ):
+                      row[key] = cost.get(key)
+              transcript_path = result / f"pi-{arm}-transcript.jsonl"
+              names = Counter()
+              if transcript_path.is_file():
+                  for line in transcript_path.read_text(encoding="utf-8").splitlines():
+                      if not line.strip():
+                          continue
+                      event = json.loads(line)
+                      if event.get("type") == "tool":
+                          names[str(event.get("name") or "unknown")] += 1
+              row["tool_names"] = dict(sorted(names.items()))
+              if arm == "native":
+                  row["valid"] = row["exit_code"] == 0
+              else:
+                  used_search = names.get("tracecite_search", 0) > 0
+                  used_expand = names.get("tracecite_expand", 0) > 0
+                  row["valid"] = row["exit_code"] == 0 and used_search and used_expand
+                  if not used_search or not used_expand:
+                      row["invalid_reason"] = "TraceCite arm did not actually use both tracecite_search and tracecite_expand"
+                  elif row["exit_code"] != 0:
+                      row["invalid_reason"] = f"Pi exited with code {row['exit_code']}"
+              summary["arms"][arm] = row
+          (result / "pi-used-vs-native.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload focused comparison artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pi-focused-kubernetes-140268
+          name: pi-focused-kubernetes-140268-used-vs-native
           path: /tmp/pi-focused-kubernetes-140268
           if-no-files-found: warn
