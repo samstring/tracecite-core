@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from tracecite.runtime.investigation import InvestigationError, InvestigationStore
-from tracecite.runtime.test_assessment import assess_test, validate_test_assessment
+from tracecite.runtime.test_assessment import (
+    assess_test,
+    confirm_test_evidence,
+    validate_test_assessment,
+)
 
 
 DIGEST = "a" * 64
@@ -34,6 +38,7 @@ def _record(
     status: str = "ok",
     coverage: dict[str, object] | None = None,
     integrity_checked: bool = True,
+    linked: bool = True,
 ) -> None:
     store.record_execution(
         "search",
@@ -44,8 +49,8 @@ def _record(
             "coverage": {"complete": True} if coverage is None else coverage,
             "verification": {"integrity_checked": integrity_checked},
         },
-        hypothesis_id="H1",
-        test_id="T1",
+        hypothesis_id="H1" if linked else None,
+        test_id="T1" if linked else None,
     )
 
 
@@ -71,6 +76,61 @@ def test_assessment_evidence_must_come_from_same_test(tmp_path: Path) -> None:
 
     assert result.valid is False
     assert "assessment_evidence_not_from_test" in result.reasons
+
+
+def test_free_exploration_evidence_requires_explicit_confirmation(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _record(store, linked=False)
+
+    before = validate_test_assessment(
+        store,
+        "T1",
+        "supported",
+        evidence_refs=[EVIDENCE],
+    )
+    assert before.valid is False
+    assert "assessment_evidence_not_from_test" in before.reasons
+
+    confirmed = confirm_test_evidence(
+        store,
+        "T1",
+        evidence_refs=[EVIDENCE],
+    )
+    assert confirmed["test_id"] == "T1"
+    assert confirmed["evidence_refs"] == [EVIDENCE]
+    assert confirmed["origin_execution_ids"]
+
+    after = validate_test_assessment(
+        store,
+        "T1",
+        "supported",
+        evidence_refs=[EVIDENCE],
+    )
+    assert after.valid is True
+
+    assessment = assess_test(
+        store,
+        "T1",
+        "supported",
+        evidence_refs=[EVIDENCE],
+    )
+    assert assessment["outcome"] == "supported"
+
+
+def test_confirm_rejects_evidence_not_seen_in_investigation(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _record(store, linked=False)
+
+    with pytest.raises(InvestigationError, match="confirmed_evidence_not_in_investigation"):
+        confirm_test_evidence(store, "T1", evidence_refs=[OTHER])
+
+
+def test_confirm_rejects_unverified_free_exploration_evidence(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _record(store, linked=False, integrity_checked=False)
+
+    with pytest.raises(InvestigationError, match="assessment_source_unverified"):
+        confirm_test_evidence(store, "T1", evidence_refs=[EVIDENCE])
 
 
 def test_assessment_rejects_incomplete_source_coverage(tmp_path: Path) -> None:
