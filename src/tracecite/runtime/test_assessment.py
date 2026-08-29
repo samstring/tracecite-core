@@ -7,9 +7,10 @@ immutable Evidence formally linked to that Test.
 
 Free exploration may happen before a Test is declared. Previously observed
 Evidence is not silently grandfathered into a later Test: the Agent must
-explicitly confirm/relink exact immutable Evidence refs to the Test before they
-can support a decisive assessment. This preserves exploration flexibility while
-keeping the epistemic contract auditable.
+explicitly confirm/relink immutable line-addressable Evidence that was actually
+materialized by a recorded execution before it can support a decisive
+assessment. This preserves exploration flexibility while keeping the epistemic
+contract auditable.
 """
 
 from __future__ import annotations
@@ -103,12 +104,7 @@ def _source_executions(state: InvestigationState, test_id: str) -> list[Mapping[
 
 
 def _relinkable_executions(state: InvestigationState) -> list[Mapping[str, Any]]:
-    """Evidence-bearing executions that may be explicitly confirmed for a later Test.
-
-    Assessment executions are derived epistemic records and therefore are never
-    a source for relinking. Confirmation executions are allowed because they
-    preserve the original immutable Evidence pointer and provenance chain.
-    """
+    """Evidence-bearing executions that may be explicitly confirmed for a later Test."""
 
     return [
         item
@@ -117,18 +113,66 @@ def _relinkable_executions(state: InvestigationState) -> list[Mapping[str, Any]]
     ]
 
 
-def _pointer_index(
-    executions: Sequence[Mapping[str, Any]],
-) -> dict[str, tuple[Mapping[str, Any], Mapping[str, Any]]]:
-    result: dict[str, tuple[Mapping[str, Any], Mapping[str, Any]]] = {}
-    for execution in executions:
-        for item in execution.get("evidence") or []:
-            if not isinstance(item, Mapping):
+def _parse_evidence_ref(ref: str) -> tuple[str, int, int] | None:
+    match = _EVIDENCE_URI_RE.fullmatch(str(ref or "").strip())
+    if match is None:
+        return None
+    start = int(match.group("start"))
+    end = int(match.group("end") or match.group("start"))
+    if end < start:
+        return None
+    return match.group("digest").lower(), start, end
+
+
+def _pointer_digest(pointer: Mapping[str, Any]) -> str:
+    raw = str(pointer.get("sha256") or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", raw):
+        return raw
+    parsed = _parse_evidence_ref(str(pointer.get("uri") or ""))
+    return parsed[0] if parsed is not None else ""
+
+
+def _materialized_ranges(
+    execution: Mapping[str, Any],
+    pointer: Mapping[str, Any],
+) -> list[tuple[int, int]]:
+    """Return line ranges that this execution demonstrably materialized.
+
+    A canonical EvidencePointer may identify only the anchor hit (for example
+    ``#L506``) while a bounded range retrieval visibly materializes the full
+    context window (for example L494-L518). Precise citations inside that
+    recorded window are legitimate evidence and must not be rejected merely
+    because they are not byte-for-byte equal to the anchor URI.
+    """
+
+    ranges: list[tuple[int, int]] = []
+    parsed = _parse_evidence_ref(str(pointer.get("uri") or ""))
+    if parsed is not None:
+        ranges.append((parsed[1], parsed[2]))
+
+    try:
+        start = int(pointer.get("start_line"))
+        end = int(pointer.get("end_line", start))
+        if start >= 1 and end >= start:
+            ranges.append((start, end))
+    except (TypeError, ValueError):
+        pass
+
+    coverage = execution.get("coverage") or {}
+    if isinstance(coverage, Mapping):
+        for start_key, end_key in (
+            ("context_start_line", "context_end_line"),
+            ("start_line", "end_line"),
+        ):
+            try:
+                start = int(coverage.get(start_key))
+                end = int(coverage.get(end_key))
+            except (TypeError, ValueError):
                 continue
-            uri = str(item.get("uri") or "").strip()
-            if uri and uri not in result:
-                result[uri] = (execution, item)
-    return result
+            if start >= 1 and end >= start:
+                ranges.append((start, end))
+
+    return list(dict.fromkeys(ranges))
 
 
 def _source_validation_reasons(execution: Mapping[str, Any]) -> list[str]:
@@ -152,21 +196,65 @@ def _source_validation_reasons(execution: Mapping[str, Any]) -> list[str]:
     return reasons
 
 
+def _matching_materialized_sources(
+    executions: Sequence[Mapping[str, Any]],
+    ref: str,
+) -> list[tuple[Mapping[str, Any], dict[str, Any]]]:
+    """Find recorded executions that actually exposed the requested line range."""
+
+    requested = _parse_evidence_ref(ref)
+    if requested is None:
+        return []
+    digest, requested_start, requested_end = requested
+    matches: list[tuple[Mapping[str, Any], dict[str, Any]]] = []
+    for execution in executions:
+        for raw_pointer in execution.get("evidence") or []:
+            if not isinstance(raw_pointer, Mapping):
+                continue
+            if _pointer_digest(raw_pointer) != digest:
+                continue
+            if not any(
+                start <= requested_start and requested_end <= end
+                for start, end in _materialized_ranges(execution, raw_pointer)
+            ):
+                continue
+            pointer = dict(raw_pointer)
+            pointer["uri"] = ref
+            pointer["sha256"] = digest
+            pointer["start_line"] = requested_start
+            pointer["end_line"] = requested_end
+            matches.append((execution, pointer))
+            break
+    return matches
+
+
+def _best_materialized_source(
+    executions: Sequence[Mapping[str, Any]],
+    ref: str,
+) -> tuple[Mapping[str, Any], dict[str, Any]] | None:
+    """Prefer any mechanically clean observation when a line was seen repeatedly."""
+
+    candidates = _matching_materialized_sources(executions, ref)
+    for execution, pointer in candidates:
+        if not _source_validation_reasons(execution):
+            return execution, pointer
+    return candidates[0] if candidates else None
+
+
 def confirm_test_evidence(
     store: InvestigationStore,
     test_id: str,
     *,
     evidence_refs: Sequence[str],
 ) -> Dict[str, Any]:
-    """Explicitly bind previously observed immutable Evidence to a declared Test.
+    """Explicitly bind previously materialized Evidence to a declared Test.
 
-    This is the safe bridge from free exploration to formal verification.
-    Evidence is not copied merely because it appeared earlier: every requested
-    ref must already exist in this Investigation, be line-addressable, and come
-    from an execution with mechanically acceptable status/coverage/integrity.
-
-    The confirmation itself is persisted as a Test-linked execution, so later
-    decisive assessment uses the normal same-Test evidence rule.
+    This is the safe bridge from free exploration to formal verification. Every
+    requested line range must have actually been visible in a recorded execution
+    of the same immutable source digest. The original execution must also have
+    an acceptable status, coverage and integrity state. The confirmation itself
+    is persisted as a Test-linked execution, so later assessment uses the normal
+    same-Test evidence rule.
     """
 
     if not isinstance(store, InvestigationStore):
@@ -180,30 +268,34 @@ def confirm_test_evidence(
     if not refs:
         raise InvestigationError("confirm_test_evidence 至少需要一个 evidence ref")
 
-    pointer_index = _pointer_index(_relinkable_executions(state))
+    relinkable = _relinkable_executions(state)
     reasons: list[str] = []
     origin_execution_ids: list[str] = []
     evidence: list[dict[str, Any]] = []
 
     for ref in refs:
-        match = _EVIDENCE_URI_RE.fullmatch(ref)
-        if match is None:
+        parsed = _parse_evidence_ref(ref)
+        if parsed is None:
             reasons.append("non_citable_confirmed_evidence")
             continue
-        end = match.group("end")
-        if end is not None and int(end) < int(match.group("start")):
-            reasons.append("invalid_confirmed_evidence_range")
+        candidates = _matching_materialized_sources(relinkable, ref)
+        if not candidates:
+            reasons.append("confirmed_evidence_not_materialized")
             continue
-        source = pointer_index.get(ref)
-        if source is None:
-            reasons.append("confirmed_evidence_not_in_investigation")
+        clean = [
+            (execution, pointer)
+            for execution, pointer in candidates
+            if not _source_validation_reasons(execution)
+        ]
+        if not clean:
+            for execution, _ in candidates:
+                reasons.extend(_source_validation_reasons(execution))
             continue
-        execution, pointer = source
-        reasons.extend(_source_validation_reasons(execution))
+        execution, pointer = clean[0]
         execution_id = str(execution.get("id") or "").strip()
         if execution_id and execution_id not in origin_execution_ids:
             origin_execution_ids.append(execution_id)
-        evidence.append(dict(pointer))
+        evidence.append(pointer)
 
     deduped = list(dict.fromkeys(reasons))
     if deduped:
@@ -219,7 +311,7 @@ def confirm_test_evidence(
         "coverage": {"complete": True},
         "verification": {
             "integrity_checked": True,
-            "confirmation_contract": "prior_evidence_relinked_v1",
+            "confirmation_contract": "materialized_window_relinked_v2",
         },
     }
     execution = store.record_execution(
@@ -250,14 +342,7 @@ def validate_test_assessment(
     evidence_refs: Sequence[str] = (),
     coverage: Mapping[str, Any] | None = None,
 ) -> TestAssessmentValidation:
-    """Validate a Test assessment against Evidence formally linked to the Test.
-
-    ``supported`` and ``contradicted`` are decisive and therefore require at
-    least one immutable line-addressable Evidence pointer from an execution of
-    the same Test. Free-exploration Evidence can become eligible only through
-    ``confirm_test_evidence``. ``unknown`` is always a safe epistemic fallback
-    and may be recorded without Evidence.
-    """
+    """Validate a Test assessment against Evidence formally linked to the Test."""
 
     state = _state(store_or_state)
     resolved_test = str(test_id or "").strip()
@@ -274,25 +359,21 @@ def validate_test_assessment(
         reasons.append("missing_assessment_evidence")
 
     source_executions = _source_executions(state, resolved_test)
-    pointer_index = _pointer_index(source_executions)
-
+    selected: dict[str, tuple[Mapping[str, Any], dict[str, Any]]] = {}
     for ref in refs:
-        match = _EVIDENCE_URI_RE.fullmatch(ref)
-        if match is None:
+        if _parse_evidence_ref(ref) is None:
             reasons.append("non_citable_assessment_evidence")
             continue
-        end = match.group("end")
-        if end is not None and int(end) < int(match.group("start")):
-            reasons.append("invalid_assessment_evidence_range")
-        if ref not in pointer_index:
-            reasons.append("assessment_evidence_not_from_test")
-
-    for ref in refs:
-        source = pointer_index.get(ref)
+        source = _best_materialized_source(source_executions, ref)
         if source is None:
+            reasons.append("assessment_evidence_not_from_test")
             continue
-        execution, _ = source
-        reasons.extend(_source_validation_reasons(execution))
+        execution, pointer = source
+        source_reasons = _source_validation_reasons(execution)
+        if source_reasons:
+            reasons.extend(source_reasons)
+            continue
+        selected[ref] = (execution, pointer)
 
     if decisive and _coverage_has_blocking_gap(coverage or {}):
         reasons.append("assessment_coverage_gap")
@@ -317,11 +398,7 @@ def assess_test(
     coverage: Mapping[str, Any] | None = None,
     limitations: Sequence[str] = (),
 ) -> Dict[str, Any]:
-    """Persist one evidence-backed Test assessment as a linked Execution.
-
-    Re-assessment is allowed after new Evidence is collected or confirmed;
-    Finding validation uses the latest assessment for each declared Test.
-    """
+    """Persist one evidence-backed Test assessment as a linked Execution."""
 
     if not isinstance(store, InvestigationStore):
         raise TypeError("assess_test requires InvestigationStore")
@@ -341,8 +418,11 @@ def assess_test(
 
     state = store.load()
     source_executions = _source_executions(state, validation.test_id)
-    pointer_index = _pointer_index(source_executions)
-    evidence = [dict(pointer_index[ref][1]) for ref in validation.evidence_refs if ref in pointer_index]
+    evidence: list[dict[str, Any]] = []
+    for ref in validation.evidence_refs:
+        source = _best_materialized_source(source_executions, ref)
+        if source is not None and not _source_validation_reasons(source[0]):
+            evidence.append(source[1])
     result = {
         "status": "ok",
         "outcome": validation.outcome,
