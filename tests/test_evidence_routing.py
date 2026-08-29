@@ -228,8 +228,8 @@ def test_deep_query_uses_tighter_investigate_transport_cap(tmp_path) -> None:
 
 def test_large_first_source_uses_bounded_uniform_navigation_sample(tmp_path) -> None:
     source = tmp_path / "large.log"
-    rows = [f"record {index}" for index in range(160)]
-    rows[80] = "MIDPOINT_STRUCTURAL_LANDMARK"
+    rows = [f"record {index}" for index in range(623)]
+    rows[88] = "MIDPOINT_STRUCTURAL_LANDMARK"
     source.write_text("\n".join(rows) + "\n", encoding="utf-8")
     state_path = tmp_path / "investigation.json"
     InvestigationStore(state_path).create("inspect large source")
@@ -248,9 +248,13 @@ def test_large_first_source_uses_bounded_uniform_navigation_sample(tmp_path) -> 
     assert "direct_output_exceeds_budget" in payload["data"]["routing"]["reasons"]
     assert payload["data"]["strategy"] == "uniform"
     assert payload["data"]["navigation_only"] is True
-    assert payload["coverage"]["sampled_records"] == 16
+    assert payload["coverage"]["sampled_records"] == 64
     assert payload["coverage"]["returned_chars"] <= 12_000
     assert payload["data"]["samples"]
+    assert any(
+        sample.get("start_line") == 89 and "MIDPOINT_STRUCTURAL_LANDMARK" in sample.get("text", "")
+        for sample in payload["data"]["samples"]
+    )
 
 
 def test_deep_history_monotonically_escalates_source_inspection_to_investigate(tmp_path) -> None:

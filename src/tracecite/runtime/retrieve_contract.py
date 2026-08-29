@@ -50,7 +50,7 @@ from .investigation import InvestigationStore
 
 
 _TRANSPORT_ONLY_OPERATIONS = frozenset({"probe", "sample", "search", "expand", "survey", "retrieve"})
-_BOUNDED_SOURCE_SAMPLE_RECORDS = 16
+_BOUNDED_SOURCE_SAMPLE_RECORDS = 64
 _BOUNDED_SOURCE_SAMPLE_CHARS = 12_000
 
 
