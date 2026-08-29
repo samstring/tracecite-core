@@ -35,6 +35,7 @@ from .agent_api import (
     _sha256,
     retrieve as _retrieve,
 )
+from .evidence_ambiguity import verify_scoped_identity_gaps
 from .evidence_identity import file_source_version
 from .evidence_routing import (
     EvidenceRoute,
@@ -433,6 +434,72 @@ def _correct_range_novelty(result: RetrievalResult, request: EvidenceRequest) ->
     )
 
 
+def _attach_identity_verification(
+    result: RetrievalResult,
+    request: EvidenceRequest,
+) -> RetrievalResult:
+    """Close a visible scoped-ID evidence gap within the same Range retrieval.
+
+    A range expansion can discover a local-looking identifier only on the
+    Agent's last available tool round.  Requiring another Agent call would make
+    evidence correctness depend on round budget.  Instead, Core performs the
+    smallest deterministic verification itself: scan the same stable source
+    for that already-visible identifier and return only bounded scoped-entity
+    associations with exact line references.
+
+    This is evidence correlation/integrity work, not diagnosis.  The result
+    never ranks a hypothesis or declares a root cause.
+    """
+
+    if not isinstance(request.target, RangeTarget):
+        return result
+    canonical = dict(result.canonical_result)
+    if str(canonical.get("status") or "").lower() == "error":
+        return result
+    data = dict(canonical.get("data") or {})
+    text = data.get("text")
+    if not isinstance(text, str) or not text:
+        return result
+
+    expected = str(request.target.expected_sha256 or "").strip().lower()
+    if not expected:
+        for item in canonical.get("evidence") or []:
+            if not isinstance(item, Mapping):
+                continue
+            candidate = str(item.get("sha256") or "").strip().lower()
+            if candidate:
+                expected = candidate
+                break
+    try:
+        verification = verify_scoped_identity_gaps(
+            request.target.source,
+            text,
+            expected_sha256=expected or None,
+        )
+    except (OSError, ValueError):
+        # Source instability or an un-verifiable pattern must never be converted
+        # into a confident identity statement.  Keep the original evidence view.
+        return result
+    if not verification:
+        return result
+
+    data["identity_verification"] = verification
+    data["identity_verification_note"] = (
+        "Mechanical evidence-correlation check only. If one identifier value is observed under multiple scoped entities, "
+        "do not correlate by that identifier alone; preserve the relevant entity/scope. This does not identify a root cause."
+    )
+    canonical["data"] = data
+    return RetrievalResult(
+        operation=result.operation,
+        status=result.status,
+        canonical_result=canonical,
+        progress=result.progress,
+        new_evidence=result.new_evidence,
+        repeated_evidence=result.repeated_evidence,
+        stop_reason=result.stop_reason,
+    )
+
+
 def retrieve(
     request: EvidenceRequest,
     *,
@@ -461,6 +528,7 @@ def retrieve(
     if isinstance(request.target, QueryTarget):
         routed_request = _bounded_query(request, policy, route=decision.route)
     result = _correct_range_novelty(_retrieve(routed_request), routed_request)
+    result = _attach_identity_verification(result, routed_request)
     result = _attach_signal_hints(result, routed_request, policy)
     decision = refine_route_after_result(decision, result.canonical_result, policy=policy)
     return _with_routing(result, decision)
