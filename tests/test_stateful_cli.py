@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from tracecite.integrations import cli, stateful_cli
 from tracecite.integrations.agent_projection import prefer_smaller_agent_view
+from tracecite.runtime import EvidenceRequest, QueryTarget, RangeTarget
 
 
 def _search_payload(count: int = 1, *, label_suffix: str = "") -> dict[str, object]:
@@ -23,7 +25,7 @@ def _search_payload(count: int = 1, *, label_suffix: str = "") -> dict[str, obje
         "schema_version": 1,
         "operation": "search",
         "status": "ok",
-        "outcome": "supported",
+        "outcome": "not_assessed",
         "hypotheses": [],
         "evidence": evidence,
         "artifacts": [],
@@ -38,8 +40,45 @@ def _search_payload(count: int = 1, *, label_suffix: str = "") -> dict[str, obje
         "verification": {},
         "warnings": [],
         "next_queries": [],
-        "data": {"query": "target"},
+        "data": {"query": "target", "routing": {"route": "bounded"}},
     }
+
+
+def _expand_payload() -> dict[str, object]:
+    digest = "b" * 64
+    return {
+        "schema_version": 1,
+        "operation": "expand",
+        "status": "ok",
+        "outcome": "not_assessed",
+        "hypotheses": [],
+        "evidence": [
+            {
+                "uri": f"evidence://sha256/{digest}#L8-L10",
+                "source_path": "/tmp/events.log",
+                "sha256": digest,
+                "start_line": 8,
+                "end_line": 10,
+                "label": "bounded raw context",
+            }
+        ],
+        "artifacts": [],
+        "coverage": {"context_start_line": 6, "context_end_line": 14},
+        "missing_evidence": [],
+        "verification": {},
+        "warnings": [],
+        "next_queries": [],
+        "data": {"routing": {"route": "bounded"}},
+    }
+
+
+def _install_retrieve(monkeypatch, canonical, calls: list[EvidenceRequest] | None = None) -> None:
+    def fake_retrieve(request: EvidenceRequest):
+        if calls is not None:
+            calls.append(request)
+        return SimpleNamespace(canonical_result=canonical)
+
+    monkeypatch.setattr(stateful_cli, "retrieve", fake_retrieve)
 
 
 def _argv(tmp_path, *, profile: str = "stateful-index", context_id: str = "case-1") -> list[str]:
@@ -56,11 +95,110 @@ def _argv(tmp_path, *, profile: str = "stateful-index", context_id: str = "case-
     ]
 
 
+def test_public_search_routes_through_typed_retrieve(monkeypatch, capsys) -> None:
+    calls: list[EvidenceRequest] = []
+    _install_retrieve(monkeypatch, _search_payload(), calls)
+
+    assert stateful_cli.main(
+        [
+            "search",
+            "events.log",
+            "target",
+            "--regex",
+            "--no-snapshot",
+            "--segmenter",
+            "rawtext",
+            "--fold",
+            "--max-evidence",
+            "7",
+            "--max-line-chars",
+            "99",
+            "--no-cache",
+        ]
+    ) == 0
+
+    assert len(calls) == 1
+    request = calls[0]
+    assert isinstance(request, EvidenceRequest)
+    assert isinstance(request.target, QueryTarget)
+    assert str(request.target.source) == "events.log"
+    assert request.target.query == "target"
+    assert request.target.regex is True
+    assert request.target.snapshot is False
+    assert request.target.segmenter == "rawtext"
+    assert request.target.fold is True
+    assert request.target.max_evidence == 7
+    assert request.target.max_line_chars == 99
+    assert request.cache is False
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == "not_assessed"
+    assert payload["data"]["routing"]["route"] == "bounded"
+
+
+def test_public_expand_routes_through_typed_retrieve(monkeypatch, capsys) -> None:
+    calls: list[EvidenceRequest] = []
+    _install_retrieve(monkeypatch, _expand_payload(), calls)
+
+    assert stateful_cli.main(
+        [
+            "expand",
+            "events.log",
+            "8",
+            "--end-line",
+            "10",
+            "--before",
+            "2",
+            "--after",
+            "4",
+            "--expected-sha256",
+            "abc",
+            "--max-chars",
+            "100",
+        ]
+    ) == 0
+
+    assert len(calls) == 1
+    request = calls[0]
+    assert isinstance(request.target, RangeTarget)
+    assert str(request.target.source) == "events.log"
+    assert request.target.start_line == 8
+    assert request.target.end_line == 10
+    assert request.target.before == 2
+    assert request.target.after == 4
+    assert request.target.expected_sha256 == "abc"
+    assert request.target.max_chars == 100
+    assert json.loads(capsys.readouterr().out)["operation"] == "expand"
+
+
+def test_search_output_path_is_explicit_legacy_fallback(monkeypatch, capsys, tmp_path) -> None:
+    canonical = _search_payload()
+    calls: dict[str, object] = {}
+
+    def legacy_search(*args, **kwargs):
+        calls["args"] = args
+        calls.update(kwargs)
+        return canonical
+
+    def forbidden_retrieve(_request):
+        raise AssertionError("output-path compatibility must stay on the legacy side-effect path")
+
+    monkeypatch.setattr(cli, "search", legacy_search)
+    monkeypatch.setattr(stateful_cli, "retrieve", forbidden_retrieve)
+    output = tmp_path / "filtered.log"
+
+    assert stateful_cli.main(
+        ["search", "events.log", "target", "--output-path", str(output)]
+    ) == 0
+    assert calls["output_path"] == output
+    assert json.loads(capsys.readouterr().out)["operation"] == "search"
+    assert cli.search is legacy_search
+
+
 def test_context_id_falls_back_when_delta_is_not_smaller_but_state_advances(
     tmp_path, monkeypatch, capsys
 ) -> None:
     canonical = _search_payload()
-    monkeypatch.setattr(cli, "search", lambda *_args, **_kwargs: canonical)
+    _install_retrieve(monkeypatch, canonical)
     argv = _argv(tmp_path)
 
     assert stateful_cli.main(argv) == 0
@@ -73,9 +211,6 @@ def test_context_id_falls_back_when_delta_is_not_smaller_but_state_advances(
     second_rendered = capsys.readouterr().out
     second = json.loads(second_rendered)
 
-    # Suppressing one tiny Evidence row costs more metadata than it saves, so
-    # the Agent sees the ordinary compact view while private seen-state still
-    # advances. Context optimization therefore never makes this turn larger.
     assert len(second["evidence"]["rows"]) == 1
     assert "context" not in second["data"]
     assert len(second_rendered) <= len(first_rendered)
@@ -89,7 +224,7 @@ def test_context_id_uses_delta_when_repeated_evidence_savings_are_real(
     tmp_path, monkeypatch, capsys
 ) -> None:
     canonical = _search_payload(30, label_suffix=" " + ("x" * 200))
-    monkeypatch.setattr(cli, "search", lambda *_args, **_kwargs: canonical)
+    _install_retrieve(monkeypatch, canonical)
     argv = _argv(tmp_path)
 
     assert stateful_cli.main(argv) == 0
@@ -104,7 +239,7 @@ def test_context_id_uses_delta_when_repeated_evidence_savings_are_real(
     second = json.loads(second_rendered)
 
     assert second["evidence"]["rows"] == []
-    assert second["outcome"] == "supported"
+    assert second["outcome"] == "not_assessed"
     assert second["data"]["context"]["new_evidence"] == 0
     assert second["data"]["context"]["repeated_evidence"] == 30
     assert second["data"]["result_id"] == result_id
@@ -119,7 +254,7 @@ def test_frame_context_chooses_delta_by_frame_size(
     tmp_path, monkeypatch, capsys
 ) -> None:
     canonical = _search_payload(30, label_suffix=" " + ("x" * 200))
-    monkeypatch.setattr(cli, "search", lambda *_args, **_kwargs: canonical)
+    _install_retrieve(monkeypatch, canonical)
     argv = _argv(tmp_path, profile="frame", context_id="frame-case")
 
     assert stateful_cli.main(argv) == 0
@@ -131,9 +266,6 @@ def test_frame_context_chooses_delta_by_frame_size(
     second_rendered = capsys.readouterr().out
     assert second_rendered.startswith("@TCF 1 search")
     assert len(second_rendered) < len(first_rendered)
-    # The transport contract is semantic, not tied to one internal Coverage
-    # key spelling. The selected delta has no Evidence rows and explicitly
-    # tells the Agent the citable Evidence was already seen.
     assert "target event" not in second_rendered
     assert "already seen in the selected Agent context" in second_rendered
 
@@ -163,10 +295,12 @@ def test_context_id_requires_ledger_and_stays_machine_readable(capsys) -> None:
     assert "--ledger-dir" in payload["error"]["message"]
 
 
-def test_without_context_id_delegates_unchanged(monkeypatch, capsys) -> None:
+def test_without_context_id_uses_runtime_without_context_projection(monkeypatch, capsys) -> None:
     canonical = _search_payload()
-    monkeypatch.setattr(cli, "search", lambda *_args, **_kwargs: canonical)
+    calls: list[EvidenceRequest] = []
+    _install_retrieve(monkeypatch, canonical, calls)
 
     assert stateful_cli.main(["search", "events.log", "target"]) == 0
     payload = json.loads(capsys.readouterr().out)
+    assert len(calls) == 1
     assert "context" not in payload["data"]
