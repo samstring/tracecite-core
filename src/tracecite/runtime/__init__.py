@@ -144,6 +144,7 @@ from .agent_api import (
 )
 from .retrieve_contract import retrieve as _retrieve_contract
 from .retrieval_guidance import prioritize_actionable_retrieval
+from .provider_identity import namespace_provider_request
 
 
 def retrieve(
@@ -151,10 +152,11 @@ def retrieve(
     *,
     routing_policy: EvidenceRoutingPolicy | None = None,
 ) -> RetrievalResult:
-    """Execute canonical retrieval and prioritize any Runtime-owned Evidence gap action."""
+    """Execute canonical retrieval with Runtime-owned identity and gap semantics."""
 
+    normalized = namespace_provider_request(request)
     return prioritize_actionable_retrieval(
-        _retrieve_contract(request, routing_policy=routing_policy)
+        _retrieve_contract(normalized, routing_policy=routing_policy)
     )
 
 
