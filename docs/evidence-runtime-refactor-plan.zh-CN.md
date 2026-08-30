@@ -789,7 +789,7 @@ Remaining risk: MCP/Mobile 依然按 H3/K 明确暂缓，不能提前同步。
 ### G2 — Hidden-answer pressure removed from case truth
 
 Status: **COMPLETE**  
-Commit: `__FINAL_IMPL_SHA__`  
+Commit: `211219782f688aa0d8222d305612d059bf42ea09`  
 Tests: 新增 case-level regression，锁定 `kubernetes-139417` 与 `kubernetes-140268` 的 `upstream_contributor/fix_alignment=unsupported_from_log` 与 boundary patterns；post-finalization gate 尚未运行。  
 Why: supplied log 无法直接证明 known upstream implementation/fix 时，不应把 upstream knowledge 伪装成日志 direct truth。  
 Behavior change: correctness 仍可保留 known upstream fix reference，但 canonical scoring 根据 supplied-evidence support level 奖励明确 boundary，而不是强迫 Agent 编出确定结论。  
@@ -798,7 +798,7 @@ Remaining risk: 真实回答是否稳定遵守 boundary 仍需 I/J。
 ### G3 — Infra validity separated from task result
 
 Status: **COMPLETE**  
-Commit: `__FINAL_IMPL_SHA__`  
+Commit: `211219782f688aa0d8222d305612d059bf42ea09`  
 Tests: 新增 `tests/test_benchmark_run_result.py`；post-finalization gate 尚未运行。  
 Why: 429/402/502/503/504、provider overload 与 timeout 会污染 paired A/B，不能自动算 TraceCite/native product loss。  
 Behavior change: `benchmarks/agent-investigation/run_result.py` 为每个 arm 生成独立 `task_result` 与 `run_validity`；provider contamination、timeout、host nonzero exit 与 answer quality 分离；trajectory 同时输出 core evidence 首次到达、post-core tools、native/TraceCite/opaque-shell 计数与 low-novelty ratio。  
