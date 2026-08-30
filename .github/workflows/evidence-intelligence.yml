@@ -21,18 +21,18 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - name: Run architecture governance
         run: python scripts/check_architecture.py
-      - name: Run Evidence Intelligence tests
+      - name: Run canonical Evidence Runtime and evaluation contracts
         run: >-
           python -m pytest -q
-          tests/test_evidence_orchestrator.py
-          tests/test_evidence_investigation_loop_benchmark.py
-          tests/test_agent_benchmark_evidence_modes.py
-          tests/test_pi_ab_benchmark_policy.py
-          tests/test_pi_ab_runtime.py
+          tests/test_canonical_evidence_contract.py
+          tests/test_runtime_session_retrieval.py
           tests/test_session_novelty_regressions.py
-      - name: Print correlation and reduction benchmark
-        run: python -m tracecite.evidence_benchmarking
-      - name: Print deterministic exploration benchmark
-        run: >-
-          python -m tracecite.evidence_investigation_benchmarking
-          benchmarks/evidence-intelligence/cases/mobile-payment-crash
+          tests/test_evidence_routing.py
+          tests/test_evidence_selection.py
+          tests/test_pi_host_tool_activity.py
+          tests/test_pi_session_to_transcript.py
+          tests/test_root_cause_benchmarking.py
+          tests/test_support_aware_root_cause_benchmarking.py
+          tests/test_benchmark_run_result.py
+      - name: Run support-level mechanical self-test
+        run: python -c "from tracecite.support_scoring import self_test; self_test()"
