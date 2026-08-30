@@ -302,7 +302,7 @@ def attach_relationship_frontier(
         progress=result.progress,
         new_evidence=result.new_evidence,
         repeated_evidence=result.repeated_evidence,
-        stop_reason=result.stop_reason,
+        acquisition_end_reason=result.acquisition_end_reason,
     )
 
 

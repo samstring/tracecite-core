@@ -9,7 +9,7 @@ from tracecite_core.state_file import state_lock
 
 from .agent_api import EvidenceRequest, RangeTarget, RetrievalResult
 from .evidence_identity import SourceVersion, file_source_version, pointer_source_key
-from .evidence_progress import EvidenceProgressTracker, StopReason
+from .evidence_progress import EvidenceProgressTracker
 from .evidence_routing import EvidenceRoutingPolicy
 from .provider_identity import namespace_provider_request
 from .relationship_frontier import attach_relationship_frontier
@@ -348,11 +348,6 @@ def retrieve_with_session(
                     source_observations={str(Path(request.target.source).expanduser().resolve()): observation}
                 )
                 session.save(next_state)
-        stop = StopReason(
-            "no_new_evidence",
-            scope={"source_version": source_key},
-            basis=("source_generation", "requested_context_already_covered"),
-        )
         return RetrievalResult(
             operation="expand",
             status="no_new_evidence",
@@ -366,10 +361,14 @@ def retrieve_with_session(
                     "new_text": "",
                     "unseen_ranges": [],
                     "source_version": source_key,
+                    "novelty": {
+                        "state": "no_new_evidence",
+                        "basis": ["source_generation", "requested_context_already_covered"],
+                        "source_version": source_key,
+                    },
                 },
             },
             progress=readiness,
-            stop_reason=stop,
         )
 
     normalized = namespace_provider_request(request)
@@ -443,7 +442,7 @@ def retrieve_with_session(
         canonical["data"] = data
 
     status = base.status
-    stop = base.stop_reason
+    acquisition_end_reason = base.acquisition_end_reason
     if (
         str(canonical.get("status") or "").lower() not in {"error", "no_match"}
         and evidence
@@ -453,7 +452,12 @@ def retrieve_with_session(
         and not truncated
     ):
         status = "no_new_evidence"
-        stop = StopReason("no_new_evidence", basis=("all_returned_evidence_already_seen",))
+        data = dict(canonical.get("data") or {})
+        data["novelty"] = {
+            "state": "no_new_evidence",
+            "basis": ["all_returned_evidence_already_seen"],
+        }
+        canonical["data"] = data
 
     return RetrievalResult(
         operation=base.operation,
@@ -462,7 +466,7 @@ def retrieve_with_session(
         progress=readiness,
         new_evidence=new_rows,
         repeated_evidence=repeated,
-        stop_reason=stop,
+        acquisition_end_reason=acquisition_end_reason,
     )
 
 

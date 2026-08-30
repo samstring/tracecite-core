@@ -56,9 +56,13 @@ def test_runtime_progress_contract_has_no_epistemic_stop_semantics() -> None:
     for name in forbidden_exports:
         assert not hasattr(runtime, name)
 
-    source = (ROOT / "src" / "tracecite" / "runtime" / "evidence_progress.py").read_text(
-        encoding="utf-8"
-    )
-    assert "ready_for_reasoning" not in source
-    assert "stop_recommended" not in source
-    assert '"no_new_evidence",' not in source.split("AcquisitionEndKind", 1)[1].split("]", 1)[0]
+    runtime_dir = ROOT / "src" / "tracecite" / "runtime"
+    for path in runtime_dir.glob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert "ready_for_reasoning" not in source, path
+        assert "stop_recommended" not in source, path
+        assert "from .evidence_progress import EvidenceProgressTracker, StopReason" not in source, path
+        assert "result.stop_reason" not in source, path
+
+    progress_source = (runtime_dir / "evidence_progress.py").read_text(encoding="utf-8")
+    assert '"no_new_evidence",' not in progress_source.split("AcquisitionEndKind", 1)[1].split("]", 1)[0]
