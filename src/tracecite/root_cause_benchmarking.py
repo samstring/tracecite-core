@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from . import benchmarking as legacy
+from .support_scoring import apply_support_levels, validate_support_levels
 
 
 ROOT_CAUSE_SCHEMA_VERSION = 1
@@ -64,6 +65,7 @@ def validate_gold(gold: Mapping[str, Any]) -> None:
         raise ValueError("root_cause must be an object")
     for dimension in ROOT_CAUSE_DIMENSIONS:
         _patterns(rubric.get(dimension), field=f"root_cause.{dimension}")
+    validate_support_levels(gold)
 
     for field in ("unsupported_claims", "contradictions"):
         values = gold.get(field, [])
@@ -414,7 +416,7 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
     attempted = _attempted_context(events)
     repeated_ratio = duplicate_chars / output_chars if output_chars else 0.0
 
-    return {
+    result = {
         "schema_version": ROOT_CAUSE_SCHEMA_VERSION,
         "case_id": case.get("id"),
         "project": (case.get("provenance") or {}).get("project"),
@@ -465,6 +467,7 @@ def score_transcript(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
             else None
         ),
     }
+    return apply_support_levels(result, gold, answer)
 
 
 def _parser() -> argparse.ArgumentParser:

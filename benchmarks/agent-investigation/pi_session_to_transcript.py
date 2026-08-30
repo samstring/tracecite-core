@@ -44,13 +44,23 @@ def convert_session(
 
         role = str(message.get("role") or "")
         if role == "toolResult":
-            events.append(
-                {
-                    "type": "tool",
-                    "name": str(message.get("toolName") or "unknown"),
-                    "output": _text_content(message.get("content")),
-                }
-            )
+            tool_event: dict[str, Any] = {
+                "type": "tool",
+                "name": str(message.get("toolName") or "unknown"),
+                "output": _text_content(message.get("content")),
+            }
+            details = message.get("details")
+            if isinstance(details, Mapping):
+                activity = details.get("tracecite_host_activity")
+                if isinstance(activity, Mapping):
+                    tool_event["activity"] = dict(activity)
+                    duration = activity.get("duration_ms")
+                    if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration >= 0:
+                        tool_event["duration_ms"] = duration
+                summary = details.get("tracecite_host_activity_summary")
+                if isinstance(summary, Mapping):
+                    tool_event["activity_summary"] = dict(summary)
+            events.append(tool_event)
             continue
 
         if role != "assistant":

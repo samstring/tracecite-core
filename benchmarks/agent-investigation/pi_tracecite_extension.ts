@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -13,6 +14,61 @@ const SESSION =
   process.env.TRACECITE_PI_SESSION ||
   process.env.TRACECITE_PI_INVESTIGATION ||
   join(tmpdir(), `tracecite-pi-${process.pid}`, "retrieval-session.json");
+
+
+type HostToolCategory = "tracecite_evidence" | "native_search" | "native_read" | "native_other" | "other";
+type HostToolActivity = {
+  tool: string;
+  category: HostToolCategory;
+  duration_ms: number;
+  status: string;
+  metadata?: Record<string, unknown>;
+};
+
+const ACTIVITY_PATH =
+  process.env.TRACECITE_PI_ACTIVITY || join(dirname(SESSION), "host-tool-activity.json");
+const activityStarted = new Map<string, number>();
+const activityEvents: HostToolActivity[] = [];
+let activityWrite: Promise<void> = Promise.resolve();
+
+function classifyHostTool(tool: string): HostToolCategory {
+  if (tool === "tracecite_search" || tool === "tracecite_expand") return "tracecite_evidence";
+  if (tool === "grep" || tool === "find") return "native_search";
+  if (tool === "read") return "native_read";
+  if (tool === "bash" || tool === "ls") return "native_other";
+  return "other";
+}
+
+function hostActivitySummary() {
+  const categories: Record<string, number> = {};
+  const tools: Record<string, number> = {};
+  let observed_duration_ms = 0;
+  for (const event of activityEvents) {
+    categories[event.category] = (categories[event.category] || 0) + 1;
+    tools[event.tool] = (tools[event.tool] || 0) + 1;
+    observed_duration_ms += event.duration_ms;
+  }
+  return {
+    total_tool_calls: activityEvents.length,
+    categories: Object.fromEntries(Object.entries(categories).sort(([a], [b]) => a.localeCompare(b))),
+    tools: Object.fromEntries(Object.entries(tools).sort(([a], [b]) => a.localeCompare(b))),
+    observed_duration_ms,
+  };
+}
+
+async function persistHostActivity(): Promise<void> {
+  await mkdir(dirname(ACTIVITY_PATH), { recursive: true });
+  await writeFile(
+    ACTIVITY_PATH,
+    JSON.stringify({ schema_version: 1, summary: hostActivitySummary(), events: activityEvents }, null, 2) + "\n",
+    "utf8",
+  );
+}
+
+function queueHostActivityWrite(): Promise<void> {
+  activityWrite = activityWrite.then(persistHostActivity, persistHostActivity);
+  return activityWrite;
+}
 
 async function runBridge(args: string[], cwd: string, signal?: AbortSignal): Promise<string> {
   try {
@@ -275,6 +331,36 @@ function projectForPi(text: string): string {
 }
 
 export default function traceciteTools(pi: ExtensionAPI) {
+  pi.on("tool_call", async (event) => {
+    activityStarted.set(event.toolCallId, Date.now());
+  });
+
+  pi.on("tool_result", async (event) => {
+    const started = activityStarted.get(event.toolCallId) ?? Date.now();
+    activityStarted.delete(event.toolCallId);
+    const row: HostToolActivity = {
+      tool: event.toolName,
+      category: classifyHostTool(event.toolName),
+      duration_ms: Math.max(0, Date.now() - started),
+      status: event.isError ? "error" : "ok",
+      metadata: event.toolName === "bash" ? { opaque: true } : undefined,
+    };
+    activityEvents.push(row);
+    if (activityEvents.length > 512) activityEvents.splice(0, activityEvents.length - 512);
+    await queueHostActivityWrite();
+    const baseDetails =
+      event.details && typeof event.details === "object" && !Array.isArray(event.details)
+        ? (event.details as Record<string, unknown>)
+        : {};
+    return {
+      details: {
+        ...baseDetails,
+        tracecite_host_activity: row,
+        tracecite_host_activity_summary: hostActivitySummary(),
+      },
+    } as any;
+  });
+
   pi.registerTool({
     name: "tracecite_search",
     label: "TraceCite Search",
