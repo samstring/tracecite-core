@@ -71,3 +71,16 @@ def test_support_aware_scoring_is_part_of_canonical_root_cause_scorer(tmp_path: 
     assert score["quality"]["dimension_recall"] == 1.0
     assert score["quality"]["evidence_boundary_recall"] == 1.0
     assert score["quality"]["support_level_accuracy"] == 1.0
+
+
+
+def test_scale_case_gold_does_not_require_hidden_upstream_truth() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for case_name in ("kubernetes-139417", "kubernetes-140268"):
+        case_dir = root / "benchmarks" / "agent-investigation" / "scale-cases" / case_name
+        gold = json.loads((case_dir / "gold.json").read_text(encoding="utf-8"))
+        sufficiency = gold["evidence_sufficiency"]
+        assert sufficiency["upstream_contributor"] == "unsupported_from_log"
+        assert sufficiency["fix_alignment"] == "unsupported_from_log"
+        assert gold["root_cause"]["upstream_contributor"]["boundary_patterns"]
+        assert gold["root_cause"]["fix_alignment"]["boundary_patterns"]

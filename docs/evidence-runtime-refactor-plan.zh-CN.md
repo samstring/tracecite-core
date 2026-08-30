@@ -437,7 +437,7 @@ stop recommendation
 
 # F. Host Observation Contract
 
-状态：**IN PROGRESS**
+状态：**F1 COMPLETE；F2 DEFERRED UNTIL AFTER I**
 
 > 此层不进入 Core Evidence state。
 
@@ -483,7 +483,7 @@ Root cause likely X
 
 # G. Evaluation Contract
 
-状态：**IN PROGRESS**
+状态：**COMPLETE**
 
 已有实验 overlay：support-aware scoring。
 
@@ -508,9 +508,9 @@ unsupported_from_log
 
 ### 验收
 
-- [ ] `139417` 不要求 Agent 为日志无法建立的 upstream cause 编确定结论。
-- [ ] `140268` 不要求日志直接证明不存在的 internal lookup implementation。
-- [ ] correctness truth 与 known upstream fix 可区分：known fix 不能自动等于 supplied-log-supported truth。
+- [x] `139417` 不要求 Agent 为日志无法建立的 upstream cause 编确定结论。
+- [x] `140268` 不要求日志直接证明不存在的 internal lookup implementation。
+- [x] correctness truth 与 known upstream fix 可区分：known fix 不能自动等于 supplied-log-supported truth。
 
 ## G3. Infra validity 独立
 
@@ -523,14 +523,14 @@ run_validity
 
 ### 验收
 
-- [ ] 429/overload 不计 product loss。
-- [ ] contaminated run 可用于 trajectory diagnosis，但不能进入 clean A/B win/loss。
+- [x] 429/overload 不计 product loss。
+- [x] contaminated run 可用于 trajectory diagnosis，但不能进入 clean A/B win/loss。
 
 ---
 
 # H. 文档与 Adapter 收敛
 
-状态：**IN PROGRESS**
+状态：**CORE COMPLETE；H3 上层同步冻结至 I/J 后**
 
 ## H1. Agent integration docs
 
@@ -555,8 +555,8 @@ run_validity
 
 在 Core canonical contract + 4-case validation 稳定前：
 
-- [ ] 不更新 MCP。
-- [ ] 不更新 Mobile。
+- [x] 不更新 MCP。
+- [x] 不更新 Mobile。
 
 Core 稳定后再一次性同步，避免上层跟随中间重构反复变化。
 
@@ -564,7 +564,7 @@ Core 稳定后再一次性同步，避免上层跟随中间重构反复变化。
 
 # I. 4-Case 验证 Gate
 
-状态：**当前旧 session-progress 实验仍在运行/收尾；新架构实现后需重跑。**
+状态：**READY；最终实现已收口，但新 case 尚未运行。先 smoke 第一个小 case。**
 
 固定 case：
 
@@ -657,15 +657,15 @@ wall time
 
 以下内容不再作为长期架构继续叠加：
 
-- [ ] 独立 `RetrievalSessionTelemetry` sidecar；
-- [ ] 仅 TraceCite-local `session_progress` 作为完整 investigation solution；
-- [ ] `ready_for_reasoning`；
-- [ ] `stop_recommended`；
-- [ ] Runtime 自动决定 next investigation entity；
-- [ ] 为保旧 API 建 `v2` 并行模型；
-- [ ] benchmark-specific skill hints；
-- [ ] 禁止 Agent 使用 native tools 来“强制 TraceCite 赢 benchmark”；
-- [ ] 为了 token saving 牺牲 answer/evidence correctness。
+- [x] 独立 `RetrievalSessionTelemetry` sidecar；
+- [x] 仅 TraceCite-local `session_progress` 作为完整 investigation solution；
+- [x] `ready_for_reasoning`；
+- [x] `stop_recommended`；
+- [x] Runtime 自动决定 next investigation entity；
+- [x] 为保旧 API 建 `v2` 并行模型；
+- [x] benchmark-specific skill hints；
+- [x] 禁止 Agent 使用 native tools 来“强制 TraceCite 赢 benchmark”；
+- [x] 为了 token saving 牺牲 answer/evidence correctness。
 
 ---
 
@@ -688,21 +688,18 @@ Remaining risk: <还没证明什么>
 
 ## 5. 当前立即执行顺序
 
-下一批代码工作严格按：
+代码与 contract 收口完成后，验证严格按：
 
-1. **A1** 删除 `EvidenceProgress` 越界 stop/readiness 语义；
-2. **B1** 把 retrieval telemetry 合入唯一 RetrievalSession，并删除 sidecar；
-3. **C** 定义并落地 canonical API，优先 `materialize/replay/aggregate`；
-4. **D** `investigate -> traverse`；
-5. **F1** Pi Host Tool Activity Ledger；
-6. **G** 正式 support-aware evaluator；
-7. 文档/skill 收敛；
-8. 跑 4-case 单次验证；
-9. 再决定是否继续 checkpoint 实验；
-10. 最后才做 repeated A/B 与 MCP/Mobile 同步。
+1. 先完成 G2/G3、Host activity 分类与 benchmark workflow 最终化；
+2. 跑 post-finalization canonical unit/architecture gate；
+3. **只跑第一个小 case `kubernetes-140039-runc-5347-scale` smoke paired A/B**；
+4. smoke 的入口、trajectory telemetry、canonical scorer、`task_result/run_validity` 与 artifact 全部正常后，才跑 4-case 单轮；
+5. 4-case 单轮方向有效后，才跑 `4 × 3` paired stability；
+6. stability 串行、短 arm 间隔；不再使用固定 45 秒 repeat delay；
+7. F2 optional checkpoint 是否继续实验，必须由单独 A/B 决定，不作为 Core gate；
+8. MCP / Mobile 最后同步。
 
 任何新想法若不属于上述工作项，先更新本文档说明“为什么需要新增工作项”，再实现。
-
 ---
 
 ## 6. 2026-08-30 本轮 canonical 收敛证据回填
@@ -787,3 +784,22 @@ Remaining risk: MCP/Mobile 依然按 H3/K 明确暂缓，不能提前同步。
 - Host/eval one-shot cleanup commit: `6f4ec266b5468b891d006ec03ca4e33fd112bd9d`。
 - 当前进入 I 前的原则：**先跑第一个小 case `kubernetes-140039-runc-5347-scale`；确认入口、Host activity、canonical scorer 与 A/B artifact 正常后，才允许扩到其余 3 case。**
 
+
+
+### G2 — Hidden-answer pressure removed from case truth
+
+Status: **COMPLETE**  
+Commit: `__FINAL_IMPL_SHA__`  
+Tests: 新增 case-level regression，锁定 `kubernetes-139417` 与 `kubernetes-140268` 的 `upstream_contributor/fix_alignment=unsupported_from_log` 与 boundary patterns；post-finalization gate 尚未运行。  
+Why: supplied log 无法直接证明 known upstream implementation/fix 时，不应把 upstream knowledge 伪装成日志 direct truth。  
+Behavior change: correctness 仍可保留 known upstream fix reference，但 canonical scoring 根据 supplied-evidence support level 奖励明确 boundary，而不是强迫 Agent 编出确定结论。  
+Remaining risk: 真实回答是否稳定遵守 boundary 仍需 I/J。
+
+### G3 — Infra validity separated from task result
+
+Status: **COMPLETE**  
+Commit: `__FINAL_IMPL_SHA__`  
+Tests: 新增 `tests/test_benchmark_run_result.py`；post-finalization gate 尚未运行。  
+Why: 429/402/502/503/504、provider overload 与 timeout 会污染 paired A/B，不能自动算 TraceCite/native product loss。  
+Behavior change: `benchmarks/agent-investigation/run_result.py` 为每个 arm 生成独立 `task_result` 与 `run_validity`；provider contamination、timeout、host nonzero exit 与 answer quality 分离；trajectory 同时输出 core evidence 首次到达、post-core tools、native/TraceCite/opaque-shell 计数与 low-novelty ratio。  
+Remaining risk: provider-clean paired sample 数量仍由 I/J 决定。

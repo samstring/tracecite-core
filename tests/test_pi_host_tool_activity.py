@@ -18,6 +18,7 @@ def test_pi_extension_observes_native_and_tracecite_tools() -> None:
     assert 'tool === "grep"' in text
     assert 'tool === "read"' in text
     assert 'tool === "bash"' in text
+    assert 'return "opaque_shell"' in text
     assert 'metadata: event.toolName === "bash" ? { opaque: true }' in text
     assert 'TRACECITE_PI_ACTIVITY' in text
 

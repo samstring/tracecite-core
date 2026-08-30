@@ -16,7 +16,7 @@ const SESSION =
   join(tmpdir(), `tracecite-pi-${process.pid}`, "retrieval-session.json");
 
 
-type HostToolCategory = "tracecite_evidence" | "native_search" | "native_read" | "native_other" | "other";
+type HostToolCategory = "tracecite_evidence" | "native_search" | "native_read" | "opaque_shell" | "native_other" | "other";
 type HostToolActivity = {
   tool: string;
   category: HostToolCategory;
@@ -35,7 +35,8 @@ function classifyHostTool(tool: string): HostToolCategory {
   if (tool === "tracecite_search" || tool === "tracecite_expand") return "tracecite_evidence";
   if (tool === "grep" || tool === "find") return "native_search";
   if (tool === "read") return "native_read";
-  if (tool === "bash" || tool === "ls") return "native_other";
+  if (tool === "bash") return "opaque_shell";
+  if (tool === "ls") return "native_other";
   return "other";
 }
 
