@@ -59,6 +59,19 @@ function compactEvidence(value: any) {
   };
 }
 
+function compactEvidenceRef(value: any) {
+  if (!value || typeof value !== "object") return undefined;
+  const start = Number(value.start_line || 0);
+  const end = Number(value.end_line || start || 0);
+  const source = String(value.source_path || "").split(/[\\/]/).pop() || "evidence";
+  const ref = start > 0
+    ? `${source}:L${start}${end > start ? `-L${end}` : ""}`
+    : undefined;
+  const uri = shorten(value.uri, 220);
+  if (!ref && !uri) return undefined;
+  return ref ? { ref } : { uri };
+}
+
 function sourceSha256(rows: any[]): string | undefined {
   const values = Array.from(new Set(
     rows
@@ -171,7 +184,7 @@ function retrievalGuidance(status: string, coverage: any): string | undefined {
   const added = Number(coverage?.new_evidence || 0);
   const repeated = Number(coverage?.repeated_evidence || 0);
   if (status === "no_new_evidence" || (added === 0 && repeated > 0)) {
-    return "This call exposed no new evidence; repeated content was suppressed. Reuse known refs, expand, or replay unless the evidence target materially changes.";
+    return "This call exposed no new evidence; repeated bodies were suppressed. matched_existing_evidence identifies which previously delivered refs matched this call; expand or replay only when you need that old text again.";
   }
   if (status === "no_match") {
     return "No evidence matched this query. This is a retrieval fact, not a conclusion about the investigation. Check literal-vs-regex syntax and identity scope before changing retrieval paths.";
@@ -209,10 +222,14 @@ function projectForPi(text: string): string {
       ? payload.missing_evidence.map(compactGap)
       : [];
     const evidence = rawEvidence.map(compactEvidence);
+    const matchedExistingEvidence = Array.isArray(data.matched_existing_evidence)
+      ? data.matched_existing_evidence.slice(0, 50).map(compactEvidenceRef).filter(Boolean)
+      : [];
 
     return JSON.stringify({
       status,
       evidence,
+      matched_existing_evidence: matchedExistingEvidence.length ? matchedExistingEvidence : undefined,
       source_sha256,
       coverage,
       progress,
@@ -262,9 +279,9 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_search",
     label: "TraceCite Search",
     description:
-      "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns only evidence not already exposed in this Pi retrieval session, plus counts for repeated evidence. Literal matching is the default; set regex=true for regex syntax. It does not plan the investigation, decide root cause, or decide when the Agent should stop.",
+      "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns only evidence not already exposed in this Pi retrieval session; repeated evidence bodies are suppressed while compact refs identify which old evidence matched. Literal matching is the default; set regex=true for regex syntax. It does not plan the investigation, decide root cause, or decide when the Agent should stop.",
     promptSnippet:
-      "tracecite_search returns session-scoped evidence novelty and identity-safety facts. Repeated evidence may be represented only by counts; use regex=true for regex operators. You remain responsible for hypotheses, tool choice, investigation order, conclusions, and stopping.",
+      "tracecite_search returns session-scoped evidence novelty and identity-safety facts. Repeated evidence bodies are suppressed, but matched_existing_evidence reports compact refs for old evidence matched by the current query. Use regex=true for regex operators. You remain responsible for hypotheses, tool choice, investigation order, conclusions, and stopping.",
     promptGuidelines: [
       "Treat a search hit as an observation, not support for a causal hypothesis by itself.",
       "For large evidence files, prefer TraceCite over broad native grep/read used only to discover evidence locations.",
@@ -273,7 +290,8 @@ export default function traceciteTools(pi: ExtensionAPI) {
       "If identifier_only_correlation_safe=false, use minimum_safe_correlation_key and distinguish competing observed sibling entities before correlating timelines.",
       "Use tracecite_expand or a narrow native read before making exact claims from a compact search preview.",
       "Do not repeat the same immutable-source search merely to re-read evidence; reuse refs, expand, or replay it.",
-      "A zero-new-evidence result only says this retrieval added nothing new to the current session; search again only for a materially different evidence target.",
+      "matched_existing_evidence means the current query matched previously delivered evidence; it does not mean that evidence is understood, important, causal, or sufficient.",
+      "A zero-new-evidence result only says this retrieval added nothing new to the current session; it does not say the investigation is complete.",
       "When a search has high fanout, prefer an identity-scoped query over increasing output or dumping the source with native grep.",
     ],
     parameters: Type.Object({
