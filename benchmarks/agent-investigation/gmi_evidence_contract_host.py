@@ -14,11 +14,13 @@ from tracecite.runtime import (
     QueryTarget,
     RangeTarget,
     SourceTarget,
-    assess_test,
-    latest_test_assessments,
     retrieve,
 )
-from tracecite.runtime.test_assessment import confirm_test_evidence
+from tracecite.runtime.test_assessment import (
+    assess_test,
+    confirm_test_evidence,
+    latest_test_assessments,
+)
 
 
 # This file is a benchmark harness, not TraceCite product architecture. It keeps
