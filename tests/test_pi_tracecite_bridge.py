@@ -111,9 +111,10 @@ def test_new_query_can_point_to_old_evidence_without_resending_its_body(tmp_path
     assert second["evidence"] == []
     matched = second["data"]["matched_existing_evidence"]
     assert len(matched) == 1
+    assert matched[0]["uri"] == first["evidence"][0]["uri"]
     assert matched[0]["start_line"] == 2
     assert matched[0]["end_line"] == 2
-    assert matched[0]["source_path"].endswith("runtime.log")
+    assert matched[0]["source_path"]
     assert "label" not in matched[0]
 
 
