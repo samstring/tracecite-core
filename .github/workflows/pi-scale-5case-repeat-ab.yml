@@ -1,0 +1,443 @@
+name: Pi Scale 5-Case Repeated A/B
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/pi-scale-5case-repeat-ab.yml
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - case_id: kubernetes-140039-runc-5347-scale
+            case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347
+            base_order: native tracecite
+          - case_id: kubernetes-139417-scale
+            case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-139417
+            base_order: tracecite native
+          - case_id: kubernetes-140848-scale
+            case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-140848
+            base_order: native tracecite
+          - case_id: kubernetes-140268
+            case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-140268
+            base_order: tracecite native
+          - case_id: kubernetes-140628-scale
+            case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-140628
+            base_order: native tracecite
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      CASE_ID: ${{ matrix.case_id }}
+      CASE_DIR: ${{ matrix.case_dir }}
+      BASE_ORDER: ${{ matrix.base_order }}
+      REPEATS: "3"
+      RESULT_ROOT: /tmp/pi-scale-repeat-ab/${{ matrix.case_id }}
+      PREP: /tmp/pi-scale-repeat-ab/${{ matrix.case_id }}/prepared
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev]"
+          test -f "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md"
+          pi --help > /tmp/pi-help.txt
+          grep -q -- '--skill' /tmp/pi-help.txt
+
+      - name: Verify benchmark and retrieval regressions
+        run: |
+          python -m pytest -q \
+            tests/test_retrieval_guidance.py \
+            tests/test_session_novelty_regressions.py \
+            tests/test_pi_ab_benchmark_policy.py \
+            tests/test_pi_ab_runtime.py
+
+      - name: Configure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          if not model:
+              raise SystemExit('BENCH_MODEL is empty')
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['OPENAI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Prepare case once
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT_ROOT"
+          mkdir -p "$RESULT_ROOT" "$PREP"
+          python -m tracecite.root_cause_benchmarking validate "$CASE_DIR" > "$RESULT_ROOT/validate.json"
+          python -m tracecite.root_cause_benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT_ROOT/prepare.json"
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          python - "$PREPARED" >> "$GITHUB_ENV" <<'PY'
+          import json, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text())
+          inputs = data.get('inputs') or []
+          if len(inputs) != 1:
+              raise SystemExit(f'expected one input, got {len(inputs)}')
+          f = Path(inputs[0]['path']).resolve()
+          print(f'INPUT_ROOT={f.parent}')
+          print(f'INPUT_FILE={f.name}')
+          print(f'INPUT_BYTES={f.stat().st_size}')
+          print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
+          PY
+
+      - name: Run three paired A/B repetitions
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          BASE_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, investigation order, conclusions, and when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly state when the supplied evidence is insufficient.'
+
+          reverse_order() {
+            if [[ "$1" == "native tracecite" ]]; then
+              echo "tracecite native"
+            else
+              echo "native tracecite"
+            fi
+          }
+
+          run_arm() {
+            arm="$1"
+            repdir="$2"
+            mkdir -p "$repdir/pi-${arm}-session"
+            cd "$INPUT_ROOT"
+            set +e
+            if [[ "$arm" == native ]]; then
+              timeout -k 30s 600s pi \
+                --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+                --thinking off --mode text --print \
+                --session-dir "$repdir/pi-native-session" \
+                --tools read,bash,grep,find,ls \
+                --no-extensions --no-skills --no-prompt-templates --no-context-files \
+                --system-prompt "$BASE_PROMPT" "$QUESTION" \
+                > "$repdir/pi-native-answer.md" 2> "$repdir/pi-native-stderr.log"
+            else
+              TRACE_PROMPT="$BASE_PROMPT TraceCite tools and the TraceCite skill are available. You must use tracecite_search at least once. TraceCite only provides evidence/retrieval semantics; it does not choose hypotheses, investigation targets, causal conclusions, or stopping for you."
+              TRACECITE_PI_SESSION="$repdir/tracecite-retrieval-session.json" \
+              timeout -k 30s 600s pi \
+                --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+                --thinking off --mode text --print \
+                --session-dir "$repdir/pi-tracecite-session" \
+                --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+                --tools read,bash,grep,find,ls,tracecite_search,tracecite_expand \
+                --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+                --no-prompt-templates --no-context-files \
+                --system-prompt "$TRACE_PROMPT" "$QUESTION" \
+                > "$repdir/pi-tracecite-answer.md" 2> "$repdir/pi-tracecite-stderr.log"
+            fi
+            code=$?
+            set -e
+            echo "$code" > "$repdir/pi-${arm}-exit.txt"
+          }
+
+          for rep in $(seq 1 "$REPEATS"); do
+            repdir="$RESULT_ROOT/repeat-$rep"
+            mkdir -p "$repdir"
+            if (( rep % 2 == 1 )); then
+              order="$BASE_ORDER"
+            else
+              order="$(reverse_order "$BASE_ORDER")"
+            fi
+            echo "$order" > "$repdir/arm-order.txt"
+            first="${order%% *}"
+            second="${order##* }"
+            run_arm "$first" "$repdir"
+            sleep 30
+            run_arm "$second" "$repdir"
+            if (( rep < REPEATS )); then
+              sleep 45
+            fi
+          done
+
+      - name: Convert, score, and summarize each repetition
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for rep in $(seq 1 "$REPEATS"); do
+            repdir="$RESULT_ROOT/repeat-$rep"
+            for arm in native tracecite; do
+              SESSION="$(find "$repdir/pi-${arm}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+              ANSWER="$repdir/pi-${arm}-answer.md"
+              if [[ -z "$SESSION" || ! -f "$ANSWER" ]]; then
+                continue
+              fi
+              python benchmarks/agent-investigation/pi_session_to_transcript.py \
+                "$SESSION" "$ANSWER" "$repdir/pi-${arm}-transcript.jsonl" \
+                --mode "pi-${arm}" --model "$BENCH_MODEL"
+              python -m tracecite.root_cause_benchmarking score \
+                "$CASE_DIR" "$repdir/pi-${arm}-transcript.jsonl" \
+                > "$repdir/pi-${arm}-score.json" || true
+            done
+
+            REP="$rep" REPDIR="$repdir" python - <<'PY'
+          import json, os, re, sys
+          from collections import Counter
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path('benchmarks/agent-investigation').resolve()))
+          from pi_ab_runtime import classify_answer_success, classify_arm_validity
+
+          root = Path(os.environ['REPDIR'])
+          gold = json.loads((Path(os.environ['CASE_DIR']) / 'gold.json').read_text())
+
+          provider_patterns = (
+              ('provider_rate_limited', re.compile(r'\b429\b|rate\s*limit(?:ed)?|overload(?:ed)?', re.I)),
+              ('provider_quota_exhausted', re.compile(r'\b402\b|insufficient\s+balance|quota\s+(?:exhausted|exceeded)', re.I)),
+              ('provider_unavailable', re.compile(r'\b50[234]\b|service\s+unavailable|bad\s+gateway|gateway\s+timeout', re.I)),
+          )
+
+          def provider_failure(raw: str):
+              for kind, pattern in provider_patterns:
+                  if pattern.search(raw):
+                      return kind
+              return None
+
+          def load_arm(name):
+              score_path = root / f'pi-{name}-score.json'
+              transcript_path = root / f'pi-{name}-transcript.jsonl'
+              answer_path = root / f'pi-{name}-answer.md'
+              exit_path = root / f'pi-{name}-exit.txt'
+              stderr_path = root / f'pi-{name}-stderr.log'
+              score = json.loads(score_path.read_text()) if score_path.is_file() else {}
+              quality = score.get('quality') or {}
+              cost = score.get('context_cost') or {}
+              answer = answer_path.read_text(errors='replace') if answer_path.is_file() else ''
+              stderr = stderr_path.read_text(errors='replace') if stderr_path.is_file() else ''
+              transcript_text = transcript_path.read_text(errors='replace') if transcript_path.is_file() else ''
+              session_text = ''
+              session_dir = root / f'pi-{name}-session'
+              if session_dir.is_dir():
+                  for path in session_dir.rglob('*.jsonl'):
+                      try:
+                          session_text += '\n' + path.read_text(errors='replace')
+                      except OSError:
+                          pass
+              combined_diagnostics = '\n'.join((stderr, transcript_text, session_text))
+              exit_code = int(exit_path.read_text().strip()) if exit_path.is_file() else None
+              validity = classify_arm_validity(exit_code, combined_diagnostics)
+              detected = provider_failure(combined_diagnostics)
+              if detected is not None:
+                  valid = False
+                  infrastructure_invalid = True
+                  failure_kind = detected
+              else:
+                  valid = validity.valid_for_comparison
+                  infrastructure_invalid = validity.infrastructure_invalid
+                  failure_kind = validity.failure_kind
+
+              tools = Counter()
+              if transcript_path.is_file():
+                  for line in transcript_text.splitlines():
+                      if not line.strip():
+                          continue
+                      try:
+                          event = json.loads(line)
+                      except json.JSONDecodeError:
+                          continue
+                      if event.get('type') == 'tool':
+                          tools[str(event.get('name') or 'unknown')] += 1
+
+              success = classify_answer_success(score, gold, answer) if valid else None
+              return {
+                  'answer_success': success,
+                  'model_calls': cost.get('model_calls'),
+                  'tool_calls': cost.get('tool_calls'),
+                  'reported_input_tokens': cost.get('reported_input_tokens'),
+                  'reported_cache_read_input_tokens': cost.get('reported_cache_read_input_tokens'),
+                  'reported_output_tokens': cost.get('reported_output_tokens'),
+                  'tool_output_chars': cost.get('tool_output_chars'),
+                  'tool_names': dict(sorted(tools.items())),
+                  'exit_code': exit_code,
+                  'valid_for_comparison': valid,
+                  'infrastructure_invalid': infrastructure_invalid,
+                  'failure_kind': failure_kind,
+                  'diagnostics': {
+                      'dimension_recall': quality.get('dimension_recall'),
+                      'supported_dimension_recall': quality.get('supported_dimension_recall'),
+                      'evidence_marker_recall': quality.get('evidence_marker_recall'),
+                      'citation_accuracy': (quality.get('citation') or {}).get('accuracy'),
+                      'unsupported_claim_hits': quality.get('unsupported_claim_hits'),
+                      'contradiction_hits': quality.get('contradiction_hits'),
+                  },
+              }
+
+          native = load_arm('native')
+          trace = load_arm('tracecite')
+          trace_used = int((trace.get('tool_names') or {}).get('tracecite_search', 0)) >= 1
+          valid = native['valid_for_comparison'] and trace['valid_for_comparison'] and trace_used
+          order_path = root / 'arm-order.txt'
+          report = {
+              'schema_version': 3,
+              'case_id': os.environ['CASE_ID'],
+              'repeat': int(os.environ['REP']),
+              'input_bytes': int(os.environ.get('INPUT_BYTES') or 0),
+              'arm_order': order_path.read_text().strip() if order_path.is_file() else None,
+              'comparison_valid': valid,
+              'required_tracecite_used': trace_used,
+              'native': native,
+              'tracecite': trace,
+          }
+          if valid:
+              report['answer_outcome'] = (
+                  'both_success' if native['answer_success'] and trace['answer_success']
+                  else 'tracecite_only_success' if trace['answer_success']
+                  else 'native_only_success' if native['answer_success']
+                  else 'both_failed'
+              )
+              for metric in ('model_calls','tool_calls','reported_input_tokens','reported_cache_read_input_tokens','reported_output_tokens','tool_output_chars'):
+                  a, b = native.get(metric), trace.get(metric)
+                  if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+                      report[f'{metric}_tracecite_minus_native'] = b - a
+                      if a:
+                          report[f'{metric}_tracecite_vs_native_ratio'] = round(b / a, 4)
+          elif not trace_used:
+              report['comparison_failure_kind'] = 'required_tracecite_not_used'
+          (root / 'comparison.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+          done
+
+      - name: Aggregate case stability
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, statistics
+          from collections import Counter
+          from pathlib import Path
+
+          root = Path(os.environ['RESULT_ROOT'])
+          reports = []
+          for path in sorted(root.glob('repeat-*/comparison.json')):
+              try:
+                  reports.append(json.loads(path.read_text()))
+              except Exception:
+                  pass
+          valid = [item for item in reports if item.get('comparison_valid')]
+          metrics = (
+              'model_calls', 'tool_calls', 'reported_input_tokens',
+              'reported_cache_read_input_tokens', 'reported_output_tokens',
+              'tool_output_chars',
+          )
+
+          def arm_summary(name):
+              rows = [item[name] for item in valid]
+              out = {
+                  'valid_runs': len(rows),
+                  'answer_successes': sum(1 for row in rows if row.get('answer_success') is True),
+                  'answer_success_rate': (
+                      sum(1 for row in rows if row.get('answer_success') is True) / len(rows)
+                      if rows else None
+                  ),
+              }
+              for metric in metrics:
+                  values = [row.get(metric) for row in rows if isinstance(row.get(metric), (int, float))]
+                  if values:
+                      out[metric] = {
+                          'median': statistics.median(values),
+                          'min': min(values),
+                          'max': max(values),
+                          'values': values,
+                      }
+              return out
+
+          pair_deltas = {}
+          for metric in metrics:
+              key = f'{metric}_tracecite_minus_native'
+              values = [item.get(key) for item in valid if isinstance(item.get(key), (int, float))]
+              if values:
+                  pair_deltas[metric] = {
+                      'median_delta': statistics.median(values),
+                      'min_delta': min(values),
+                      'max_delta': max(values),
+                      'values': values,
+                  }
+
+          invalid_reasons = Counter()
+          for item in reports:
+              if item.get('comparison_valid'):
+                  continue
+              for arm in ('native', 'tracecite'):
+                  reason = (item.get(arm) or {}).get('failure_kind')
+                  if reason:
+                      invalid_reasons[f'{arm}:{reason}'] += 1
+              if not item.get('required_tracecite_used', True):
+                  invalid_reasons['tracecite:required_search_not_used'] += 1
+
+          summary = {
+              'schema_version': 1,
+              'case_id': os.environ['CASE_ID'],
+              'input_bytes': int(os.environ.get('INPUT_BYTES') or 0),
+              'requested_repeats': int(os.environ['REPEATS']),
+              'completed_repeats': len(reports),
+              'valid_paired_repeats': len(valid),
+              'invalid_repeats': len(reports) - len(valid),
+              'invalid_reasons': dict(sorted(invalid_reasons.items())),
+              'answer_outcomes': dict(Counter(item.get('answer_outcome') for item in valid)),
+              'native': arm_summary('native'),
+              'tracecite': arm_summary('tracecite'),
+              'paired_tracecite_minus_native': pair_deltas,
+              'stability_sample_sufficient': len(valid) >= 3,
+          }
+          (root / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload repeated A/B artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-scale-repeat-ab-${{ matrix.case_id }}
+          path: /tmp/pi-scale-repeat-ab/${{ matrix.case_id }}
+          if-no-files-found: warn
