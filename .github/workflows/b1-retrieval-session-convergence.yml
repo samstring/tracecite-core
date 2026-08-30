@@ -22,6 +22,8 @@ jobs:
       - name: Apply B1 refactor
         run: |
           rm tests/test_retrieval_telemetry.py
+          rm -f benchmarks/agent-investigation/pi_tracecite_bridge_progress.py
+          rm -f benchmarks/agent-investigation/pi_tracecite_extension_progress.ts
           python - <<'PY'
           from pathlib import Path
           path = Path('scripts/_b1_merge_retrieval_history.py')
@@ -41,6 +43,8 @@ jobs:
           python scripts/check_architecture.py
           test ! -f src/tracecite/runtime/retrieval_telemetry.py
           test ! -f tests/test_retrieval_telemetry.py
+          test ! -f benchmarks/agent-investigation/pi_tracecite_bridge_progress.py
+          test ! -f benchmarks/agent-investigation/pi_tracecite_extension_progress.ts
           ! find . -name '*.telemetry.json' -print -quit | grep -q .
       - name: Commit verified B1 and remove one-shot helpers
         run: |
