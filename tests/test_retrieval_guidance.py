@@ -89,7 +89,6 @@ def _result(*, entity_count: int = 1) -> RetrievalResult:
         progress=EvidenceProgressTracker().snapshot(),
         new_evidence=(),
         repeated_evidence=0,
-        stop_reason=None,
     )
 
 

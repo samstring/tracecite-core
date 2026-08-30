@@ -80,7 +80,8 @@ def test_public_retrieve_owns_structured_context_and_identity_gap(tmp_path: Path
     assert result["missing_evidence"][0]["kind"] == "scope_uniqueness_unverified"
     assert result["missing_evidence"][0]["identifier_value"] == "worker-a"
     assert result["data"]["progress"]["actionable_gaps"] == 1
-    assert result["data"]["progress"]["stop"]["recommended"] is False
+    assert "stop" not in result["data"]["progress"]
+    assert "stop_reason" not in result["data"]
     assert result["data"]["evidence_integrity"]["scoped_identity"]
 
     agent = project(result, profile="agent")

@@ -72,7 +72,8 @@ def test_pi_bridge_uses_independent_retrieval_session_and_persists_novelty(tmp_p
     assert repeated["data"]["matched_existing_evidence"]
     assert repeated["data"]["matched_existing_evidence"][0]["start_line"] == 2
     assert "label" not in repeated["data"]["matched_existing_evidence"][0]
-    assert repeated["data"]["stop_reason"]["kind"] == "no_new_evidence"
+    assert "stop_reason" not in repeated["data"]
+    assert repeated["data"]["progress"]["consecutive_no_growth"] >= 1
 
 
 def test_new_query_can_point_to_old_evidence_without_resending_its_body(tmp_path: Path) -> None:
@@ -156,5 +157,6 @@ def test_pi_bridge_expand_tracks_immutable_range_without_investigation(tmp_path:
     )
     assert repeated["status"] == "no_new_evidence"
     assert repeated["evidence"] == []
-    assert repeated["data"]["stop_reason"]["kind"] == "no_new_evidence"
+    assert "stop_reason" not in repeated["data"]
+    assert repeated["data"]["progress"]["consecutive_no_growth"] >= 1
     assert not session.exists()

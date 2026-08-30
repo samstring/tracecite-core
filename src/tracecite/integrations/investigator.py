@@ -7,7 +7,7 @@ from typing import Any, Callable, Sequence
 
 from tracecite.extension.evidence import EntityRef
 from tracecite.extension.retrieval import EvidenceProvider
-from tracecite.runtime import investigate as runtime_investigate
+from tracecite.runtime import traverse as runtime_traverse
 from tracecite.runtime.correlation import EvidenceNode
 from tracecite.runtime.traversal_frontier import TraversalLimits
 from tracecite.runtime.traversal import EvidenceTraversal
@@ -57,8 +57,8 @@ def investigate(
     }
     if clock is not None:
         kwargs["clock"] = clock
-    canonical = runtime_investigate(providers, **kwargs)
-    investigation = canonical.investigation
+    canonical = runtime_traverse(providers, **kwargs)
+    investigation = canonical.traversal
     package = build_evidence_package(
         investigation.graph,
         investigation.grouping,

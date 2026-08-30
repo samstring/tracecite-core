@@ -80,7 +80,8 @@ def test_range_integrity_is_canonical_and_projection_only_preserves_it(tmp_path:
     assert result["missing_evidence"][0]["kind"] == "scope_uniqueness_unverified"
     assert result["missing_evidence"][0]["identifier_value"] == "device-a"
     assert result["data"]["progress"]["actionable_gaps"] == 1
-    assert result["data"]["progress"]["stop"]["recommended"] is False
+    assert "stop" not in result["data"]["progress"]
+    assert "stop_reason" not in result["data"]
 
     projected = project(result, profile="agent")
     assert projected["data"]["evidence_integrity"] == result["data"]["evidence_integrity"]

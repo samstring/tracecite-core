@@ -88,8 +88,8 @@ def test_provider_namespace_is_the_progress_identity_across_retrievals(tmp_path)
     assert second.status == "no_new_evidence"
     assert second.new_evidence == ()
     assert second.repeated_evidence == 2
-    assert second.stop_reason is not None
-    assert second.stop_reason.kind == "no_new_evidence"
+    assert not hasattr(second, "stop_reason")
+    assert second.acquisition_end_reason is None
 
 
 def test_duplicate_provider_names_are_rejected_as_ambiguous_namespaces(tmp_path) -> None:
