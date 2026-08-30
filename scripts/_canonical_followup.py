@@ -16,13 +16,27 @@ if needle not in text:
 text = text.replace(needle, replacement, 1)
 runtime_init.write_text(text, encoding="utf-8")
 
-# Tests must use the new traversal name. InvestigationStore remains valid only
-# as optional audit/work state, not as Evidence memory.
+# Tests use the new traversal contract and explicitly prove that audit history is
+# not migrated back into canonical retrieval novelty.
 path = ROOT / "tests/test_runtime_agent_api.py"
 text = path.read_text(encoding="utf-8")
 text = text.replace("    investigate,\n", "    traverse,\n")
 text = text.replace("investigate(", "traverse(")
+text = text.replace("result.investigation", "result.traversal")
+text = text.replace(
+    "def test_legacy_audit_progress_migrates_once_when_sidecar_is_missing(tmp_path) -> None:",
+    "def test_audit_history_is_not_migrated_into_retrieval_novelty(tmp_path) -> None:",
+)
+text = text.replace(
+    '    assert migrated.status == "no_new_evidence"\n    assert migrated.new_evidence == ()\n',
+    '    assert migrated.status == "ok"\n    assert migrated.new_evidence\n',
+)
 path.write_text(text, encoding="utf-8")
+
+routing_test = ROOT / "tests/test_evidence_routing.py"
+text = routing_test.read_text(encoding="utf-8")
+text = text.replace('["next_mode"] == "investigate"', '["next_mode"] == "focused"')
+routing_test.write_text(text, encoding="utf-8")
 
 # A session-scoped canonical retrieval must never share an InvestigationState
 # path: this protects the single-owner invariant instead of migrating audit data
