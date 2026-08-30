@@ -20,7 +20,18 @@ jobs:
         with:
           python-version: '3.11'
       - name: Apply B1 refactor
-        run: python scripts/_b1_merge_retrieval_history.py
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/_b1_merge_retrieval_history.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'assert not list(tmp_path.rglob("*.telemetry.json"))'
+          new = 'assert not list(tmp_path.rglob("*" + "." + "telemetry" + "." + "json"))'
+          if old not in text:
+              raise SystemExit('B1 helper patch anchor missing')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          python scripts/_b1_merge_retrieval_history.py
       - name: Verify single session owner
         run: |
           python -m pip install -e . pytest
