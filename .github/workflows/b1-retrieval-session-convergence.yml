@@ -21,6 +21,7 @@ jobs:
           python-version: '3.11'
       - name: Apply B1 refactor
         run: |
+          rm tests/test_retrieval_telemetry.py
           python - <<'PY'
           from pathlib import Path
           path = Path('scripts/_b1_merge_retrieval_history.py')
@@ -36,9 +37,10 @@ jobs:
         run: |
           python -m pip install -e . pytest
           python -m compileall -q src/tracecite/runtime
-          pytest -q tests/test_runtime_session_retrieval.py tests/test_session_novelty_regressions.py tests/test_runtime_agent_api.py tests/test_runtime_boundary.py tests/test_retrieval_telemetry.py
+          pytest -q tests/test_runtime_session_retrieval.py tests/test_session_novelty_regressions.py tests/test_runtime_agent_api.py tests/test_runtime_boundary.py
           python scripts/check_architecture.py
           test ! -f src/tracecite/runtime/retrieval_telemetry.py
+          test ! -f tests/test_retrieval_telemetry.py
           ! find . -name '*.telemetry.json' -print -quit | grep -q .
       - name: Commit verified B1 and remove one-shot helpers
         run: |
