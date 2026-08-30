@@ -1,4 +1,4 @@
-"""Adapters exposing TraceCite Runtime to external Agent hosts."""
+"""Adapters exposing TraceCite Evidence Runtime to external Agent hosts."""
 
 from .agent_profile import (
     AgentCapabilities,
@@ -20,6 +20,7 @@ from .context_engine import (
     ContextStateStore,
     project_search_delta,
 )
+from .tool_activity import ToolActivityEvent, ToolActivityLedger, ToolCategory
 
 __all__ = [
     "AgentCapabilities",
@@ -30,6 +31,9 @@ __all__ = [
     "ContextStateStore",
     "Projection",
     "ProjectionProfile",
+    "ToolActivityEvent",
+    "ToolActivityLedger",
+    "ToolCategory",
     "get_agent_profile",
     "prefer_smaller_agent_view",
     "profile_names",
