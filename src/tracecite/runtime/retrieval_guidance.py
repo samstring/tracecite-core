@@ -6,7 +6,7 @@ Evidence, provenance, coverage, uncertainty, and mechanical identity-safety
 facts, while the Agent decides what to investigate next.
 
 The old public function name is retained temporarily for compatibility, but it
-no longer plans, ranks, or recommends retrieval actions.
+no longer plans, ranks, recommends retrieval actions, or emits stop advice.
 """
 
 from __future__ import annotations
@@ -24,12 +24,7 @@ def _observed_sibling_entities(
     limit: int = 8,
     reference_limit: int = 3,
 ) -> list[dict[str, Any]]:
-    """Project bounded sibling identities already observed by verification.
-
-    These rows are navigation/provenance facts only. A sibling entity being
-    present in the same source family does not establish that it reuses the
-    ambiguous identifier or that it contributes to a failure.
-    """
+    """Project bounded sibling identities already observed by verification."""
 
     rows: list[dict[str, Any]] = []
     for raw in item.get("sibling_entities") or []:
@@ -159,7 +154,7 @@ def prioritize_actionable_retrieval(result: RetrievalResult) -> RetrievalResult:
         progress=result.progress,
         new_evidence=result.new_evidence,
         repeated_evidence=result.repeated_evidence,
-        stop_reason=result.stop_reason,
+        acquisition_end_reason=result.acquisition_end_reason,
     )
     return evidence_only(enriched)
 
