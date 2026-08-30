@@ -1,0 +1,180 @@
+name: Pi Agent Scale Priority Forced TraceCite A/B
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/pi-agent-scale-priority-forced-tracecite.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-agent-scale-priority-forced-tracecite
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - { case_id: kubernetes-140039-runc-5347-scale, case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347 }
+          - { case_id: kubernetes-140268-scale, case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-140268 }
+          - { case_id: kubernetes-140628-scale, case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-140628 }
+          - { case_id: kubernetes-140848-scale, case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-140848 }
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      CASE_ID: ${{ matrix.case_id }}
+      CASE_DIR: ${{ matrix.case_dir }}
+      RESULT: /tmp/pi-scale-priority-${{ matrix.case_id }}
+      PREP: /tmp/pi-scale-priority-${{ matrix.case_id }}/prepared
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi, TraceCite, and ripgrep
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev]"
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ripgrep
+          fi
+
+      - name: Configure GMI model for Pi
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          if not model:
+              raise SystemExit('BENCH_MODEL is empty')
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['OPENAI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model, 'name': model, 'reasoning': False, 'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000, 'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Prepare case
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT"
+          mkdir -p "$RESULT" "$PREP"
+          python -m tracecite.root_cause_benchmarking validate "$CASE_DIR" > "$RESULT/validate.json"
+          python -m tracecite.root_cause_benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT/prepare.json"
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          python - "$PREPARED" >> "$GITHUB_ENV" <<'PY'
+          import json, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text())
+          inputs = data.get('inputs') or []
+          if len(inputs) != 1:
+              raise SystemExit(f'expected one input, got {len(inputs)}')
+          f = Path(inputs[0]['path']).resolve()
+          print(f'INPUT_ROOT={f.parent}')
+          print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
+          PY
+
+      - name: Run Pi native A arm
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          SYSTEM_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, investigation order, and the final conclusion. Use only the native tools available to you. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly say when the supplied evidence is insufficient for a deeper claim.'
+          mkdir -p "$RESULT/pi-native-session"
+          cd "$INPUT_ROOT"
+          set +e
+          timeout 900s pi --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" --thinking off --mode text --print --session-dir "$RESULT/pi-native-session" --tools read,bash,grep,find,ls --no-extensions --no-skills --no-prompt-templates --no-context-files --system-prompt "$SYSTEM_PROMPT" "$QUESTION" > "$RESULT/pi-native-answer.md" 2> "$RESULT/pi-native-stderr.log"
+          echo "$?" > "$RESULT/pi-native-exit.txt"
+          set -e
+
+      - name: Run Pi forced TraceCite B arm
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          SYSTEM_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, investigation order, stop decisions, and the final conclusion. Native tools and TraceCite tools are available. You MUST use tracecite_search at least once as a real part of the evidence investigation before giving the final answer. Use tracecite_expand when useful. TraceCite provides evidence, provenance, bounded context, session novelty, deduplication and replay; it does not decide root cause or when you should stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly say when the supplied evidence is insufficient for a deeper claim.'
+          mkdir -p "$RESULT/pi-tracecite-session"
+          cd "$INPUT_ROOT"
+          set +e
+          timeout 900s pi --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" --thinking off --mode text --print --session-dir "$RESULT/pi-tracecite-session" --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" --tools read,bash,grep,find,ls,tracecite_search,tracecite_expand --no-skills --no-prompt-templates --no-context-files --system-prompt "$SYSTEM_PROMPT" "$QUESTION" > "$RESULT/pi-tracecite-answer.md" 2> "$RESULT/pi-tracecite-stderr.log"
+          echo "$?" > "$RESULT/pi-tracecite-exit.txt"
+          set -e
+
+      - name: Convert, score, and validate forced TraceCite use
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arm in native tracecite; do
+            SESSION="$(find "$RESULT/pi-${arm}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+            ANSWER="$RESULT/pi-${arm}-answer.md"
+            if [[ -z "$SESSION" || ! -f "$ANSWER" ]]; then continue; fi
+            python benchmarks/agent-investigation/pi_session_to_transcript.py "$SESSION" "$ANSWER" "$RESULT/pi-${arm}-transcript.jsonl" --mode "pi-${arm}" --model "$BENCH_MODEL"
+            python -m tracecite.root_cause_benchmarking score "$CASE_DIR" "$RESULT/pi-${arm}-transcript.jsonl" > "$RESULT/pi-${arm}-score.json" || true
+          done
+          python - <<'PY'
+          import json, os, sys
+          from collections import Counter
+          from pathlib import Path
+          sys.path.insert(0, str(Path('benchmarks/agent-investigation').resolve()))
+          from pi_ab_runtime import classify_arm_validity
+          root = Path(os.environ['RESULT'])
+          def arm(name):
+              sp = root / f'pi-{name}-score.json'; tp = root / f'pi-{name}-transcript.jsonl'; ep = root / f'pi-{name}-exit.txt'; errp = root / f'pi-{name}-stderr.log'
+              score = json.loads(sp.read_text()) if sp.is_file() else {}; q = score.get('quality') or {}; c = score.get('context_cost') or {}; tools = Counter()
+              if tp.is_file():
+                  for line in tp.read_text(errors='replace').splitlines():
+                      if not line.strip(): continue
+                      e = json.loads(line)
+                      if e.get('type') == 'tool': tools[str(e.get('name') or 'unknown')] += 1
+              code = int(ep.read_text().strip()) if ep.is_file() else None; stderr = errp.read_text(errors='replace') if errp.is_file() else ''; validity = classify_arm_validity(code, stderr)
+              valid = validity.valid_for_comparison; failure = validity.failure_kind; required = True
+              if name == 'tracecite' and tools.get('tracecite_search', 0) < 1:
+                  valid = False; required = False; failure = 'required_tracecite_not_used'
+              return {'exit_code':code,'valid_for_comparison':valid,'infrastructure_invalid':validity.infrastructure_invalid,'failure_kind':failure,'required_tracecite_used':required,'raw_passed':score.get('passed') if valid else None,'scored_raw_passed':score.get('passed'),'tool_names':dict(sorted(tools.items())),'model_calls':c.get('model_calls'),'tool_calls':c.get('tool_calls'),'reported_input_tokens':c.get('reported_input_tokens'),'reported_cache_read_input_tokens':c.get('reported_cache_read_input_tokens'),'reported_output_tokens':c.get('reported_output_tokens'),'tool_output_chars':c.get('tool_output_chars'),'dimension_recall':q.get('dimension_recall'),'supported_dimension_recall':q.get('supported_dimension_recall'),'citation_accuracy':(q.get('citation') or {}).get('accuracy')}
+          native = arm('native'); trace = arm('tracecite')
+          out = {'schema_version':1,'suite_id':'pi-scale-priority-forced-tracecite-v1','case_id':os.environ['CASE_ID'],'comparison_valid':native['valid_for_comparison'] and trace['valid_for_comparison'],'tracecite_use_required':True,'native':native,'tracecite':trace}
+          (root/'comparison.json').write_text(json.dumps(out, indent=2, sort_keys=True)+'\n'); print(json.dumps(out, indent=2, sort_keys=True))
+          if not out['comparison_valid']: raise SystemExit('Invalid A/B pair')
+          PY
+
+      - name: Upload case comparison artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-scale-priority-${{ matrix.case_id }}
+          path: /tmp/pi-scale-priority-${{ matrix.case_id }}
+          if-no-files-found: warn
