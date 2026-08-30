@@ -150,7 +150,7 @@ J. 再同步 MCP / Mobile
 
 # A. 删除 Runtime 越界语义
 
-状态：**TODO**
+状态：**COMPLETE**
 
 ## A1. 删除 EvidenceProgress 的 epistemic/stop 字段
 
@@ -191,24 +191,40 @@ acquisition_end_reason
 
 ### 验收
 
-- [ ] Runtime public result 不再出现 `ready_for_reasoning`。
-- [ ] Runtime public result 不再出现 `stop_recommended`。
-- [ ] `new_evidence=0` regression 仍明确只是 retrieval fact。
-- [ ] Guardrail test 禁止重新引入这些字段。
+- [x] Runtime public result 不再出现 `ready_for_reasoning`。
+- [x] Runtime public result 不再出现 `stop_recommended`。
+- [x] `new_evidence=0` regression 仍明确只是 retrieval fact。
+- [x] Guardrail test 禁止重新引入这些字段。
+
+### A1 完成证据（2026-08-30）
+
+- Runtime contract commits: `fce60a9`, `24de41d`, `08019cd`, `b2c397d`, `e3cb96e`, `f0cbe192`。
+- `EvidenceReadiness / ReadinessStatus / StopKind / StopReason / ready_for_reasoning / stop_recommended` 已从 Runtime public progress contract 删除。
+- `no_new_evidence` 改为 `data.novelty` retrieval fact；不再生成 stop reason。
+- 只有明确 bounded acquisition end（例如 frontier/source exhausted）可返回 `acquisition_end_reason`。
+- Focused gate run `33314454449`: `21 passed in 1.53s`；`scripts/check_architecture.py` PASS。
+- 一次性 refactor helper/workflow 已在结果 commit 中自删除，不形成长期维护层。
 
 ## A2. 删除 skill 中任何 stop/sufficiency 暗示
 
 ### 验收
 
-- [ ] `.pi/skills/tracecite/SKILL.md` 只解释 API/evidence semantics。
-- [ ] `.agents/skills/tracecite-investigate/SKILL.md` 同样不提供 investigation strategy。
-- [ ] 没有 benchmark-specific clue。
+- [x] `.pi/skills/tracecite/SKILL.md` 只解释 API/evidence semantics。
+- [x] `.agents/skills/tracecite-investigate/SKILL.md` 同样不提供 investigation strategy。
+- [x] 没有 benchmark-specific clue。
+
+### A2 完成证据（2026-08-30）
+
+- 审核 `.pi/skills/tracecite/SKILL.md` 与 `.agents/skills/tracecite-investigate/SKILL.md`。
+- 当前两份 skill 已明确：Agent owns hypotheses/order/causal reasoning/sufficiency/stopping；`new_evidence=0`、`no_match`、`session_progress`、identity constraints 均仅为机械事实。
+- 未发现 benchmark hidden answer / preferred investigation path；因此本项不为制造 diff 而修改 skill。
+- operation/API 名称后续随 canonical API 收敛在 H2 统一更新。
 
 ---
 
 # B. RetrievalSession 成为唯一 Evidence Memory Owner
 
-状态：**TODO**
+状态：**IN PROGRESS**
 
 ## B1. 合并 retrieval telemetry
 
