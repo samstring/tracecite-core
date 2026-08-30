@@ -54,3 +54,4 @@ jobs:
           git add -A
           git commit -m "runtime: converge on canonical Evidence API and traversal contract"
           git push origin HEAD:experiment/evidence-intelligence
+# rerun after aligning stale tests with the breaking contract
