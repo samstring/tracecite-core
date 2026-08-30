@@ -12,6 +12,11 @@ on:
           - smoke
           - four
           - stability
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/pi-evidence-runtime-ab.yml
 
 permissions:
   contents: read
@@ -24,7 +29,7 @@ jobs:
     steps:
       - id: matrix
         env:
-          SCOPE: ${{ inputs.scope }}
+          SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.scope || 'remaining' }}
         shell: bash
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
@@ -38,6 +43,8 @@ jobs:
           scope = os.environ["SCOPE"]
           if scope == "smoke":
               chosen = [(cases[0], 1)]
+          elif scope == "remaining":
+              chosen = [(case, 1) for case in cases[1:]]
           elif scope == "four":
               chosen = [(case, 1) for case in cases]
           elif scope == "stability":
