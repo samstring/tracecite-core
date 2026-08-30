@@ -1,0 +1,45 @@
+name: Backfill Evidence Refactor Plan
+
+on:
+  push:
+    branches: [experiment/evidence-intelligence]
+    paths: [.github/workflows/backfill-evidence-plan.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/evidence-intelligence
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Backfill work-plan evidence
+        run: python scripts/_backfill_evidence_plan.py
+
+      - name: Verify plan state
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '状态：\*\*COMPLETE\*\*' docs/evidence-runtime-refactor-plan.zh-CN.md
+          grep -q 'c95f2eeaa1885745bcea8fd684325bff09fcebaf' docs/evidence-runtime-refactor-plan.zh-CN.md
+          grep -q 'kubernetes-140039-runc-5347-scale' docs/evidence-runtime-refactor-plan.zh-CN.md
+
+      - name: Commit plan and clean one-shot files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'tracecite-refactor-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add docs/evidence-runtime-refactor-plan.zh-CN.md
+          git commit -m 'docs: backfill canonical refactor commit and gate evidence'
+          git rm scripts/_backfill_evidence_plan.py .github/workflows/backfill-evidence-plan.yml
+          git commit -m 'chore: remove plan-backfill one-shot files'
+          git push origin HEAD:experiment/evidence-intelligence
