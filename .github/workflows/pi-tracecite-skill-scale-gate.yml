@@ -26,8 +26,8 @@ jobs:
       PI_CODING_AGENT_DIR: /tmp/pi-agent-config
       PI_SKIP_VERSION_CHECK: "1"
       PI_TELEMETRY: "0"
-      CASE_ID: kubernetes-140039-runc-5347-scale
-      CASE_DIR: benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347
+      CASE_ID: kubernetes-140268-scale
+      CASE_DIR: benchmarks/agent-investigation/scale-cases/kubernetes-140268
       RESULT: /tmp/pi-tracecite-skill-scale-gate
       PREP: /tmp/pi-tracecite-skill-scale-gate/prepared
 
@@ -114,7 +114,7 @@ jobs:
           mkdir -p "$RESULT/pi-session"
           cd "$INPUT_ROOT"
           set +e
-          timeout -k 30s 420s pi \
+          timeout -k 30s 600s pi \
             --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
             --thinking off --mode text --print \
             --session-dir "$RESULT/pi-session" \
