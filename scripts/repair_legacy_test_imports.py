@@ -101,6 +101,11 @@ def migrate() -> None:
         "from tracecite import survey",
         "from tracecite.runtime.tools import survey",
     )
+    rewrite(
+        "tests/test_evidence_primitives.py",
+        '''def test_output_layout_is_public_from_tracecite_root() -> None:\n    import tracecite\n    from tracecite import DEFAULT_OUTPUT_ROOT, OutputLayout, load_output_config, write_output_config\n    from tracecite.output_layout import OutputLayout as ModuleOutputLayout\n\n    assert tracecite.OutputLayout is OutputLayout\n    assert ModuleOutputLayout is OutputLayout\n    assert DEFAULT_OUTPUT_ROOT == "~/Documents/TraceCite"\n    assert callable(load_output_config)\n    assert callable(write_output_config)\n''',
+        '''def test_output_layout_remains_available_from_its_secondary_module() -> None:\n    from tracecite_core.output_layout import DEFAULT_OUTPUT_ROOT, OutputLayout as ModuleOutputLayout\n\n    assert ModuleOutputLayout is OutputLayout\n    assert DEFAULT_OUTPUT_ROOT == "~/Documents/TraceCite"\n    assert callable(load_output_config)\n    assert callable(write_output_config)\n''',
+    )
 
     for obsolete in (
         "tests/test_evidence_investigation_loop_benchmark.py",
