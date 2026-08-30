@@ -101,10 +101,31 @@ function compactProgress(value: any) {
   };
 }
 
+function compactSiblingEntity(value: any) {
+  if (!value || typeof value !== "object") return undefined;
+  const entity = String(value.entity || "").trim();
+  if (!entity) return undefined;
+  const refs = Array.isArray(value.references)
+    ? value.references.map((item: any) => String(item || "").trim()).filter(Boolean).slice(0, 3)
+    : [];
+  return {
+    entity,
+    scope: String(value.scope || "").trim() || undefined,
+    occurrence_count: value.occurrence_count,
+    references: refs.length ? refs : undefined,
+  };
+}
+
 function compactConstraint(value: any) {
   if (!value || typeof value !== "object") return value;
   const scopes = Array.isArray(value.scoped_entities)
     ? value.scoped_entities.slice(0, 12)
+    : [];
+  const siblings = Array.isArray(value.observed_sibling_entities)
+    ? value.observed_sibling_entities
+        .slice(0, 8)
+        .map(compactSiblingEntity)
+        .filter(Boolean)
     : [];
   return {
     kind: value.kind,
@@ -120,6 +141,9 @@ function compactConstraint(value: any) {
       Array.isArray(value.scoped_entities) && value.scoped_entities.length > scopes.length
         ? value.scoped_entities.length - scopes.length
         : undefined,
+    observed_sibling_entities: siblings.length ? siblings : undefined,
+    observed_sibling_entities_truncated: value.observed_sibling_entities_truncated,
+    sibling_entity_note: shorten(value.sibling_entity_note, 220),
   };
 }
 
@@ -147,15 +171,15 @@ function retrievalGuidance(status: string, coverage: any): string | undefined {
   const added = Number(coverage?.new_evidence || 0);
   const repeated = Number(coverage?.repeated_evidence || 0);
   if (status === "no_new_evidence" || (added === 0 && repeated > 0)) {
-    return "This call exposed no new evidence; repeated content was suppressed. The Agent decides whether to change the query, use another tool, or explicitly replay known context.";
+    return "This call exposed no new evidence; repeated content was suppressed. Reuse known refs, expand, or replay unless the evidence target materially changes.";
   }
   if (status === "no_match") {
-    return "No evidence matched this query. This is a retrieval fact, not a conclusion about the investigation.";
+    return "No evidence matched this query. This is a retrieval fact, not a conclusion about the investigation. Check literal-vs-regex syntax and identity scope before changing retrieval paths.";
   }
   const matchLines = Number(coverage?.match_lines || 0);
   const returned = Number(coverage?.evidence_returned || 0);
   if (coverage?.evidence_truncated && returned > 0 && matchLines >= returned * 4) {
-    return "High-fanout search: only a bounded projection is visible. A narrower identity-scoped query may expose different evidence if the Agent needs it.";
+    return "High-fanout search: only a bounded projection is visible. Prefer a narrower identity-scoped query over increasing output or dumping the source with native grep.";
   }
   return undefined;
 }
@@ -238,20 +262,24 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_search",
     label: "TraceCite Search",
     description:
-      "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns only evidence not already exposed in this Pi retrieval session, plus counts for repeated evidence. It does not plan the investigation, decide root cause, or decide when the Agent should stop.",
+      "Search a large local text/log file through TraceCite's canonical retrieval contract. Returns only evidence not already exposed in this Pi retrieval session, plus counts for repeated evidence. Literal matching is the default; set regex=true for regex syntax. It does not plan the investigation, decide root cause, or decide when the Agent should stop.",
     promptSnippet:
-      "tracecite_search returns session-scoped evidence novelty facts. Repeated evidence may be represented only by counts instead of duplicated previews; you remain responsible for hypotheses, tool choice, investigation order, conclusions, and stopping.",
+      "tracecite_search returns session-scoped evidence novelty and identity-safety facts. Repeated evidence may be represented only by counts; use regex=true for regex operators. You remain responsible for hypotheses, tool choice, investigation order, conclusions, and stopping.",
     promptGuidelines: [
       "Treat a search hit as an observation, not support for a causal hypothesis by itself.",
-      "Treat correlation constraints and scoped entities as identity-safety facts, not root-cause claims or instructions.",
-      "Use tracecite_expand or native read before making exact claims from a compact search preview.",
-      "A zero-new-evidence result only says this retrieval added nothing new to the current session; you decide what to do next.",
-      "When a search has high fanout, an identity-scoped query can reduce repeated sibling evidence if that helps your investigation.",
+      "For large evidence files, prefer TraceCite over broad native grep/read used only to discover evidence locations.",
+      "If a query uses regex operators such as |, .*, [], (), ^, or $, set regex=true; otherwise the query is literal.",
+      "Treat correlation constraints, scoped entities, and observed sibling entities as identity-safety facts, not root-cause claims.",
+      "If identifier_only_correlation_safe=false, use minimum_safe_correlation_key and distinguish competing observed sibling entities before correlating timelines.",
+      "Use tracecite_expand or a narrow native read before making exact claims from a compact search preview.",
+      "Do not repeat the same immutable-source search merely to re-read evidence; reuse refs, expand, or replay it.",
+      "A zero-new-evidence result only says this retrieval added nothing new to the current session; search again only for a materially different evidence target.",
+      "When a search has high fanout, prefer an identity-scoped query over increasing output or dumping the source with native grep.",
     ],
     parameters: Type.Object({
       file: Type.String({ description: "Path to the local source file, relative to the current working directory or absolute." }),
-      query: Type.String({ description: "Literal or regex query chosen by the Agent." }),
-      regex: Type.Optional(Type.Boolean({ description: "Interpret query as a regular expression." })),
+      query: Type.String({ description: "Literal query by default. If this string contains regex syntax, also set regex=true." }),
+      regex: Type.Optional(Type.Boolean({ description: "Interpret query as a regular expression. Required when using regex operators such as | or .*; default false." })),
       max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, description: "Maximum evidence rows to return; default 20." })),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -264,6 +292,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
           operation: "search",
           file: params.file,
           query: params.query,
+          regex: Boolean(params.regex),
           canonical_retrieve: true,
           persistent_retrieval_session: true,
           evidence_only: true,
@@ -284,6 +313,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
       "Treat observed_references as literal fields found in the materialized evidence only.",
       "Treat observed_relations as textual co-observation or structured-block membership only; they do not establish identity, importance, or causality.",
       "When overlapping context was already exposed, TraceCite may return only unseen line ranges rather than repeating the whole window.",
+      "Do not broadly read/grep the same expanded range just to see it again; use replay=true for an intentional reread.",
       "Use replay=true only when you intentionally need the old text again. Reuse source_sha256 when available so the replay is tied to the same immutable source version.",
     ],
     parameters: Type.Object({
