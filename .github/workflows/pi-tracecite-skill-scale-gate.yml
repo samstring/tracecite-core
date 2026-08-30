@@ -1,0 +1,189 @@
+name: Pi TraceCite Skill Scale Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/pi-tracecite-skill-scale-gate.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-tracecite-skill-scale-gate
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      CASE_ID: kubernetes-140039-runc-5347-scale
+      CASE_DIR: benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347
+      RESULT: /tmp/pi-tracecite-skill-scale-gate
+      PREP: /tmp/pi-tracecite-skill-scale-gate/prepared
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev]"
+          test -f "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md"
+          pi --help > /tmp/pi-help.txt
+          grep -q -- '--skill' /tmp/pi-help.txt
+
+      - name: Run targeted retrieval tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_retrieval_guidance.py tests/test_session_novelty_regressions.py
+
+      - name: Configure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          if not model:
+              raise SystemExit('BENCH_MODEL is empty')
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['OPENAI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model, 'name': model, 'reasoning': False, 'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000, 'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Prepare scale case
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT"
+          mkdir -p "$RESULT" "$PREP"
+          python -m tracecite.root_cause_benchmarking validate "$CASE_DIR" > "$RESULT/validate.json"
+          python -m tracecite.root_cause_benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT/prepare.json"
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          python - "$PREPARED" >> "$GITHUB_ENV" <<'PY'
+          import json, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text())
+          inputs = data.get('inputs') or []
+          if len(inputs) != 1:
+              raise SystemExit(f'expected one input, got {len(inputs)}')
+          f = Path(inputs[0]['path']).resolve()
+          print(f'INPUT_ROOT={f.parent}')
+          print(f'INPUT_FILE={f.name}')
+          print(f'INPUT_BYTES={f.stat().st_size}')
+          print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
+          PY
+
+      - name: Run Pi with TraceCite skill
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          SYSTEM_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. The TraceCite tools and TraceCite skill are available. Follow the TraceCite skill carefully, including its tool-selection, search-syntax, novelty, and correlation/identity-safety protocols. You own hypotheses, causal reasoning, investigation order, conclusions, and when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and state when the supplied evidence is insufficient.'
+          mkdir -p "$RESULT/pi-session"
+          cd "$INPUT_ROOT"
+          set +e
+          timeout -k 30s 420s pi \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT/pi-session" \
+            --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+            --tools read,bash,grep,find,ls,tracecite_search,tracecite_expand \
+            --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+            --no-prompt-templates --no-context-files \
+            --system-prompt "$SYSTEM_PROMPT" "$QUESTION" \
+            > "$RESULT/pi-answer.md" 2> "$RESULT/pi-stderr.log"
+          code=$?
+          set -e
+          echo "$code" > "$RESULT/pi-exit.txt"
+
+      - name: Convert, score, and summarize usage
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          SESSION="$(find "$RESULT/pi-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          if [[ -n "$SESSION" && -f "$RESULT/pi-answer.md" ]]; then
+            python benchmarks/agent-investigation/pi_session_to_transcript.py \
+              "$SESSION" "$RESULT/pi-answer.md" "$RESULT/pi-transcript.jsonl" \
+              --mode pi-tracecite-skill --model "$BENCH_MODEL"
+            python -m tracecite.root_cause_benchmarking score \
+              "$CASE_DIR" "$RESULT/pi-transcript.jsonl" > "$RESULT/pi-score.json" || true
+          fi
+          python - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+          root = Path(os.environ['RESULT'])
+          transcript = root / 'pi-transcript.jsonl'
+          tools = Counter(); calls = []
+          if transcript.is_file():
+              for line in transcript.read_text(errors='replace').splitlines():
+                  if not line.strip(): continue
+                  event = json.loads(line)
+                  if event.get('type') == 'tool':
+                      name = str(event.get('name') or 'unknown')
+                      tools[name] += 1
+                      calls.append({'name': name, 'input': event.get('input'), 'output': str(event.get('output') or '')})
+          score_path = root / 'pi-score.json'
+          score = json.loads(score_path.read_text()) if score_path.is_file() else {}
+          quality = score.get('quality') or {}; cost = score.get('context_cost') or {}
+          exit_path = root / 'pi-exit.txt'; exit_code = int(exit_path.read_text().strip()) if exit_path.is_file() else None
+          summary = {
+              'case_id': os.environ['CASE_ID'], 'input_bytes': int(os.environ.get('INPUT_BYTES') or 0),
+              'exit_code': exit_code, 'tool_names': dict(sorted(tools.items())),
+              'tool_sequence': [c['name'] for c in calls],
+              'model_calls': cost.get('model_calls'), 'tool_calls': cost.get('tool_calls'),
+              'reported_input_tokens': cost.get('reported_input_tokens'),
+              'reported_cache_read_input_tokens': cost.get('reported_cache_read_input_tokens'),
+              'reported_output_tokens': cost.get('reported_output_tokens'),
+              'tool_output_chars': cost.get('tool_output_chars'), 'raw_passed': score.get('passed'),
+              'dimension_recall': quality.get('dimension_recall'),
+              'supported_dimension_recall': quality.get('supported_dimension_recall'),
+              'citation_accuracy': (quality.get('citation') or {}).get('accuracy'),
+          }
+          (root / 'usage-summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+          (root / 'tool-calls.json').write_text(json.dumps(calls, indent=2) + '\n')
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          if exit_code != 0: raise SystemExit(f'Pi exited with {exit_code}')
+          if tools.get('tracecite_search', 0) < 1: raise SystemExit('Pi did not use tracecite_search')
+          PY
+
+      - name: Upload gate artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-tracecite-skill-scale-gate-${{ env.CASE_ID }}
+          path: /tmp/pi-tracecite-skill-scale-gate
+          if-no-files-found: warn
