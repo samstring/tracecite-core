@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -44,6 +45,79 @@ def test_provider_contamination_is_not_product_loss() -> None:
     assert result["run_validity"]["valid_for_comparison"] is False
     assert result["run_validity"]["reason"] == "provider_rate_limited"
     assert result["run_validity"]["provider_contamination"] == "provider_rate_limited"
+
+
+def test_provider_error_in_session_metadata_is_detected() -> None:
+    session = json.dumps(
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "stopReason": "error",
+                "rawStopReason": "429",
+                "errorMessage": "HTTP 429 rate limited by provider",
+                "content": [],
+            },
+        }
+    )
+    result = MODULE.build_run_result(_score(False), exit_code=0, session_text=session)
+    assert result["run_validity"]["valid_for_comparison"] is False
+    assert result["run_validity"]["reason"] == "provider_rate_limited"
+
+
+def test_evidence_line_numbers_and_answer_text_do_not_contaminate_validity() -> None:
+    session = "\n".join(
+        (
+            json.dumps(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "toolResult",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "containerd.log:429: gateway timeout is task evidence",
+                            }
+                        ],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "stopReason": "stop",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "The decisive evidence is line 429; the task itself mentions timeout.",
+                            }
+                        ],
+                    },
+                }
+            ),
+        )
+    )
+    transcript = json.dumps(
+        {
+            "type": "final",
+            "answer": "Cite line 429; the investigated system reported timeout and overload.",
+        }
+    )
+    result = MODULE.build_run_result(
+        _score(True),
+        exit_code=0,
+        session_text=session,
+        transcript_text=transcript,
+    )
+    assert result["run_validity"] == {
+        "valid_for_comparison": True,
+        "reason": "clean",
+        "exit_code": 0,
+        "provider_contamination": None,
+        "timeout": False,
+    }
 
 
 def test_timeout_is_separate_from_provider_failure() -> None:

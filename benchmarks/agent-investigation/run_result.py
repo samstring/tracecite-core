@@ -8,9 +8,27 @@ from pathlib import Path
 from typing import Any, Mapping
 
 PROVIDER_PATTERNS = (
-    ("provider_rate_limited", re.compile(r"\b429\b|rate\s*limit(?:ed)?|overload(?:ed)?", re.I)),
-    ("provider_quota_exhausted", re.compile(r"\b402\b|insufficient\s+balance|quota\s+(?:exhausted|exceeded)", re.I)),
-    ("provider_unavailable", re.compile(r"\b50[234]\b|service\s+unavailable|bad\s+gateway|gateway\s+timeout", re.I)),
+    (
+        "provider_rate_limited",
+        re.compile(
+            r"\bHTTP(?:/\d(?:\.\d)?)?\s+429\b|\b(?:status(?:\s+code)?|error)\s*[:=]?\s*429\b|rate\s*limit(?:ed)?|overload(?:ed)?",
+            re.I,
+        ),
+    ),
+    (
+        "provider_quota_exhausted",
+        re.compile(
+            r"\bHTTP(?:/\d(?:\.\d)?)?\s+402\b|\b(?:status(?:\s+code)?|error)\s*[:=]?\s*402\b|insufficient\s+balance|quota\s+(?:exhausted|exceeded)",
+            re.I,
+        ),
+    ),
+    (
+        "provider_unavailable",
+        re.compile(
+            r"\bHTTP(?:/\d(?:\.\d)?)?\s+50[234]\b|\b(?:status(?:\s+code)?|error)\s*[:=]?\s*50[234]\b|service\s+unavailable|bad\s+gateway|gateway\s+timeout",
+            re.I,
+        ),
+    ),
 )
 
 
@@ -48,6 +66,54 @@ def classify_provider_contamination(text: str) -> str | None:
         if pattern.search(text):
             return name
     return None
+
+
+def _session_error_diagnostics(session_text: str) -> str:
+    """Extract provider/host diagnostics without scanning Evidence or answer text."""
+
+    diagnostics: list[str] = []
+    for raw_line in session_text.splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            event = json.loads(raw_line)
+        except Exception:
+            continue
+        if not isinstance(event, Mapping):
+            continue
+
+        event_type = str(event.get("type") or "").lower()
+        if "error" in event_type:
+            diagnostics.append(json.dumps(event, ensure_ascii=False, sort_keys=True))
+            continue
+        if event_type != "message":
+            continue
+
+        message = event.get("message")
+        if not isinstance(message, Mapping) or str(message.get("role") or "") != "assistant":
+            continue
+
+        error_fields: dict[str, Any] = {}
+        for key in ("error", "errorMessage", "error_message"):
+            value = message.get(key)
+            if value not in (None, "", [], {}):
+                error_fields[key] = value
+
+        stop_reason = str(message.get("stopReason") or "")
+        raw_stop_reason = str(message.get("rawStopReason") or "")
+        error_stop = "error" in stop_reason.lower() or "error" in raw_stop_reason.lower()
+        if not error_fields and not error_stop:
+            continue
+
+        payload: dict[str, Any] = dict(error_fields)
+        if stop_reason:
+            payload["stopReason"] = stop_reason
+        if raw_stop_reason:
+            payload["rawStopReason"] = raw_stop_reason
+        if error_stop and message.get("content") not in (None, "", [], {}):
+            payload["content"] = message.get("content")
+        diagnostics.append(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str))
+    return "\n".join(diagnostics)
 
 
 def _tracecite_shape(event: Mapping[str, Any]) -> tuple[bool, bool, bool]:
@@ -142,7 +208,11 @@ def build_run_result(
     transcript_text: str = "",
     transcript_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    diagnostics = "\n".join((stderr, session_text, transcript_text))
+    # Transcript/final-answer text may legitimately contain HTTP-like numbers,
+    # timeout words, or Evidence line numbers such as 429. Validity must be
+    # derived only from host/provider diagnostics, never from task content.
+    _ = transcript_text
+    diagnostics = "\n".join((stderr, _session_error_diagnostics(session_text)))
     provider_contamination = classify_provider_contamination(diagnostics)
     timed_out = exit_code == 124 or re.search(r"\b(?:timed out|timeout)\b", diagnostics, re.I) is not None
     if provider_contamination is not None:
