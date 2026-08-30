@@ -1,4 +1,4 @@
-name: Trigger Formal Pi A/B
+name: Trigger Evidence Runtime Smoke
 
 on:
   workflow_dispatch:
@@ -16,35 +16,7 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for latest TraceCite capability run
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for attempt in $(seq 1 90); do
-            row="$(gh api "repos/$REPO/actions/workflows/pi-tracecite-139417-capability.yml/runs?branch=experiment%2Fevidence-intelligence&per_page=1" \
-              --jq '.workflow_runs[0] | "\(.id)|\(.status)|\(.conclusion // "")|\(.head_sha)"')"
-            if [[ -z "$row" ]]; then
-              sleep 10
-              continue
-            fi
-            IFS='|' read -r run_id status conclusion head_sha <<<"$row"
-            echo "capability run=$run_id sha=$head_sha status=$status conclusion=$conclusion"
-            if [[ "$status" == "completed" ]]; then
-              if [[ "$conclusion" != "success" ]]; then
-                echo "Capability validation failed; formal A/B will not be dispatched."
-                exit 1
-              fi
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "Timed out waiting for capability validation."
-          exit 1
-
-      - name: Dispatch formal Pi A/B
+      - name: Dispatch Pi Evidence Runtime smoke A/B
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -54,6 +26,13 @@ jobs:
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
-            "repos/$REPO/actions/workflows/pi-agent-moderate-suite.yml/dispatches" \
-            -f ref=experiment/evidence-intelligence
-          echo "Formal Pi A/B dispatched."
+            "repos/$REPO/actions/workflows/pi-evidence-runtime-ab.yml/dispatches" \
+            --input - <<'JSON'
+          {
+            "ref": "experiment/evidence-intelligence",
+            "inputs": {
+              "scope": "smoke"
+            }
+          }
+          JSON
+          echo "Pi Evidence Runtime smoke A/B dispatched."
