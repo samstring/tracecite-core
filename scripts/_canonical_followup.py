@@ -28,8 +28,8 @@ text = text.replace(
     "def test_audit_history_is_not_migrated_into_retrieval_novelty(tmp_path) -> None:",
 )
 text = text.replace(
-    '    assert migrated.status == "no_new_evidence"\n    assert migrated.new_evidence == ()\n',
-    '    assert migrated.status == "ok"\n    assert migrated.new_evidence\n',
+    '    assert migrated.status == "no_new_evidence"\n    assert migrated.repeated_evidence == 1\n',
+    '    assert migrated.status == "ok"\n    assert migrated.new_evidence\n    assert migrated.repeated_evidence == 0\n',
 )
 path.write_text(text, encoding="utf-8")
 
