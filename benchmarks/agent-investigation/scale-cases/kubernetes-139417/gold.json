@@ -8,10 +8,12 @@
       "patterns": ["(?:claim.{0,180}got allocated elsewhere in the meantime|PodScheduled.{0,180}False.{0,180}(?:scheduled|nodeName)|SchedulerError.{0,180}allocated elsewhere)"]
     },
     "upstream_contributor": {
-      "patterns": ["(?:(?:race|stale).{0,220}(?:status|PodScheduled).{0,220}(?:bind|binding)|asynchronous bind.{0,220}(?:patch|status).{0,220}(?:retry|success)|PodScheduled=False.{0,220}(?:overwrite|overwrote).{0,220}PodScheduled=True)"]
+      "patterns": ["(?:(?:race|stale).{0,220}(?:status|PodScheduled).{0,220}(?:bind|binding)|asynchronous bind.{0,220}(?:patch|status).{0,220}(?:retry|success)|PodScheduled=False.{0,220}(?:overwrite|overwrote).{0,220}PodScheduled=True)"],
+      "boundary_patterns": ["(?:(?:upstream|race|stale|binding|status patch).{0,220}(?:not established|not shown|not directly shown|cannot (?:be )?(?:determined|confirmed|proven)|insufficient|unsupported)|(?:not established|not shown|not directly shown|cannot (?:be )?(?:determined|confirmed|proven)|insufficient|unsupported).{0,220}(?:upstream|race|stale|binding|status patch))"]
     },
     "fix_alignment": {
-      "patterns": ["(?:resourceVersion.{0,220}(?:patch|conflict)|(?:patch|status update).{0,220}resourceVersion.{0,180}(?:conflict|stale))"]
+      "patterns": ["(?:resourceVersion.{0,220}(?:patch|conflict)|(?:patch|status update).{0,220}resourceVersion.{0,180}(?:conflict|stale))"],
+      "boundary_patterns": ["(?:(?:fix|corrective|resourceVersion|patch conflict|status update).{0,220}(?:not established|not shown|not directly shown|cannot (?:be )?(?:determined|confirmed|proven)|insufficient|unsupported)|(?:not established|not shown|not directly shown|cannot (?:be )?(?:determined|confirmed|proven)|insufficient|unsupported).{0,220}(?:fix|corrective|resourceVersion|patch conflict|status update))"]
     }
   },
   "evidence_sufficiency": {
@@ -28,12 +30,15 @@
   "unsupported_claims": [],
   "contradictions": [],
   "root_cause_thresholds": {
-    "dimension_recall": 0.5,
-    "supported_dimension_recall": 0.5,
+    "dimension_recall": 1.0,
+    "supported_dimension_recall": 1.0,
     "citation_accuracy": 0.5,
     "evidence_marker_recall": 0.6667,
+    "evidence_boundary_recall": 1.0,
+    "support_level_accuracy": 1.0,
     "max_unsupported_claim_hits": 0,
-    "max_contradiction_hits": 0
+    "max_contradiction_hits": 0,
+    "max_unsupported_dimension_overreach_hits": 0
   },
   "leak_terms": [
     "resourceVersion",
