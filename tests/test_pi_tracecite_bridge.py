@@ -69,7 +69,52 @@ def test_pi_bridge_uses_independent_retrieval_session_and_persists_novelty(tmp_p
     assert repeated["outcome"] == "not_assessed"
     assert repeated["evidence"] == []
     assert repeated["coverage"]["repeated_evidence"] >= 1
+    assert repeated["data"]["matched_existing_evidence"]
+    assert repeated["data"]["matched_existing_evidence"][0]["start_line"] == 2
+    assert "label" not in repeated["data"]["matched_existing_evidence"][0]
     assert repeated["data"]["stop_reason"]["kind"] == "no_new_evidence"
+
+
+def test_new_query_can_point_to_old_evidence_without_resending_its_body(tmp_path: Path) -> None:
+    source = tmp_path / "runtime.log"
+    source.write_text(
+        "before\nERROR timeout request=7 shared-marker\nafter\n",
+        encoding="utf-8",
+    )
+    session = tmp_path / "pi-session.json"
+
+    first = _run_bridge(
+        "--session",
+        str(session),
+        "search",
+        str(source),
+        "timeout",
+        "--max-evidence",
+        "5",
+        cwd=tmp_path,
+    )
+    second = _run_bridge(
+        "--session",
+        str(session),
+        "search",
+        str(source),
+        "shared-marker",
+        "--max-evidence",
+        "5",
+        cwd=tmp_path,
+    )
+
+    assert first["coverage"]["new_evidence"] == 1
+    assert second["status"] == "no_new_evidence"
+    assert second["coverage"]["new_evidence"] == 0
+    assert second["coverage"]["repeated_evidence"] == 1
+    assert second["evidence"] == []
+    matched = second["data"]["matched_existing_evidence"]
+    assert len(matched) == 1
+    assert matched[0]["start_line"] == 2
+    assert matched[0]["end_line"] == 2
+    assert matched[0]["source_path"].endswith("runtime.log")
+    assert "label" not in matched[0]
 
 
 def test_pi_bridge_expand_tracks_immutable_range_without_investigation(tmp_path: Path) -> None:
