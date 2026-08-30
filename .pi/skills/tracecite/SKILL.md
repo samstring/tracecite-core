@@ -1,6 +1,6 @@
 ---
 name: tracecite
-description: Use TraceCite as an evidence-retrieval tool for large or repetitive local text/log sources. Interpret search, expand, replay, novelty, correlation constraints, and scoped identity signals without treating retrieval metadata as causal conclusions.
+description: Use TraceCite as an evidence-retrieval tool for large or repetitive local text/log sources. Interpret search, expand, replay, novelty, correlation constraints, scoped identity signals, and mechanical session progress without treating retrieval metadata as causal conclusions.
 compatibility: Requires the tracecite_search and tracecite_expand tools from the TraceCite Pi extension.
 ---
 
@@ -41,6 +41,7 @@ When reading a `tracecite_search` result, these fields describe retrieval state 
 - `status`: retrieval outcome for this call.
 - evidence refs/previews: evidence exposed by the call.
 - `coverage` / `progress`: mechanical coverage or novelty information.
+- `session_progress`: bounded mechanical history of retrieval outcomes in this session.
 - `correlation_constraints`: identity-safety information observed in the represented evidence.
 - `missing_evidence`: retrieval gaps or unavailable evidence reported by the tool.
 
@@ -59,6 +60,20 @@ If evidence was already exposed, TraceCite supports these mechanical reuse paths
 For the same immutable source/version, repeating the exact same search query with the same regex mode normally re-fetches the same retrieval target. If the intent is to see already exposed evidence again, use the existing ref, expand, or replay instead.
 
 A new search should represent a materially different retrieval target. TraceCite does not decide whether that different target is useful to the investigation.
+
+## `session_progress`
+
+`session_progress` is observability over retrieval behavior only. It may report values such as total search/expand calls, unique evidence identities seen, exact duplicate query count, and the outcomes of the most recent search window (`new`, repeated-only, or `no_match`).
+
+A recent window with little or no new evidence means only that those retrieval calls had low mechanical novelty. It does **not** mean:
+
+- the evidence is sufficient;
+- a root cause has been established;
+- a hypothesis is correct or incorrect;
+- no materially different source or target could contain evidence;
+- the investigation should stop.
+
+Use `session_progress` to understand whether recent tool calls are covering new evidence or revisiting the same evidence surface. The Agent remains solely responsible for deciding whether a materially different retrieval target is needed and when to stop.
 
 ## `no_match`
 
@@ -145,6 +160,7 @@ Keep native verification narrow. If the purpose is simply to see already exposed
 
 - A search hit is an observation, not proof of causality.
 - Correlation constraints describe identity safety, not root cause.
+- `session_progress` describes retrieval history, not evidence sufficiency or a stop recommendation.
 - `observed_sibling_entities` are mechanically observed sibling identities and source references; they do not prescribe investigation or comparison.
 - `observed_relations` describe literal textual or structural co-observation, not root cause.
 - `source_sha256`, when present, identifies the source version associated with the evidence and can be reused for exact expansion/replay.
