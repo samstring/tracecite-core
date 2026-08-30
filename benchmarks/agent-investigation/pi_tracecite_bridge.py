@@ -84,6 +84,9 @@ def _replay(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[st
     payload = result.to_dict()
     coverage = payload.setdefault("coverage", {})
     coverage.setdefault("replayed_evidence", 1)
+    data = payload.setdefault("data", {})
+    if "new_text" not in data and "text" in data:
+        data["new_text"] = data["text"]
     return payload
 
 
