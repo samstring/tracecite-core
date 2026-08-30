@@ -25,7 +25,7 @@ jobs:
         run: python scripts/_a1_mechanical_progress_refactor.py
       - name: Run focused A1 tests
         run: |
-          python -m pip install -e .
+          python -m pip install -e . pytest
           pytest -q tests/test_runtime_agent_api.py tests/test_runtime_boundary.py tests/test_gmi_scale_evidence_progress.py
           python scripts/check_architecture.py
       - name: Commit verified A1 changes and remove one-shot helpers
