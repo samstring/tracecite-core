@@ -254,7 +254,7 @@ def test_pi_bridge_can_replay_old_evidence_without_counting_it_as_new(tmp_path: 
     first = _run_bridge(
         "--session",
         str(session),
-        "expand",
+        "materialize",
         str(source),
         "2",
         "--radius",
@@ -266,7 +266,7 @@ def test_pi_bridge_can_replay_old_evidence_without_counting_it_as_new(tmp_path: 
     repeated = _run_bridge(
         "--session",
         str(session),
-        "expand",
+        "materialize",
         str(source),
         "2",
         "--radius",
@@ -278,14 +278,13 @@ def test_pi_bridge_can_replay_old_evidence_without_counting_it_as_new(tmp_path: 
     replayed = _run_bridge(
         "--session",
         str(session),
-        "expand",
+        "replay",
         str(source),
         "2",
         "--radius",
         "1",
         "--sha256",
         digest,
-        "--replay",
         cwd=tmp_path,
     )
 
@@ -299,16 +298,22 @@ def test_pi_bridge_can_replay_old_evidence_without_counting_it_as_new(tmp_path: 
     assert "3: three" in replayed["data"]["new_text"]
 
 
-def test_pi_extension_treats_stop_as_agent_owned_and_exposes_replay() -> None:
+def test_pi_extension_keeps_stopping_agent_owned_and_exposes_canonical_surface() -> None:
     extension = (
         ROOT / "benchmarks" / "agent-investigation" / "pi_tracecite_extension.ts"
     ).read_text(encoding="utf-8")
 
     assert "STOP TraceCite retrieval" not in extension
-    assert "decide when the Agent should stop" in extension
-    assert "data.new_text" in extension
-    assert "source_sha256" in extension
-    assert "matched_existing_evidence" in extension
-    assert "does not mean that evidence is understood, important, causal, or sufficient" in extension
-    assert "replay=true" in extension
-    assert 'args.push("--replay")' in extension
+    for name in (
+        "tracecite_retrieve",
+        "tracecite_materialize",
+        "tracecite_replay",
+        "tracecite_aggregate",
+        "tracecite_traverse",
+        "tracecite_verify",
+    ):
+        assert f'name: "{name}"' in extension
+    assert "never chooses hypotheses or stopping" in extension
+    assert 'rangeArgs("replay", p)' in extension
+    assert 'name: "tracecite_search"' in extension
+    assert 'name: "tracecite_expand"' in extension
