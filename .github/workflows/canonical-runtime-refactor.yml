@@ -1,0 +1,54 @@
+name: Canonical Evidence Runtime Refactor
+
+on:
+  push:
+    branches: [experiment/evidence-intelligence]
+    paths: [.github/workflows/canonical-runtime-refactor.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  refactor-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/evidence-intelligence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply canonical refactor
+        run: python scripts/_canonical_contract_refactor.py
+      - name: Verify canonical contract
+        run: |
+          python -m pip install -e . pytest
+          python -m compileall -q src/tracecite
+          pytest -q \
+            tests/test_canonical_evidence_contract.py \
+            tests/test_runtime_session_retrieval.py \
+            tests/test_session_novelty_regressions.py \
+            tests/test_runtime_agent_api.py \
+            tests/test_runtime_boundary.py \
+            tests/test_evidence_routing.py \
+            tests/test_evidence_selection.py
+          python scripts/check_architecture.py
+          python benchmarks/agent-investigation/support_level_score.py --self-test
+          python - <<'PY'
+          import tracecite
+          required = {'retrieve','materialize','replay','aggregate','traverse','verify'}
+          missing = required - set(tracecite.__all__)
+          assert not missing, missing
+          forbidden = {'investigate','stop_recommended','ready_for_reasoning'}
+          assert not (forbidden & set(tracecite.__all__))
+          PY
+      - name: Commit verified refactor and remove one-shot files
+        run: |
+          git config user.name "tracecite-refactor-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git rm -f scripts/_canonical_contract_refactor.py
+          git rm .github/workflows/canonical-runtime-refactor.yml
+          git add -A
+          git commit -m "runtime: converge on canonical Evidence API and traversal contract"
+          git push origin HEAD:experiment/evidence-intelligence
