@@ -1,0 +1,56 @@
+name: Finalize Evidence Intelligence Before Tests
+
+on:
+  push:
+    branches:
+      - work/evidence-intelligence-finalize
+    paths:
+      - scripts/finalize_evidence_intelligence.py
+      - .github/workflows/evidence-intelligence-finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/evidence-intelligence-finalize
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply all remaining pre-case changes
+        run: python scripts/finalize_evidence_intelligence.py apply
+
+      - name: Commit implementation convergence
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name tracecite-refactor-bot
+          git config user.email actions@users.noreply.github.com
+          git add -A
+          git commit -m "benchmark: finalize evidence runtime evaluation contract"
+          echo "IMPL_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Backfill implementation commit into architecture plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/finalize_evidence_intelligence.py backfill "$IMPL_SHA"
+          git add docs/evidence-runtime-refactor-plan.zh-CN.md
+          git commit -m "docs: record final pre-case implementation evidence"
+
+      - name: Remove one-shot finalizer files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm scripts/finalize_evidence_intelligence.py
+          rm .github/workflows/evidence-intelligence-finalize.yml
+          git add -A
+          git commit -m "chore: remove evidence-intelligence finalizer"
+          git push origin HEAD:work/evidence-intelligence-finalize
