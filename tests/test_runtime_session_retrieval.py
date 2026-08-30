@@ -26,18 +26,19 @@ def test_standalone_session_suppresses_repeated_search_without_investigation(tmp
 
     first = retrieve_with_session(EvidenceRequest(QueryTarget(source, "timeout")), store)
     second = retrieve_with_session(EvidenceRequest(QueryTarget(source, "timeout")), store)
+    second_payload = second.to_dict()
 
     assert first.status == "ok"
     assert first.new_evidence
     assert second.status == "no_new_evidence"
     assert second.new_evidence == ()
-    assert second.stop_reason is not None
-    assert second.stop_reason.kind == "no_new_evidence"
+    assert second_payload["data"]["novelty"]["state"] == "no_new_evidence"
+    assert "all_returned_evidence_already_seen" in second_payload["data"]["novelty"]["basis"]
     assert store.path.is_file()
     assert not (tmp_path / "investigation.json").exists()
 
 
-def test_standalone_session_hard_stops_repeated_immutable_range(tmp_path: Path) -> None:
+def test_standalone_session_suppresses_repeated_immutable_range_as_novelty_fact(tmp_path: Path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -48,11 +49,12 @@ def test_standalone_session_hard_stops_repeated_immutable_range(tmp_path: Path) 
 
     first = retrieve_with_session(request, store)
     second = retrieve_with_session(request, store)
+    second_payload = second.to_dict()
 
     assert first.status == "ok"
     assert second.status == "no_new_evidence"
-    assert second.stop_reason is not None
-    assert "requested_context_already_covered" in second.stop_reason.basis
+    assert second_payload["data"]["novelty"]["state"] == "no_new_evidence"
+    assert "requested_context_already_covered" in second_payload["data"]["novelty"]["basis"]
 
 
 def test_standalone_session_persists_structural_relation_novelty(tmp_path: Path) -> None:
