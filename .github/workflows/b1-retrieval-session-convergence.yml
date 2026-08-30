@@ -1,0 +1,40 @@
+name: B1 RetrievalSession Convergence
+
+on:
+  push:
+    branches: [experiment/evidence-intelligence]
+    paths: [.github/workflows/b1-retrieval-session-convergence.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  converge-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/evidence-intelligence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply B1 refactor
+        run: python scripts/_b1_merge_retrieval_history.py
+      - name: Verify single session owner
+        run: |
+          python -m pip install -e . pytest
+          python -m compileall -q src/tracecite/runtime
+          pytest -q tests/test_runtime_session_retrieval.py tests/test_session_novelty_regressions.py tests/test_runtime_agent_api.py tests/test_runtime_boundary.py tests/test_retrieval_telemetry.py
+          python scripts/check_architecture.py
+          test ! -f src/tracecite/runtime/retrieval_telemetry.py
+          ! find . -name '*.telemetry.json' -print -quit | grep -q .
+      - name: Commit verified B1 and remove one-shot helpers
+        run: |
+          git config user.name "tracecite-refactor-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git rm scripts/_b1_merge_retrieval_history.py
+          git rm .github/workflows/b1-retrieval-session-convergence.yml
+          git add -A
+          git commit -m "runtime: make RetrievalSession the single retrieval-memory owner"
+          git push origin HEAD:experiment/evidence-intelligence
