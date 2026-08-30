@@ -187,6 +187,40 @@ def test_truncate_or_recreate_rolls_generation_and_does_not_hide_new_content(tmp
     assert second["status"] != "no_new_evidence"
 
 
+def test_session_operation_history_is_atomic_and_has_no_sidecar(tmp_path: Path) -> None:
+    source = tmp_path / "runtime.log"
+    source.write_text("alpha beta same-line\nunrelated\n", encoding="utf-8")
+    store = _store(tmp_path)
+
+    retrieve_with_session(EvidenceRequest(QueryTarget(source, "alpha", max_evidence=3)), store)
+    repeated = retrieve_with_session(
+        EvidenceRequest(QueryTarget(source, "beta", max_evidence=3)), store
+    ).to_dict()
+    retrieve_with_session(EvidenceRequest(QueryTarget(source, "missing", max_evidence=3)), store)
+    duplicate = retrieve_with_session(
+        EvidenceRequest(QueryTarget(source, "missing", max_evidence=3)), store
+    ).to_dict()
+
+    state = store.load()
+    assert state.revision == 4
+    assert state.operation_counts == {"search": 4}
+    assert state.exact_duplicate_requests == 1
+    assert len(state.recent_operations) == 4
+    assert state.recent_operations[1].status == "no_new_evidence"
+    assert state.recent_operations[1].repeated_evidence == 1
+    assert state.recent_operations[-1].status == "no_match"
+    assert state.recent_operations[-1].exact_duplicate_request is True
+
+    summary = state.retrieval_summary()
+    assert summary["recent_window"] == 4
+    assert summary["recent_with_new_evidence"] == 1
+    assert summary["recent_repeated_only"] == 1
+    assert summary["recent_no_match"] == 2
+    assert repeated["data"]["session_progress"]["operation_counts"] == {"search": 2}
+    assert duplicate["data"]["session_progress"]["exact_duplicate_requests"] == 1
+    assert not list(tmp_path.rglob("*" + "." + "telemetry" + "." + "json"))
+
+
 def test_parallel_retrievals_merge_session_state_without_lost_updates(tmp_path: Path) -> None:
     source = tmp_path / "runtime.log"
     count = 24

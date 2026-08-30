@@ -1,15 +1,10 @@
-"""Canonical persisted retrieval/context state for Agent sessions.
+"""Canonical persisted retrieval memory for Agent sessions.
 
 ``RetrievalSessionState`` is the single owner for mechanical retrieval memory:
-seen Evidence identities, covered source-version ranges, append-only source
-observations, and bounded transport identities used by compatibility projections.
-It deliberately does not own hypotheses, findings, causal conclusions, or audit
-decisions; those remain InvestigationState responsibilities.
-
-The canonical transport location remains ``_contexts/<id>.json`` for public CLI
-compatibility. Legacy ``_evidence_contexts/<id>.json`` files are accepted on
-read and migrated on the next save. Investigation-linked retrieval progress uses
-the same state model in a separate ``_retrieval_sessions`` namespace.
+seen Evidence identities, covered source-version ranges, source observations,
+bounded transport identities, and bounded retrieval-operation history.  It does
+not own hypotheses, findings, causal conclusions, evidence sufficiency, or
+stopping decisions.
 """
 
 from __future__ import annotations
@@ -19,7 +14,7 @@ import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -29,7 +24,10 @@ DEFAULT_MAX_SEEN_EVIDENCE = 4096
 DEFAULT_MAX_SEEN_RESULTS = 512
 DEFAULT_MAX_SEEN_GROUPS = 2048
 DEFAULT_MAX_SEEN_RELATIONS = 8192
+DEFAULT_MAX_REQUEST_FINGERPRINTS = 512
+DEFAULT_MAX_RECENT_OPERATIONS = 32
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def validate_retrieval_session_id(value: str) -> str:
@@ -130,9 +128,97 @@ def _source_observations_from_dict(payload: Mapping[str, Any]) -> dict[str, dict
     return result
 
 
+def _operation_counts_from_dict(payload: Mapping[str, Any]) -> dict[str, int]:
+    raw = payload.get("operation_counts") or {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("RetrievalSessionState operation_counts must be an object")
+    result: dict[str, int] = {}
+    for operation, value in raw.items():
+        name = str(operation or "").strip()
+        if not name or isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("RetrievalSessionState operation_counts is malformed")
+        result[name] = value
+    return result
+
+
+@dataclass(frozen=True)
+class RetrievalOperation:
+    """One bounded mechanical retrieval-operation observation."""
+
+    operation: str
+    status: str
+    request_fingerprint: str = ""
+    new_evidence: int = 0
+    repeated_evidence: int = 0
+    new_relations: int = 0
+    new_lines: int = 0
+    source_version: str = ""
+    replayed: bool = False
+    exact_duplicate_request: bool = False
+
+    def __post_init__(self) -> None:
+        operation = str(self.operation or "").strip()
+        status = str(self.status or "").strip()
+        if not operation or len(operation) > 64:
+            raise ValueError("retrieval operation name must be 1-64 characters")
+        if not status or len(status) > 64:
+            raise ValueError("retrieval operation status must be 1-64 characters")
+        fingerprint = str(self.request_fingerprint or "").strip().lower()
+        if fingerprint and not _FINGERPRINT_RE.fullmatch(fingerprint):
+            raise ValueError("request_fingerprint must be a sha256 hex digest")
+        for name in ("new_evidence", "repeated_evidence", "new_relations", "new_lines"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        object.__setattr__(self, "operation", operation)
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "request_fingerprint", fingerprint)
+        object.__setattr__(self, "source_version", str(self.source_version or "").strip())
+        object.__setattr__(self, "replayed", bool(self.replayed))
+        object.__setattr__(self, "exact_duplicate_request", bool(self.exact_duplicate_request))
+
+    @property
+    def grew(self) -> bool:
+        return any((self.new_evidence, self.new_relations, self.new_lines))
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "operation": self.operation,
+            "status": self.status,
+            "new_evidence": self.new_evidence,
+            "repeated_evidence": self.repeated_evidence,
+            "new_relations": self.new_relations,
+            "new_lines": self.new_lines,
+            "replayed": self.replayed,
+            "exact_duplicate_request": self.exact_duplicate_request,
+        }
+        if self.request_fingerprint:
+            payload["request_fingerprint"] = self.request_fingerprint
+        if self.source_version:
+            payload["source_version"] = self.source_version
+        return payload
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> "RetrievalOperation":
+        if not isinstance(payload, Mapping):
+            raise ValueError("recent operation must be an object")
+        return cls(
+            operation=str(payload.get("operation") or ""),
+            status=str(payload.get("status") or ""),
+            request_fingerprint=str(payload.get("request_fingerprint") or ""),
+            new_evidence=int(payload.get("new_evidence") or 0),
+            repeated_evidence=int(payload.get("repeated_evidence") or 0),
+            new_relations=int(payload.get("new_relations") or 0),
+            new_lines=int(payload.get("new_lines") or 0),
+            source_version=str(payload.get("source_version") or ""),
+            replayed=bool(payload.get("replayed")),
+            exact_duplicate_request=bool(payload.get("exact_duplicate_request")),
+        )
+
+
 @dataclass(frozen=True)
 class RetrievalSessionState:
-    """Mechanical retrieval/context memory for one session."""
+    """Single canonical mechanical retrieval-memory owner."""
 
     context_id: str
     revision: int = 0
@@ -142,6 +228,10 @@ class RetrievalSessionState:
     seen_relations: tuple[str, ...] = ()
     covered_ranges: Mapping[str, tuple[tuple[int, int], ...]] = field(default_factory=dict)
     source_observations: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    operation_counts: Mapping[str, int] = field(default_factory=dict)
+    recent_operations: tuple[RetrievalOperation, ...] = ()
+    request_fingerprints: tuple[str, ...] = ()
+    exact_duplicate_requests: int = 0
     schema_version: int = RETRIEVAL_SESSION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -150,11 +240,23 @@ class RetrievalSessionState:
             raise ValueError("unsupported RetrievalSessionState schema version")
         if isinstance(self.revision, bool) or self.revision < 0:
             raise ValueError("context revision cannot be negative")
+        if isinstance(self.exact_duplicate_requests, bool) or self.exact_duplicate_requests < 0:
+            raise ValueError("exact_duplicate_requests cannot be negative")
         for name in ("seen_evidence", "seen_results", "seen_groups", "seen_relations"):
             values = tuple(getattr(self, name))
             if any(not isinstance(item, str) for item in values):
                 raise ValueError(f"RetrievalSessionState {name} must contain strings")
             object.__setattr__(self, name, values)
+        fingerprints = tuple(str(item).strip().lower() for item in self.request_fingerprints)
+        if any(not _FINGERPRINT_RE.fullmatch(item) for item in fingerprints):
+            raise ValueError("request_fingerprints must contain sha256 digests")
+        object.__setattr__(self, "request_fingerprints", fingerprints)
+        object.__setattr__(self, "operation_counts", _operation_counts_from_dict({"operation_counts": dict(self.operation_counts)}))
+        operations = tuple(
+            item if isinstance(item, RetrievalOperation) else RetrievalOperation.from_mapping(item)
+            for item in self.recent_operations
+        )
+        object.__setattr__(self, "recent_operations", operations)
         normalized_ranges: dict[str, tuple[tuple[int, int], ...]] = {}
         for source, ranges in dict(self.covered_ranges).items():
             source_key = str(source or "").strip()
@@ -162,15 +264,14 @@ class RetrievalSessionState:
                 raise ValueError("covered range source cannot be empty")
             normalized_ranges[source_key] = _normalize_ranges(ranges)
         object.__setattr__(self, "covered_ranges", normalized_ranges)
-        normalized_observations = _source_observations_from_dict(
-            {"source_observations": dict(self.source_observations)}
+        object.__setattr__(
+            self,
+            "source_observations",
+            _source_observations_from_dict({"source_observations": dict(self.source_observations)}),
         )
-        object.__setattr__(self, "source_observations", normalized_observations)
 
     @property
     def session_id(self) -> str:
-        """Preferred long-term name; ``context_id`` remains compatibility API."""
-
         return self.context_id
 
     def to_dict(self) -> dict[str, Any]:
@@ -190,6 +291,10 @@ class RetrievalSessionState:
                 source: dict(values)
                 for source, values in sorted(self.source_observations.items())
             },
+            "operation_counts": dict(sorted(self.operation_counts.items())),
+            "recent_operations": [item.to_dict() for item in self.recent_operations],
+            "request_fingerprints": list(self.request_fingerprints),
+            "exact_duplicate_requests": self.exact_duplicate_requests,
         }
 
     @classmethod
@@ -199,6 +304,9 @@ class RetrievalSessionState:
         schema_version = int(payload.get("schema_version") or 0)
         if schema_version != RETRIEVAL_SESSION_SCHEMA_VERSION:
             raise ValueError("unsupported RetrievalSessionState schema version")
+        recent_raw = payload.get("recent_operations") or []
+        if not isinstance(recent_raw, list):
+            raise ValueError("RetrievalSessionState recent_operations must be a list")
         return cls(
             context_id=str(payload.get("context_id") or ""),
             revision=int(payload.get("revision") or 0),
@@ -208,8 +316,28 @@ class RetrievalSessionState:
             seen_relations=_string_list(payload, "seen_relations"),
             covered_ranges=_covered_ranges_from_dict(payload),
             source_observations=_source_observations_from_dict(payload),
+            operation_counts=_operation_counts_from_dict(payload),
+            recent_operations=tuple(RetrievalOperation.from_mapping(item) for item in recent_raw),
+            request_fingerprints=_string_list(payload, "request_fingerprints"),
+            exact_duplicate_requests=int(payload.get("exact_duplicate_requests") or 0),
             schema_version=schema_version,
         )
+
+    def retrieval_summary(self, *, recent_limit: int = 10) -> dict[str, Any]:
+        if isinstance(recent_limit, bool) or not isinstance(recent_limit, int) or recent_limit < 1:
+            raise ValueError("recent_limit must be a positive integer")
+        recent = self.recent_operations[-recent_limit:]
+        return {
+            "operation_counts": dict(sorted(self.operation_counts.items())),
+            "unique_evidence_seen": len(self.seen_evidence),
+            "exact_duplicate_requests": self.exact_duplicate_requests,
+            "recent_window": len(recent),
+            "recent_with_new_evidence": sum(item.grew for item in recent),
+            "recent_repeated_only": sum(
+                (not item.grew) and item.repeated_evidence > 0 for item in recent
+            ),
+            "recent_no_match": sum(item.status == "no_match" for item in recent),
+        }
 
     def advance(
         self,
@@ -220,12 +348,15 @@ class RetrievalSessionState:
         relations: Iterable[str] = (),
         covered_ranges: Mapping[str, Iterable[tuple[int, int]]] | None = None,
         source_observations: Mapping[str, Mapping[str, Any]] | None = None,
+        operation: RetrievalOperation | None = None,
         max_seen_evidence: int = DEFAULT_MAX_SEEN_EVIDENCE,
         max_seen_results: int = DEFAULT_MAX_SEEN_RESULTS,
         max_seen_groups: int = DEFAULT_MAX_SEEN_GROUPS,
         max_seen_relations: int = DEFAULT_MAX_SEEN_RELATIONS,
+        max_request_fingerprints: int = DEFAULT_MAX_REQUEST_FINGERPRINTS,
+        max_recent_operations: int = DEFAULT_MAX_RECENT_OPERATIONS,
     ) -> tuple["RetrievalSessionState", bool]:
-        """Advance state once while preserving unrelated dimensions."""
+        """Atomically advance all mechanical retrieval-memory dimensions once."""
 
         seen_evidence, p1 = _append_unique(self.seen_evidence, evidence, max_seen_evidence)
         seen_results, p2 = _append_unique(self.seen_results, results, max_seen_results)
@@ -247,6 +378,31 @@ class RetrievalSessionState:
             if not source_key:
                 raise ValueError("source observation source cannot be empty")
             merged_observations[source_key] = dict(values)
+
+        counts = dict(self.operation_counts)
+        recent = list(self.recent_operations)
+        fingerprints = self.request_fingerprints
+        duplicates = self.exact_duplicate_requests
+        p5 = False
+        if operation is not None:
+            if not isinstance(operation, RetrievalOperation):
+                raise TypeError("operation must be RetrievalOperation")
+            counts[operation.operation] = counts.get(operation.operation, 0) + 1
+            duplicate = False
+            if operation.request_fingerprint:
+                duplicate = operation.request_fingerprint in set(fingerprints)
+                fingerprints, p5 = _append_unique(
+                    fingerprints,
+                    (operation.request_fingerprint,),
+                    max_request_fingerprints,
+                )
+            if duplicate:
+                duplicates += 1
+            recent.append(replace(operation, exact_duplicate_request=duplicate))
+            if max_recent_operations < 1:
+                raise ValueError("max_recent_operations must be at least 1")
+            recent = recent[-max_recent_operations:]
+
         return (
             RetrievalSessionState(
                 context_id=self.context_id,
@@ -257,8 +413,12 @@ class RetrievalSessionState:
                 seen_relations=seen_relations,
                 covered_ranges=merged_ranges,
                 source_observations=merged_observations,
+                operation_counts=counts,
+                recent_operations=tuple(recent),
+                request_fingerprints=fingerprints,
+                exact_duplicate_requests=duplicates,
             ),
-            p1 or p2 or p3 or p4,
+            p1 or p2 or p3 or p4 or p5,
         )
 
 
@@ -341,11 +501,14 @@ class RetrievalSessionStore:
 
 
 __all__ = [
+    "DEFAULT_MAX_RECENT_OPERATIONS",
+    "DEFAULT_MAX_REQUEST_FINGERPRINTS",
     "DEFAULT_MAX_SEEN_EVIDENCE",
     "DEFAULT_MAX_SEEN_GROUPS",
     "DEFAULT_MAX_SEEN_RELATIONS",
     "DEFAULT_MAX_SEEN_RESULTS",
     "RETRIEVAL_SESSION_SCHEMA_VERSION",
+    "RetrievalOperation",
     "RetrievalSessionState",
     "RetrievalSessionStore",
     "validate_retrieval_session_id",

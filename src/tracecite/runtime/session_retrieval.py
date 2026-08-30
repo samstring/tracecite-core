@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any, Mapping
 
 from tracecite_core.state_file import state_lock
 
-from .agent_api import EvidenceRequest, RangeTarget, RetrievalResult
+from .agent_api import EvidenceRequest, ProviderTarget, QueryTarget, RangeTarget, RetrievalResult, SourceTarget
 from .evidence_identity import SourceVersion, file_source_version, pointer_source_key
 from .evidence_progress import EvidenceProgressTracker
 from .evidence_routing import EvidenceRoutingPolicy
@@ -17,6 +18,7 @@ from .retrieval_guidance import prioritize_actionable_retrieval
 from .retrieval_session import (
     DEFAULT_MAX_SEEN_EVIDENCE,
     DEFAULT_MAX_SEEN_RELATIONS,
+    RetrievalOperation,
     RetrievalSessionState,
     RetrievalSessionStore,
 )
@@ -24,6 +26,76 @@ from .retrieve_contract import retrieve as _retrieve_contract
 
 
 _LINE_PREFIX_RE = re.compile(r"^\s*(\d+):(?:\s|$)")
+
+
+def _request_operation(request: EvidenceRequest) -> tuple[str, str]:
+    target = request.target
+    if isinstance(target, QueryTarget):
+        operation = "search"
+        identity = {
+            "source": str(Path(target.source).expanduser().resolve()),
+            "query": target.query,
+            "regex": target.regex,
+            "last": target.last,
+            "since": target.since,
+            "until": target.until,
+            "fold": target.fold,
+        }
+    elif isinstance(target, RangeTarget):
+        operation = "expand"
+        identity = {
+            "source": str(Path(target.source).expanduser().resolve()),
+            "start_line": target.start_line,
+            "end_line": target.end_line,
+            "before": target.before,
+            "after": target.after,
+            "expected_sha256": target.expected_sha256,
+        }
+    elif isinstance(target, SourceTarget):
+        operation = "probe"
+        identity = {
+            "source": str(Path(target.source).expanduser().resolve()),
+            "glob": target.glob,
+            "recursive": target.recursive,
+            "segmenter": target.segmenter,
+        }
+    elif isinstance(target, ProviderTarget):
+        operation = "retrieve"
+        identity = {"provider_request": target.request.to_dict()}
+    else:
+        operation = "retrieve"
+        identity = {"target_type": type(target).__name__}
+    encoded = json.dumps(
+        {"operation": operation, "identity": identity},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return operation, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _operation_record(
+    request: EvidenceRequest,
+    *,
+    status: str,
+    new_evidence: int,
+    repeated_evidence: int,
+    new_relations: int,
+    new_lines: int,
+    source_version: str | None,
+) -> RetrievalOperation:
+    operation, fingerprint = _request_operation(request)
+    return RetrievalOperation(
+        operation=operation,
+        status=status,
+        request_fingerprint=fingerprint,
+        new_evidence=new_evidence,
+        repeated_evidence=repeated_evidence,
+        new_relations=new_relations,
+        new_lines=new_lines,
+        source_version=source_version or "",
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -248,6 +320,9 @@ def _already_covered_range(
 def _commit_observation(
     store: RetrievalSessionStore,
     *,
+    request: EvidenceRequest,
+    canonical_status: str,
+    truncated: bool,
     evidence: tuple[Mapping[str, Any], ...],
     relation_ids: tuple[str, ...],
     source_key: str | None,
@@ -260,6 +335,8 @@ def _commit_observation(
     int,
     tuple[str, ...],
     tuple[tuple[int, int], ...],
+    str,
+    dict[str, Any],
 ]:
     """Atomically merge one retrieval result with the latest session state."""
 
@@ -292,29 +369,58 @@ def _commit_observation(
             new_relations=len(new_relation_ids),
         )
 
-        if evidence_ids or relation_ids or line_ranges or source_observation:
-            evidence_limit = max(
-                DEFAULT_MAX_SEEN_EVIDENCE,
-                len(state.seen_evidence) + len(evidence_ids) + 1,
-            )
-            relation_limit = max(
-                DEFAULT_MAX_SEEN_RELATIONS,
-                len(state.seen_relations) + len(relation_ids) + 1,
-            )
-            observations = None
-            if source_observation is not None:
-                observations = {source_observation[0]: source_observation[1]}
-            next_state, _ = state.advance(
-                evidence=evidence_ids,
-                relations=relation_ids,
-                covered_ranges={source_key: line_ranges} if source_key and line_ranges else None,
-                source_observations=observations,
-                max_seen_evidence=evidence_limit,
-                max_seen_relations=relation_limit,
-            )
-            store.save(next_state)
+        operation_status = str(canonical_status or "unknown")
+        if (
+            operation_status.lower() not in {"error", "no_match"}
+            and evidence
+            and not new_rows
+            and not new_relation_ids
+            and readiness.delta.new_lines == 0
+            and not truncated
+        ):
+            operation_status = "no_new_evidence"
 
-    return tracker, readiness, new_rows, repeated, new_relation_ids, unseen_ranges
+        evidence_limit = max(
+            DEFAULT_MAX_SEEN_EVIDENCE,
+            len(state.seen_evidence) + len(evidence_ids) + 1,
+        )
+        relation_limit = max(
+            DEFAULT_MAX_SEEN_RELATIONS,
+            len(state.seen_relations) + len(relation_ids) + 1,
+        )
+        observations = None
+        if source_observation is not None:
+            observations = {source_observation[0]: source_observation[1]}
+        next_state, _ = state.advance(
+            evidence=evidence_ids,
+            relations=relation_ids,
+            covered_ranges={source_key: line_ranges} if source_key and line_ranges else None,
+            source_observations=observations,
+            operation=_operation_record(
+                request,
+                status=operation_status,
+                new_evidence=len(new_rows),
+                repeated_evidence=repeated,
+                new_relations=len(new_relation_ids),
+                new_lines=readiness.delta.new_lines,
+                source_version=source_key,
+            ),
+            max_seen_evidence=evidence_limit,
+            max_seen_relations=relation_limit,
+        )
+        store.save(next_state)
+        session_progress = next_state.retrieval_summary()
+
+    return (
+        tracker,
+        readiness,
+        new_rows,
+        repeated,
+        new_relation_ids,
+        unseen_ranges,
+        operation_status,
+        session_progress,
+    )
 
 
 def retrieve_with_session(
@@ -340,14 +446,29 @@ def retrieve_with_session(
         covered = _already_covered_range(request, tracker, state)
     if covered is not None:
         source_key, _start, _end, observation = covered
-        readiness = tracker.observe(source=source_key)
-        if observation is not None:
-            with state_lock(session.path):
-                latest = session.load()
-                next_state, _ = latest.advance(
-                    source_observations={str(Path(request.target.source).expanduser().resolve()): observation}
-                )
-                session.save(next_state)
+        with state_lock(session.path):
+            latest = session.load()
+            tracker = _restore_tracker(latest)
+            readiness = tracker.observe(source=source_key)
+            observations = None
+            if observation is not None:
+                observations = {
+                    str(Path(request.target.source).expanduser().resolve()): observation
+                }
+            next_state, _ = latest.advance(
+                source_observations=observations,
+                operation=_operation_record(
+                    request,
+                    status="no_new_evidence",
+                    new_evidence=0,
+                    repeated_evidence=0,
+                    new_relations=0,
+                    new_lines=0,
+                    source_version=source_key,
+                ),
+            )
+            session.save(next_state)
+            session_progress = next_state.retrieval_summary()
         return RetrievalResult(
             operation="expand",
             status="no_new_evidence",
@@ -361,6 +482,7 @@ def retrieve_with_session(
                     "new_text": "",
                     "unseen_ranges": [],
                     "source_version": source_key,
+                    "session_progress": session_progress,
                     "novelty": {
                         "state": "no_new_evidence",
                         "basis": ["source_generation", "requested_context_already_covered"],
@@ -415,14 +537,23 @@ def retrieve_with_session(
         repeated,
         new_relation_ids,
         unseen_ranges,
+        operation_status,
+        session_progress,
     ) = _commit_observation(
         session,
+        request=request,
+        canonical_status=str(canonical.get("status") or base.status or "unknown"),
+        truncated=truncated,
         evidence=evidence,
         relation_ids=relation_ids,
         source_key=source_key,
         source_observation=source_observation,
         line_ranges=line_ranges,
     )
+
+    data = dict(canonical.get("data") or {})
+    data["session_progress"] = session_progress
+    canonical["data"] = data
 
     if repeated:
         matched_existing = _matched_existing_evidence_refs(evidence, new_rows)
@@ -441,17 +572,9 @@ def retrieve_with_session(
             data["source_version"] = source_key
         canonical["data"] = data
 
-    status = base.status
+    status = operation_status
     acquisition_end_reason = base.acquisition_end_reason
-    if (
-        str(canonical.get("status") or "").lower() not in {"error", "no_match"}
-        and evidence
-        and not new_rows
-        and not new_relation_ids
-        and readiness.delta.new_lines == 0
-        and not truncated
-    ):
-        status = "no_new_evidence"
+    if status == "no_new_evidence":
         data = dict(canonical.get("data") or {})
         data["novelty"] = {
             "state": "no_new_evidence",
