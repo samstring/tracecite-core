@@ -127,17 +127,47 @@ def test_timeout_is_separate_from_provider_failure() -> None:
     assert result["run_validity"]["provider_contamination"] is None
 
 
-def test_trajectory_counts_native_and_tracecite_activity() -> None:
+def test_trajectory_counts_canonical_tracecite_activity() -> None:
     events = [
-        {"type": "tool", "name": "tracecite_search", "output": '{"status":"ok","evidence":[{"ref":"x:L1"}],"coverage":{"new_evidence":1}}', "activity": {"category": "tracecite_evidence"}},
-        {"type": "tool", "name": "grep", "output": "x", "activity": {"category": "native_search"}},
-        {"type": "tool", "name": "bash", "output": "x", "activity": {"category": "opaque_shell"}},
-        {"type": "tool", "name": "tracecite_search", "output": '{"status":"no_new_evidence","evidence":[],"coverage":{"new_evidence":0,"repeated_evidence":1}}', "activity": {"category": "tracecite_evidence"}},
+        {
+            "type": "tool",
+            "name": "tracecite_retrieve",
+            "output": '{"operation":"retrieve","status":"ok","evidence":[{"ref":"x:L1"}],"coverage":{"new_evidence":1}}',
+            "activity": {"category": "tracecite_evidence"},
+        },
+        {"type": "tool", "name": "find", "output": "x", "activity": {"category": "native_search"}},
+        {
+            "type": "tool",
+            "name": "tracecite_aggregate",
+            "output": '{"operation":"aggregate","status":"ok","data":{"count":2},"coverage":{"complete":true}}',
+            "activity": {"category": "tracecite_evidence"},
+        },
+        {
+            "type": "tool",
+            "name": "tracecite_retrieve",
+            "output": '{"operation":"retrieve","status":"no_new_evidence","evidence":[],"coverage":{"new_evidence":0,"repeated_evidence":1}}',
+            "activity": {"category": "tracecite_evidence"},
+        },
         {"type": "final", "answer": "done"},
     ]
     summary = MODULE.trajectory_summary(events)
     assert summary["core_evidence_first_tool_index"] == 1
     assert summary["post_core_tool_calls"] == 3
     assert summary["native_search_calls"] == 1
-    assert summary["opaque_shell_calls"] == 1
-    assert summary["tracecite_low_novelty_ratio"] == 0.5
+    assert summary["tracecite_evidence_calls"] == 3
+    assert summary["tracecite_low_novelty_calls"] == 1
+    assert summary["tracecite_low_novelty_ratio"] == 0.3333
+
+
+def test_legacy_tracecite_aliases_remain_classified() -> None:
+    events = [
+        {
+            "type": "tool",
+            "name": "tracecite_search",
+            "output": '{"status":"ok","evidence":[{"ref":"x:L1"}],"coverage":{"new_evidence":1}}',
+        },
+        {"type": "final", "answer": "done"},
+    ]
+    summary = MODULE.trajectory_summary(events)
+    assert summary["tracecite_evidence_calls"] == 1
+    assert summary["core_evidence_first_tool_index"] == 1

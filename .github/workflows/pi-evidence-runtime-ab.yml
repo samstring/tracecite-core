@@ -104,6 +104,7 @@ jobs:
             tests/test_evidence_routing.py \
             tests/test_evidence_selection.py \
             tests/test_pi_host_tool_activity.py \
+            tests/test_pi_tracecite_bridge.py \
             tests/test_pi_session_to_transcript.py \
             tests/test_root_cause_benchmarking.py \
             tests/test_support_aware_root_cause_benchmarking.py \
@@ -168,7 +169,7 @@ jobs:
         run: |
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
-          BASE_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, investigation order, conclusions, evidence sufficiency, and when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly state when the supplied evidence is insufficient.'
+          BASE_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, investigation order, conclusions, evidence sufficiency, and when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly state when the supplied evidence is insufficient.'
 
           run_arm() {
             arm="$1"
@@ -185,7 +186,7 @@ jobs:
                 --system-prompt "$BASE_PROMPT" "$QUESTION" \
                 > "$RESULT_ROOT/pi-native-answer.md" 2> "$RESULT_ROOT/pi-native-stderr.log"
             else
-              TRACE_PROMPT="$BASE_PROMPT TraceCite Evidence Runtime tools and the TraceCite skill are available for evidence operations they can express. Native tools remain available. TraceCite provides mechanical evidence, provenance, novelty, identity-safety, and activity semantics only; it does not choose hypotheses, causal conclusions, evidence sufficiency, or stopping."
+              TRACE_PROMPT="$BASE_PROMPT This is the controlled TraceCite arm of a native-vs-TraceCite capability A/B test. Every operation that inspects or derives from evidence content MUST use the TraceCite Evidence Runtime tools exposed by this Host: tracecite_retrieve, tracecite_materialize, tracecite_replay, tracecite_aggregate, tracecite_traverse, and tracecite_verify. Native evidence-content tools are intentionally unavailable. find/ls may only locate files; do not use them as substitutes for evidence retrieval. You still own hypotheses, the query/entity/range/seed you choose, causal reasoning, evidence sufficiency, the conclusion, and when to stop."
               TRACECITE_PI_SESSION="$RESULT_ROOT/tracecite-retrieval-session.json" \
               TRACECITE_PI_ACTIVITY="$RESULT_ROOT/tracecite-host-tool-activity.json" \
               timeout -k 30s 600s pi \
@@ -193,7 +194,7 @@ jobs:
                 --thinking off --mode text --print \
                 --session-dir "$RESULT_ROOT/pi-tracecite-session" \
                 --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
-                --tools read,bash,grep,find,ls,tracecite_search,tracecite_expand \
+                --tools find,ls,tracecite_retrieve,tracecite_materialize,tracecite_replay,tracecite_aggregate,tracecite_traverse,tracecite_verify \
                 --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
                 --no-prompt-templates --no-context-files \
                 --system-prompt "$TRACE_PROMPT" "$QUESTION" \
@@ -256,19 +257,36 @@ jobs:
               return json.loads(path.read_text()) if path.is_file() else None
           native = read('pi-native-run-result.json')
           tracecite = read('pi-tracecite-run-result.json')
+          activity = read('tracecite-host-tool-activity.json')
+          tracecite_surface = [
+              'tracecite_retrieve',
+              'tracecite_materialize',
+              'tracecite_replay',
+              'tracecite_aggregate',
+              'tracecite_traverse',
+              'tracecite_verify',
+          ]
           report = {
-              'schema_version': 1,
+              'schema_version': 2,
               'case_id': os.environ['CASE_ID'],
               'repetition': int(os.environ['REPETITION']),
               'input_bytes': int(os.environ.get('INPUT_BYTES') or 0),
               'arm_order': (root / 'arm-order.txt').read_text().strip() if (root / 'arm-order.txt').is_file() else None,
               'native': native,
               'tracecite': tracecite,
-              'tracecite_host_activity': read('tracecite-host-tool-activity.json'),
+              'tracecite_host_activity': activity,
+              'tracecite_surface': tracecite_surface,
           }
           def valid(value):
               return bool(value and (value.get('run_validity') or {}).get('valid_for_comparison'))
-          report['comparison_valid'] = valid(native) and valid(tracecite)
+          trajectory = (tracecite or {}).get('trajectory') or {}
+          tool_names = trajectory.get('tool_names') or {}
+          tracecite_calls = int(trajectory.get('tracecite_evidence_calls') or 0)
+          forbidden = sum(int(tool_names.get(name) or 0) for name in ('grep', 'read', 'bash'))
+          report['tracecite_required_tool_used'] = tracecite_calls > 0
+          report['tracecite_forbidden_native_evidence_calls'] = forbidden
+          report['tracecite_contract_valid'] = tracecite_calls > 0 and forbidden == 0
+          report['comparison_valid'] = valid(native) and valid(tracecite) and report['tracecite_contract_valid']
           (root / 'comparison.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
           print(json.dumps(report, indent=2, sort_keys=True))
           PY

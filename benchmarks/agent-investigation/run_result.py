@@ -31,6 +31,28 @@ PROVIDER_PATTERNS = (
     ),
 )
 
+TRACECITE_TOOL_NAMES = frozenset(
+    {
+        "tracecite_retrieve",
+        "tracecite_materialize",
+        "tracecite_replay",
+        "tracecite_aggregate",
+        "tracecite_traverse",
+        "tracecite_verify",
+        "tracecite_search",
+        "tracecite_expand",
+    }
+)
+TRACECITE_NOVELTY_TOOL_NAMES = frozenset(
+    {
+        "tracecite_retrieve",
+        "tracecite_materialize",
+        "tracecite_replay",
+        "tracecite_search",
+        "tracecite_expand",
+    }
+)
+
 
 def _read_text(path: Path | None) -> str:
     if path is None or not path.is_file():
@@ -118,7 +140,7 @@ def _session_error_diagnostics(session_text: str) -> str:
 
 def _tracecite_shape(event: Mapping[str, Any]) -> tuple[bool, bool, bool]:
     name = str(event.get("name") or event.get("tool") or "")
-    if name not in {"tracecite_search", "tracecite_expand"}:
+    if name not in TRACECITE_TOOL_NAMES:
         return False, False, False
     output = event.get("output")
     if not isinstance(output, str):
@@ -129,7 +151,13 @@ def _tracecite_shape(event: Mapping[str, Any]) -> tuple[bool, bool, bool]:
         return True, bool(output.strip()), False
     if not isinstance(payload, Mapping):
         return True, False, False
+
     status = str(payload.get("status") or "")
+    if name not in TRACECITE_NOVELTY_TOOL_NAMES:
+        # aggregate/traverse/verify are TraceCite Evidence operations but do not
+        # participate in RetrievalSession novelty accounting.
+        return True, status in {"ok", "partial", "empty"}, False
+
     coverage = payload.get("coverage") if isinstance(payload.get("coverage"), Mapping) else {}
     evidence = payload.get("evidence") if isinstance(payload.get("evidence"), list) else []
     text = payload.get("text")
@@ -156,7 +184,7 @@ def trajectory_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             categories[str(activity.get("category") or "other")] += 1
         else:
             name = str(event.get("name") or event.get("tool") or "")
-            if name in {"tracecite_search", "tracecite_expand"}:
+            if name in TRACECITE_TOOL_NAMES:
                 categories["tracecite_evidence"] += 1
             elif name in {"grep", "find"}:
                 categories["native_search"] += 1

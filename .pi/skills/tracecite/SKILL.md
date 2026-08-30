@@ -1,75 +1,99 @@
 ---
 name: tracecite
-description: Use TraceCite through its canonical Evidence API semantics. The Pi adapter exposes retrieval/materialization/replay tools while preserving provenance, coverage, immutable source identity, session novelty, correlation safety, and Host-owned full-tool telemetry. TraceCite does not choose hypotheses, causal conclusions, sufficiency, or stopping.
-compatibility: Requires the TraceCite Pi extension. Current adapter tools map tracecite_search to canonical retrieve and tracecite_expand to canonical materialize/replay.
+description: Use TraceCite through its canonical Evidence Runtime operations. The Pi adapter exposes retrieve, materialize, replay, aggregate, traverse, and verify while preserving provenance, coverage, immutable source identity, RetrievalSession novelty, correlation safety, and Host-owned full-tool telemetry. TraceCite never chooses hypotheses, causal conclusions, evidence sufficiency, or stopping.
+compatibility: Requires the TraceCite Pi extension. Canonical Pi tools are tracecite_retrieve, tracecite_materialize, tracecite_replay, tracecite_aggregate, tracecite_traverse, and tracecite_verify. tracecite_search/tracecite_expand remain compatibility aliases only.
 ---
 
 # TraceCite Evidence Runtime in Pi
 
-TraceCite supplies evidence mechanics. You remain responsible for hypotheses, investigation order, causal reasoning, conclusions, what to inspect next, evidence sufficiency, and when to stop.
+TraceCite supplies evidence mechanics. The Agent remains responsible for hypotheses, investigation order, causal reasoning, conclusions, evidence sufficiency, and when to stop.
 
-This skill documents canonical semantics and the current Pi adapter mapping. It does not prescribe a preferred investigation workflow.
+The Pi adapter exposes the complete canonical Evidence Runtime surface. Adapter names are a Host mapping, not a second Core API.
 
-## Canonical Evidence API
-
-The stable TraceCite public primitives are:
-
-- `retrieve`
-- `materialize`
-- `replay`
-- `aggregate`
-- `traverse`
-- `verify`
-
-The current minimal Pi adapter exposes a subset through host-friendly tool names:
+## Canonical Pi tools
 
 ```text
-tracecite_search                -> retrieve(QueryTarget(...))
-tracecite_expand replay=false   -> materialize(RangeTarget(...))
-tracecite_expand replay=true    -> replay(RangeTarget(...))
+tracecite_retrieve      -> retrieve
+tracecite_materialize   -> materialize
+tracecite_replay        -> replay
+tracecite_aggregate     -> aggregate
+tracecite_traverse      -> traverse
+tracecite_verify        -> verify
 ```
 
-These adapter names do not define separate novelty, routing, or state semantics.
+Compatibility aliases remain available for older callers:
 
-## `tracecite_search` = canonical `retrieve`
+```text
+tracecite_search        -> retrieve(QueryTarget(...))
+tracecite_expand        -> materialize(...) or replay(...)
+```
 
-`tracecite_search` performs caller-selected text retrieval.
+New integrations and benchmarks should use the six canonical tool names.
 
-- Literal matching is the default unless `regex=true`.
+## Controlled A/B evidence mode
+
+Some Hosts, especially the native-vs-TraceCite A/B benchmark, intentionally require all evidence-content operations to go through TraceCite.
+
+When the Host exposes only TraceCite Evidence tools plus file-location helpers such as `find`/`ls`:
+
+- use TraceCite for searching, reading/materializing, replaying, counting/grouping, traversal, and integrity verification;
+- do not attempt to bypass the controlled arm with shell pipelines, `grep`, `cat`, or native `read`;
+- the requirement applies only to the evidence-operation channel;
+- the Agent still chooses the hypothesis, query, entity, range, traversal seed, reasoning, sufficiency judgment, conclusion, and stopping point.
+
+This makes the benchmark a capability comparison, not a tool-adoption test.
+
+## `tracecite_retrieve`
+
+`tracecite_retrieve` performs caller-selected evidence retrieval.
+
+- With `query`, it performs QueryTarget retrieval; literal matching is default unless `regex=true`.
+- Without `query`, it performs SourceTarget inspection.
 - A match is an observation, not proof of causality.
 - `no_match` is a retrieval fact, not proof that an event never happened.
-- A bounded preview is not the complete source or complete causal context.
-- `new_evidence=0` means the call exposed no new Evidence identity in the current RetrievalSession.
-- `matched_existing_evidence` means the current query matched evidence already seen in the session; the body can remain suppressed while exact refs preserve current-query relevance.
+- `new_evidence=0` means the operation exposed no new Evidence identity in the current RetrievalSession.
+- `matched_existing_evidence` identifies previously delivered Evidence matched by the current request without pretending it is new.
 
-If a query contains regex operators, set `regex=true`; otherwise the adapter searches that text literally.
+Use exact refs and returned source SHA-256 for later materialization/replay.
 
-## `tracecite_expand` = canonical `materialize` or `replay`
+## `tracecite_materialize`
 
-With `replay=false`, `tracecite_expand` materializes exact bounded context around a caller-selected line/range.
+`tracecite_materialize` materializes exact bounded context around a caller-selected line/range.
 
-With `replay=true`, it intentionally re-reads context already covered by the same immutable RetrievalSession.
+- It preserves immutable source identity when a SHA-256 is supplied.
+- Previously covered immutable context may be suppressed rather than returned as fake new evidence.
+- Materialized text is evidence; any interpretation of that text remains the Agent's responsibility.
 
-Replay semantics:
+## `tracecite_replay`
 
-- source SHA-256 should be supplied when available;
-- replayed text is old evidence being shown again;
-- replay does not create new evidence;
-- novelty remains zero.
+`tracecite_replay` intentionally re-reads context already covered by the same immutable RetrievalSession.
 
-If the purpose is simply to see already exposed text again, replay is the canonical reread mechanism rather than pretending a repeated search produced new evidence.
+- SHA-256 is required.
+- Replay does not create new evidence.
+- Use replay when reconsidering old text rather than repeating searches and treating old output as new discovery.
 
-## Canonical operations not exposed by the minimal Pi adapter
+## `tracecite_aggregate`
 
-The canonical Runtime also defines `aggregate`, `traverse`, and `verify`.
+`tracecite_aggregate` performs bounded deterministic `count`, `distinct`, or `group` operations over caller-selected local text matches.
 
-If the current Pi extension does not expose a dedicated tool for one of these operations, do not invent TraceCite results for it. Use the capabilities actually available to the Host, or call the public Python API when the Host integration supports that path.
+- It returns mechanical values and source provenance.
+- It does not rank groups by causal importance.
+- For `group`, the Agent supplies the grouping regex.
 
-Their semantics remain:
+## `tracecite_traverse`
 
-- `aggregate`: deterministic `count` / `distinct` / `group`, not causal ranking;
-- `traverse`: caller-selected deterministic traversal, not next-target selection;
-- `verify`: mechanical integrity/manifest verification, not validation of an Agent conclusion.
+`tracecite_traverse` runs bounded deterministic provider traversal over caller-selected evidence IDs/entities.
+
+- The Pi bridge accepts a provider-shaped JSON fixture (`name`, `evidence[]`, optional `relations[]`) so the canonical provider traversal is genuinely executable from Pi.
+- The Agent selects seeds and limits.
+- Traversal follows mechanical identity/entity relationships only; it does not choose what should be investigated next.
+
+## `tracecite_verify`
+
+`tracecite_verify` verifies a caller-selected evidence manifest mechanically.
+
+- It verifies integrity/manifest facts.
+- It does not validate the Agent's causal conclusion.
 
 ## RetrievalSession semantics
 
@@ -85,49 +109,21 @@ It does not contain or infer hypotheses, root cause, evidence sufficiency, or st
 
 ## Correlation and identity safety
 
-`correlation_constraints` and related fields describe safe evidence identity/correlation.
+Correlation constraints are evidence-identity facts, not causal claims.
 
-Possible fields include:
+If `identifier_only_correlation_safe=false`, do not collapse distinct scopes using that identifier alone. Use the returned minimum safe correlation key when the Agent chooses to correlate those records.
 
-- `identifier_key`;
-- `identifier_value`;
-- `identifier_only_correlation_safe`;
-- `minimum_safe_correlation_key`;
-- `scope_fanout_observed`;
-- `source_uniqueness`;
-- `scoped_entities`;
-- `observed_sibling_entities`.
+## Host tool activity
 
-If `identifier_only_correlation_safe=false`, do not collapse evidence from distinct scopes into one identity using that identifier alone. Use the minimum safe correlation key for any caller-selected correlation.
+The Pi extension observes actual Host tool calls and records categories such as:
 
-These fields do not say which entity is important, which sibling should be investigated, or whether identity ambiguity caused the failure.
+- canonical TraceCite tools -> `tracecite_evidence`;
+- `grep` / `find` -> `native_search`;
+- `read` -> `native_read`;
+- `bash` -> `opaque_shell`;
+- `ls` -> `native_other`.
 
-## Routing and bounded projections
-
-TraceCite may choose bounded transport forms using mechanical facts such as source size, output limits, seen coverage, or repeated-output ratio.
-
-High fanout, truncation, or bounded selection are transport facts. They do not establish causal relevance.
-
-A lossy projection must remain explicit about truncation/omission, and exact materialization/replay must remain available for reviewable source text.
-
-## Full Pi Host Tool Activity
-
-The TraceCite Pi extension observes actual Pi `tool_call` / `tool_result` events, including TraceCite tools and native tools such as:
-
-- `grep` / `find` -> native search activity;
-- `read` -> native read activity;
-- `bash` -> native/opaque shell activity;
-- TraceCite tools -> TraceCite evidence activity.
-
-`bash` is explicitly marked `opaque`; Host telemetry must not pretend arbitrary shell activity is canonical TraceCite Evidence.
-
-This activity ledger is Host-owned trajectory telemetry. It is not evidence sufficiency, root-cause confidence, or a stop recommendation.
-
-## Native tools remain valid Host tools
-
-Native tools are not forbidden. They may be used for tasks the current TraceCite adapter does not express, including structural inspection, transformations, aggregation, independent verification, or fallback when a TraceCite capability is unavailable.
-
-Avoid treating native output as TraceCite provenance unless it actually came through a canonical Evidence operation.
+Host activity is trajectory telemetry only. It is not evidence sufficiency or a stop recommendation.
 
 ## Evidence support boundary
 
@@ -137,31 +133,19 @@ Evaluation may distinguish:
 - `inference_supported`;
 - `unsupported_from_log`.
 
-If a claim is an inference, qualify it as inference. If the supplied evidence does not establish a deeper cause or fix, state that boundary instead of presenting known upstream truth as directly observed in the log.
-
-This is an evidence-claim discipline, not a prescribed investigation path.
-
-## Citation and provenance
-
-For material claims based on TraceCite evidence:
-
-- preserve exact refs and materialized line ranges;
-- preserve source SHA-256 when immutable identity matters;
-- distinguish replayed evidence from new evidence;
-- do not treat a compact preview as more exact than the text actually returned;
-- do not treat an Agent-generated conclusion as its own verification.
+If a claim is an inference, qualify it. If supplied evidence does not establish a deeper cause or fix, state that boundary rather than presenting outside knowledge as observed fact.
 
 ## What TraceCite does not decide
 
-TraceCite and this skill do not decide:
+TraceCite does not decide:
 
 - which hypothesis to form;
-- which source/entity/query to inspect next;
-- which sibling should be compared;
+- which query, source, entity, range, or traversal seed to choose;
+- which sibling is important;
 - whether identity ambiguity is causal;
 - what the root cause is;
-- whether the evidence is sufficient;
-- what the final answer should be;
+- whether evidence is sufficient;
+- what final answer to give;
 - when to stop.
 
-Those decisions remain with the Agent.
+Those decisions remain with the Agent, including in the forced TraceCite A/B arm.
