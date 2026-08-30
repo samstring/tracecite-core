@@ -46,6 +46,20 @@ def _result(*, entity_count: int = 1) -> RetrievalResult:
                                 "entity_count_observed": entity_count,
                                 "entities": entities,
                                 "sibling_entity_count_observed": 5,
+                                "sibling_entities": [
+                                    {
+                                        "entity": "vendor.example/device-run-3083",
+                                        "scope": "vendor.example/",
+                                        "occurrence_count": 3,
+                                        "references": ["evidence.log:10", "evidence.log:40"],
+                                    },
+                                    {
+                                        "entity": "vendor.example/device-run-5477",
+                                        "scope": "vendor.example/",
+                                        "occurrence_count": 2,
+                                        "references": ["evidence.log:22"],
+                                    },
+                                ],
                             }
                         ],
                     }
@@ -102,6 +116,22 @@ def test_compatibility_layer_keeps_evidence_facts_but_strips_planner_fields() ->
         "scoped_entity",
         "resourceID",
     ]
+    assert constraint["observed_sibling_entities"] == [
+        {
+            "entity": "vendor.example/device-run-3083",
+            "scope": "vendor.example/",
+            "occurrence_count": 3,
+            "references": ["evidence.log:10", "evidence.log:40"],
+        },
+        {
+            "entity": "vendor.example/device-run-5477",
+            "scope": "vendor.example/",
+            "occurrence_count": 2,
+            "references": ["evidence.log:22"],
+        },
+    ]
+    assert constraint["observed_sibling_entities_truncated"] == 3
+    assert "does not prove" in constraint["sibling_entity_note"].lower()
 
     gap = canonical["missing_evidence"][0]
     assert gap["kind"] == "scope_uniqueness_unverified"
@@ -117,5 +147,9 @@ def test_direct_multi_entity_observation_is_reported_as_identity_fact_not_action
 
     assert constraint["source_uniqueness"] == "disproved"
     assert constraint["identifier_only_correlation_safe"] is False
+    assert {row["entity"] for row in constraint["observed_sibling_entities"]} == {
+        "vendor.example/device-run-3083",
+        "vendor.example/device-run-5477",
+    }
     assert "actionable_retrieval" not in canonical["data"]
     assert "next_queries" not in canonical
