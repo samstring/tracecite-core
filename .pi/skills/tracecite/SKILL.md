@@ -1,182 +1,167 @@
 ---
 name: tracecite
-description: Use TraceCite as an evidence-retrieval tool for large or repetitive local text/log sources. Interpret search, expand, replay, novelty, correlation constraints, scoped identity signals, and mechanical session progress without treating retrieval metadata as causal conclusions.
-compatibility: Requires the tracecite_search and tracecite_expand tools from the TraceCite Pi extension.
+description: Use TraceCite through its canonical Evidence API semantics. The Pi adapter exposes retrieval/materialization/replay tools while preserving provenance, coverage, immutable source identity, session novelty, correlation safety, and Host-owned full-tool telemetry. TraceCite does not choose hypotheses, causal conclusions, sufficiency, or stopping.
+compatibility: Requires the TraceCite Pi extension. Current adapter tools map tracecite_search to canonical retrieve and tracecite_expand to canonical materialize/replay.
 ---
 
-# TraceCite Evidence Retrieval
+# TraceCite Evidence Runtime in Pi
 
-TraceCite retrieves and materializes evidence. You remain responsible for hypotheses, investigation order, causal reasoning, conclusions, what to investigate next, and when to stop.
+TraceCite supplies evidence mechanics. You remain responsible for hypotheses, investigation order, causal reasoning, conclusions, what to inspect next, evidence sufficiency, and when to stop.
 
-This skill documents TraceCite semantics and correct tool usage. It does not prescribe an investigation strategy or choose which evidence, entity, hypothesis, or comparison should matter.
+This skill documents canonical semantics and the current Pi adapter mapping. It does not prescribe a preferred investigation workflow.
 
-## Tool selection
+## Canonical Evidence API
 
-| Need | Prefer |
-| --- | --- |
-| List files, inspect size/line count, or inspect directory structure | native `ls`, `find`, `wc` |
-| Read a very small file directly | native `read` |
-| Locate relevant evidence in a large or repetitive text/log source | `tracecite_search` |
-| Materialize exact context around a known hit | `tracecite_expand` |
-| Re-read context already exposed in this retrieval session | `tracecite_expand(..., replay=true)` |
-| Compute, aggregate, transform, sort, count, or perform a structural query TraceCite does not express | native shell/tools |
-| Independently verify a critical observation | narrow native `read`/`grep` when useful |
+The stable TraceCite public primitives are:
 
-Avoid broad native output when a bounded evidence query would answer the same retrieval need with substantially less context.
+- `retrieve`
+- `materialize`
+- `replay`
+- `aggregate`
+- `traverse`
+- `verify`
 
-For a large evidence file, broad `grep`, `awk`, `sed`, `head`, `tail`, or a large `read` used to discover evidence locations is **content retrieval**, not metadata. Prefer TraceCite for that retrieval when TraceCite can express the query. Native tools remain appropriate for metadata, aggregation, structural transforms, narrow independent verification, and fallback when TraceCite itself fails.
+The current minimal Pi adapter exposes a subset through host-friendly tool names:
 
-## Search syntax
+```text
+tracecite_search                -> retrieve(QueryTarget(...))
+tracecite_expand replay=false   -> materialize(RangeTarget(...))
+tracecite_expand replay=true    -> replay(RangeTarget(...))
+```
 
-`tracecite_search` uses literal matching unless `regex=true`.
+These adapter names do not define separate novelty, routing, or state semantics.
 
-- For a plain word or exact phrase, leave `regex` false or omit it.
-- If the query contains regex operators such as `|`, `.*`, `+`, `?`, `[]`, `()`, `^`, or `$`, set `regex=true`.
-- Do not send a regex-looking pattern while leaving `regex` false; TraceCite will search for that pattern literally.
+## `tracecite_search` = canonical `retrieve`
 
-## Search-result fields
+`tracecite_search` performs caller-selected text retrieval.
 
-When reading a `tracecite_search` result, these fields describe retrieval state rather than investigation conclusions:
+- Literal matching is the default unless `regex=true`.
+- A match is an observation, not proof of causality.
+- `no_match` is a retrieval fact, not proof that an event never happened.
+- A bounded preview is not the complete source or complete causal context.
+- `new_evidence=0` means the call exposed no new Evidence identity in the current RetrievalSession.
+- `matched_existing_evidence` means the current query matched evidence already seen in the session; the body can remain suppressed while exact refs preserve current-query relevance.
 
-- `status`: retrieval outcome for this call.
-- evidence refs/previews: evidence exposed by the call.
-- `coverage` / `progress`: mechanical coverage or novelty information.
-- `session_progress`: bounded mechanical history of retrieval outcomes in this session.
-- `correlation_constraints`: identity-safety information observed in the represented evidence.
-- `missing_evidence`: retrieval gaps or unavailable evidence reported by the tool.
+If a query contains regex operators, set `regex=true`; otherwise the adapter searches that text literally.
 
-None of these fields decides which hypothesis to pursue, what to investigate next, whether a relationship is causal, or whether the investigation is complete.
+## `tracecite_expand` = canonical `materialize` or `replay`
 
-## `new_evidence` and repeated evidence
+With `replay=false`, `tracecite_expand` materializes exact bounded context around a caller-selected line/range.
 
-`new_evidence=0` means this retrieval exposed no new evidence in the current session. It does not mean the investigation is complete.
+With `replay=true`, it intentionally re-reads context already covered by the same immutable RetrievalSession.
 
-If evidence was already exposed, TraceCite supports these mechanical reuse paths:
+Replay semantics:
 
-- reuse its existing ref;
-- use `tracecite_expand` for exact context;
-- use `replay=true` when intentionally re-reading already exposed text.
+- source SHA-256 should be supplied when available;
+- replayed text is old evidence being shown again;
+- replay does not create new evidence;
+- novelty remains zero.
 
-For the same immutable source/version, repeating the exact same search query with the same regex mode normally re-fetches the same retrieval target. If the intent is to see already exposed evidence again, use the existing ref, expand, or replay instead.
+If the purpose is simply to see already exposed text again, replay is the canonical reread mechanism rather than pretending a repeated search produced new evidence.
 
-A new search should represent a materially different retrieval target. TraceCite does not decide whether that different target is useful to the investigation.
+## Canonical operations not exposed by the minimal Pi adapter
 
-## `session_progress`
+The canonical Runtime also defines `aggregate`, `traverse`, and `verify`.
 
-`session_progress` is observability over retrieval behavior only. It may report values such as total search/expand calls, unique evidence identities seen, exact duplicate query count, and the outcomes of the most recent search window (`new`, repeated-only, or `no_match`).
+If the current Pi extension does not expose a dedicated tool for one of these operations, do not invent TraceCite results for it. Use the capabilities actually available to the Host, or call the public Python API when the Host integration supports that path.
 
-A recent window with little or no new evidence means only that those retrieval calls had low mechanical novelty. It does **not** mean:
+Their semantics remain:
 
-- the evidence is sufficient;
-- a root cause has been established;
-- a hypothesis is correct or incorrect;
-- no materially different source or target could contain evidence;
-- the investigation should stop.
+- `aggregate`: deterministic `count` / `distinct` / `group`, not causal ranking;
+- `traverse`: caller-selected deterministic traversal, not next-target selection;
+- `verify`: mechanical integrity/manifest verification, not validation of an Agent conclusion.
 
-Use `session_progress` to understand whether recent tool calls are covering new evidence or revisiting the same evidence surface. The Agent remains solely responsible for deciding whether a materially different retrieval target is needed and when to stop.
+## RetrievalSession semantics
 
-## `no_match`
+RetrievalSession is mechanical evidence memory only. It can track:
 
-`no_match` means the query found no matching evidence. It is not proof that an event never happened and is not a causal conclusion.
+- previously exposed Evidence identities;
+- immutable covered ranges;
+- bounded recent operations;
+- request fingerprints;
+- new/repeated/replay/no-match outcomes.
 
-A `no_match` can also result from query construction, including using regex syntax without `regex=true`, using the wrong identifier, or targeting the wrong source region.
+It does not contain or infer hypotheses, root cause, evidence sufficiency, or stop recommendations.
 
-## High fanout and truncated results
+## Correlation and identity safety
 
-Many matches, truncation, or `scope_fanout_observed=true` are retrieval-shape signals. They do not identify which matching entity matters.
+`correlation_constraints` and related fields describe safe evidence identity/correlation.
 
-If the Agent chooses to retrieve a specific entity from an ambiguous or high-fanout result, use the stable identity fields required by the returned correlation contract rather than relying on an ambiguous identifier alone. Do not interpret high fanout itself as evidence of causality.
+Possible fields include:
 
-## Correlation and identity-safety semantics
+- `identifier_key`;
+- `identifier_value`;
+- `identifier_only_correlation_safe`;
+- `minimum_safe_correlation_key`;
+- `scope_fanout_observed`;
+- `source_uniqueness`;
+- `scoped_entities`;
+- `observed_sibling_entities`.
 
-`correlation_constraints` describe whether identifiers are safe to use when associating evidence. They do not tell the Agent which entities to investigate or compare.
+If `identifier_only_correlation_safe=false`, do not collapse evidence from distinct scopes into one identity using that identifier alone. Use the minimum safe correlation key for any caller-selected correlation.
 
-A constraint may include:
+These fields do not say which entity is important, which sibling should be investigated, or whether identity ambiguity caused the failure.
 
-- `identifier_key`
-- `identifier_value`
-- `identifier_only_correlation_safe`
-- `minimum_safe_correlation_key`
-- `sibling_entity_count_observed`
-- `scope_fanout_observed`
-- `source_uniqueness`
-- `scoped_entities`
-- `observed_sibling_entities`
+## Routing and bounded projections
 
-### `identifier_only_correlation_safe=true`
+TraceCite may choose bounded transport forms using mechanical facts such as source size, output limits, seen coverage, or repeated-output ratio.
 
-Within the represented source evidence, the observed identity information supports using that identifier by itself for correlation. This is an identity fact, not a root-cause conclusion.
+High fanout, truncation, or bounded selection are transport facts. They do not establish causal relevance.
 
-### `identifier_only_correlation_safe=false`
+A lossy projection must remain explicit about truncation/omission, and exact materialization/replay must remain available for reviewable source text.
 
-The same identifier value must **not** be assumed to refer to the same entity across the represented evidence.
+## Full Pi Host Tool Activity
 
-`minimum_safe_correlation_key` states which fields are required to identify an entity safely for TraceCite correlation. For example, if it is `[scoped_entity, resourceID]`, then `resourceID` alone is insufficient.
+The TraceCite Pi extension observes actual Pi `tool_call` / `tool_result` events, including TraceCite tools and native tools such as:
 
-If the Agent independently decides to retrieve evidence for a particular entity, the TraceCite query must carry enough information to satisfy that safe identity key. This is a tool-usage requirement; it does not imply that the Agent should investigate that entity.
+- `grep` / `find` -> native search activity;
+- `read` -> native read activity;
+- `bash` -> native/opaque shell activity;
+- TraceCite tools -> TraceCite evidence activity.
 
-`scoped_entities` and `observed_sibling_entities` expose mechanically observed identities and evidence refs. Their presence does not mean those entities should be compared, that they participate in the same failure, or that identity ambiguity is causal.
+`bash` is explicitly marked `opaque`; Host telemetry must not pretend arbitrary shell activity is canonical TraceCite Evidence.
 
-Generic example: if `device42` appears under multiple resources and `minimum_safe_correlation_key` is `[scoped_entity, device_id]`, `resource-A/device42` and `resource-B/device42` are distinct identities for retrieval/correlation purposes unless evidence establishes otherwise. This example says nothing about whether either resource is relevant to the investigation.
+This activity ledger is Host-owned trajectory telemetry. It is not evidence sufficiency, root-cause confidence, or a stop recommendation.
 
-### `scope_fanout_observed=true`
+## Native tools remain valid Host tools
 
-The returned matches span multiple sibling scopes/entities. It warns only that all matches must not be collapsed into one entity timeline solely because they share an ambiguous identifier.
+Native tools are not forbidden. They may be used for tasks the current TraceCite adapter does not express, including structural inspection, transformations, aggregation, independent verification, or fallback when a TraceCite capability is unavailable.
 
-If the Agent chooses to retrieve one of those entities, use the safe correlation key. TraceCite does not prescribe which sibling to select or whether any cross-sibling comparison should be performed.
+Avoid treating native output as TraceCite provenance unless it actually came through a canonical Evidence operation.
 
-### `source_uniqueness`
+## Evidence support boundary
 
-When present, `source_uniqueness` is an observed uniqueness property of the current source/version only. Do not generalize it beyond the represented evidence without additional evidence.
+Evaluation may distinguish:
 
-## Evidence refs and exact context
+- `supported`;
+- `inference_supported`;
+- `unsupported_from_log`.
 
-A compact search preview is a bounded discovery representation. When exact source text is needed, use the evidence ref with `tracecite_expand`.
+If a claim is an inference, qualify it as inference. If the supplied evidence does not establish a deeper cause or fix, state that boundary instead of presenting known upstream truth as directly observed in the log.
 
-`tracecite_expand.radius` must be between `0` and `30`, inclusive. If the Agent independently needs a wider area, materialize additional adjacent bounded ranges instead of sending a radius above the tool limit.
+This is an evidence-claim discipline, not a prescribed investigation path.
 
-Mechanical ref usage:
+## Citation and provenance
 
-1. keep the evidence ref returned by search;
-2. expand the required exact range when needed;
-3. use exact materialized lines for citations;
-4. use replay when intentionally re-reading text already exposed in the session.
+For material claims based on TraceCite evidence:
 
-If overlapping context has already been exposed, TraceCite may return only unseen ranges. That is expected retrieval-session behavior.
+- preserve exact refs and materialized line ranges;
+- preserve source SHA-256 when immutable identity matters;
+- distinguish replayed evidence from new evidence;
+- do not treat a compact preview as more exact than the text actually returned;
+- do not treat an Agent-generated conclusion as its own verification.
 
-## Duplicate retrieval paths
+## What TraceCite does not decide
 
-After TraceCite has exposed evidence, fetching the same text again with native `grep` or `read` adds duplicate context unless there is a separate tool need.
+TraceCite and this skill do not decide:
 
-Legitimate native-tool uses include:
-
-- independent verification of an observation;
-- transformation, aggregation, counting, or structural queries TraceCite does not express;
-- resolving a retrieval capability gap.
-
-Keep native verification narrow. If the purpose is simply to see already exposed evidence again, use the existing ref, expand, or replay.
-
-## Evidence semantics
-
-- A search hit is an observation, not proof of causality.
-- Correlation constraints describe identity safety, not root cause.
-- `session_progress` describes retrieval history, not evidence sufficiency or a stop recommendation.
-- `observed_sibling_entities` are mechanically observed sibling identities and source references; they do not prescribe investigation or comparison.
-- `observed_relations` describe literal textual or structural co-observation, not root cause.
-- `source_sha256`, when present, identifies the source version associated with the evidence and can be reused for exact expansion/replay.
-- Replayed text is old evidence being re-read; it is not new evidence.
-- Missing evidence is a retrieval fact, not a deeper causal explanation.
-
-## Boundary: what TraceCite does not decide
-
-TraceCite and this skill do **not** decide:
-
-- which sibling/entity the Agent should investigate next;
-- whether two entities should be compared;
-- which hypothesis is more important;
-- whether an observed identity collision contributes to the failure;
+- which hypothesis to form;
+- which source/entity/query to inspect next;
+- which sibling should be compared;
+- whether identity ambiguity is causal;
 - what the root cause is;
-- whether enough evidence has been collected;
-- when the Agent should stop.
+- whether the evidence is sufficient;
+- what the final answer should be;
+- when to stop.
 
 Those decisions remain with the Agent.
