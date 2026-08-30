@@ -50,9 +50,8 @@ jobs:
         run: |
           git config user.name "tracecite-refactor-bot"
           git config user.email "actions@users.noreply.github.com"
-          git rm scripts/_b1_merge_retrieval_history.py
+          git rm -f scripts/_b1_merge_retrieval_history.py
           git rm .github/workflows/b1-retrieval-session-convergence.yml
           git add -A
           git commit -m "runtime: make RetrievalSession the single retrieval-memory owner"
           git push origin HEAD:experiment/evidence-intelligence
-# retry after removing stale stop-reason test expectations
