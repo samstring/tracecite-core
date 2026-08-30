@@ -118,6 +118,8 @@ When present, `source_uniqueness` is an observed uniqueness property of the curr
 
 A compact search preview is a bounded discovery representation. When exact source text is needed, use the evidence ref with `tracecite_expand`.
 
+`tracecite_expand.radius` must be between `0` and `30`, inclusive. If the Agent independently needs a wider area, materialize additional adjacent bounded ranges instead of sending a radius above the tool limit.
+
 Mechanical ref usage:
 
 1. keep the evidence ref returned by search;
