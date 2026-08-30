@@ -18,6 +18,46 @@ from .agent_api import RetrievalResult
 from .evidence_view import evidence_only
 
 
+def _observed_sibling_entities(
+    item: Mapping[str, Any],
+    *,
+    limit: int = 8,
+    reference_limit: int = 3,
+) -> list[dict[str, Any]]:
+    """Project bounded sibling identities already observed by verification.
+
+    These rows are navigation/provenance facts only. A sibling entity being
+    present in the same source family does not establish that it reuses the
+    ambiguous identifier or that it contributes to a failure.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for raw in item.get("sibling_entities") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        entity = str(raw.get("entity") or "").strip()
+        if not entity:
+            continue
+        references = [
+            str(value).strip()
+            for value in raw.get("references") or []
+            if str(value).strip()
+        ]
+        row: dict[str, Any] = {"entity": entity}
+        scope = str(raw.get("scope") or "").strip()
+        if scope:
+            row["scope"] = scope
+        occurrence_count = raw.get("occurrence_count")
+        if isinstance(occurrence_count, int) and not isinstance(occurrence_count, bool):
+            row["occurrence_count"] = occurrence_count
+        if references:
+            row["references"] = references[:reference_limit]
+        rows.append(row)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
 def _scoped_identity_contract(item: Mapping[str, Any]) -> dict[str, Any] | None:
     if str(item.get("kind") or "") != "scoped_identifier_verification":
         return None
@@ -32,11 +72,14 @@ def _scoped_identity_contract(item: Mapping[str, Any]) -> dict[str, Any] | None:
         for row in item.get("entities") or []
         if isinstance(row, Mapping) and str(row.get("entity") or "").strip()
     ]
+    observed_siblings = _observed_sibling_entities(item)
     return {
         "kind": "scoped_local_identifier",
         "identifier_key": identifier_key,
         "identifier_value": identifier_value,
         "scoped_entities": entities,
+        "observed_sibling_entities": observed_siblings,
+        "observed_sibling_entities_truncated": max(0, sibling_count - len(observed_siblings)),
         "sibling_entity_count_observed": sibling_count,
         "source_uniqueness": "disproved" if entity_count >= 2 else "unverified",
         "identifier_only_correlation_safe": False,
@@ -49,6 +92,10 @@ def _scoped_identity_contract(item: Mapping[str, Any]) -> dict[str, Any] | None:
             "that the identifier is globally unique. Preserve the scoped entity together with "
             "the local identifier when interpreting the evidence unless an external identity "
             "contract proves identifier-only uniqueness."
+        ),
+        "sibling_entity_note": (
+            "Observed sibling entities are source-family navigation facts with bounded provenance. "
+            "Their presence does not prove that they reuse this identifier."
         ),
     }
 
@@ -91,8 +138,8 @@ def _enrich_identity_contracts(data: Mapping[str, Any]) -> dict[str, Any]:
         enriched["correlation_constraints"] = constraints
         enriched["correlation_constraints_note"] = (
             "Mechanical identity-safety facts only. These constraints describe when "
-            "identifier-only correlation is unsafe; they do not prescribe an investigation "
-            "step or identify a root cause."
+            "identifier-only correlation is unsafe and expose bounded sibling-identity "
+            "navigation facts; they do not prescribe an investigation step or identify a root cause."
         )
     return enriched
 
