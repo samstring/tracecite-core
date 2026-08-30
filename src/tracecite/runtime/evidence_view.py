@@ -32,13 +32,7 @@ _PLANNER_GAP_KEYS = frozenset(
 
 
 def evidence_only(result: RetrievalResult) -> RetrievalResult:
-    """Strip planner/navigation instructions while preserving evidence facts.
-
-    ``signal_hints`` are deliberately retained. They are bounded line-addressable
-    candidates already observed by the retrieval layer when an evidence result
-    is truncated; they are not a recommended operation or investigation plan,
-    and callers must still materialize the referenced line before citing it.
-    """
+    """Strip planner/navigation instructions while preserving evidence facts."""
 
     if not isinstance(result, RetrievalResult):
         raise TypeError("evidence_only requires RetrievalResult")
@@ -71,7 +65,7 @@ def evidence_only(result: RetrievalResult) -> RetrievalResult:
         progress=result.progress,
         new_evidence=result.new_evidence,
         repeated_evidence=result.repeated_evidence,
-        stop_reason=result.stop_reason,
+        acquisition_end_reason=result.acquisition_end_reason,
     )
 
 
