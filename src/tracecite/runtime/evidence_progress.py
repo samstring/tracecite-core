@@ -1,9 +1,10 @@
-"""Explainable evidence-progress and retrieval-readiness state.
+"""Mechanical evidence-acquisition progress for Agent-facing Runtime results.
 
-This module deliberately tracks only mechanical evidence state. It can say
-that evidence did or did not grow, that a source/scope/frontier is exhausted,
-and whether caller-supplied evidence requirements are satisfied. It does not
-infer causality or declare that a root cause has been found.
+This module owns only facts that can be derived from retrieval state: novelty,
+covered ranges, explicit source/scope/frontier exhaustion, caller-supplied
+requirement bookkeeping, and evidence gaps.  It deliberately does not decide
+whether evidence is sufficient for a task, whether reasoning is ready, or
+whether an Agent should stop investigating.
 """
 
 from __future__ import annotations
@@ -14,9 +15,7 @@ from typing import Iterable, Literal, Mapping, Sequence
 
 RequirementStatus = Literal["pending", "satisfied", "unknown", "blocked"]
 CoverageStatus = Literal["unknown", "partial", "complete", "stale"]
-ReadinessStatus = Literal["unknown", "insufficient", "partial", "ready"]
-StopKind = Literal[
-    "no_new_evidence",
+AcquisitionEndKind = Literal[
     "source_exhausted",
     "frontier_exhausted",
     "budget_exhausted",
@@ -26,29 +25,28 @@ StopKind = Literal[
 
 
 @dataclass(frozen=True)
-class StopReason:
-    """Mechanical explanation for why evidence acquisition can stop.
+class AcquisitionEndReason:
+    """Mechanical reason a bounded evidence-acquisition operation ended.
 
-    A stop reason never states that a diagnosis or root cause is correct. The
-    scope and basis make the stop auditable instead of exposing a bare boolean.
+    This is not an investigation stop recommendation.  It describes only the
+    acquisition scope represented by ``kind``/``scope``/``basis``.
     """
 
-    kind: StopKind
+    kind: AcquisitionEndKind
     scope: Mapping[str, object] = field(default_factory=dict)
     basis: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.kind not in {
-            "no_new_evidence",
             "source_exhausted",
             "frontier_exhausted",
             "budget_exhausted",
             "provider_unavailable",
             "source_changed",
         }:
-            raise ValueError(f"unsupported stop kind: {self.kind!r}")
+            raise ValueError(f"unsupported acquisition end kind: {self.kind!r}")
         if not isinstance(self.scope, Mapping):
-            raise ValueError("stop scope must be a mapping")
+            raise ValueError("acquisition end scope must be a mapping")
         basis = tuple(
             dict.fromkeys(str(item).strip() for item in self.basis if str(item).strip())
         )
@@ -65,7 +63,11 @@ class StopReason:
 
 @dataclass(frozen=True)
 class EvidenceRequirement:
-    """One caller-supplied evidence requirement for answering a question."""
+    """One caller-supplied evidence requirement.
+
+    Requirement state is stored mechanically.  TraceCite does not infer that a
+    set of satisfied requirements makes an investigation or answer complete.
+    """
 
     id: str
     status: RequirementStatus = "pending"
@@ -116,7 +118,7 @@ class EvidenceGap:
 
 @dataclass(frozen=True)
 class EvidenceDelta:
-    """Novel evidence added by one retrieval/projection operation."""
+    """Novel evidence exposed by one retrieval/materialization operation."""
 
     new_evidence: int = 0
     new_entities: int = 0
@@ -147,12 +149,12 @@ class EvidenceDelta:
 
 
 @dataclass(frozen=True)
-class EvidenceReadiness:
-    """Explainable mechanical progress/readiness projection.
+class EvidenceProgress:
+    """Explainable mechanical acquisition progress.
 
-    ``ready_for_reasoning`` remains ``None`` when no explicit requirements
-    were supplied. TraceCite must not silently invent what evidence is
-    sufficient to answer the caller's question.
+    The projection intentionally has no readiness/sufficiency/stop fields.
+    ``acquisition_end_reason`` is present only for an explicit bounded
+    acquisition end such as a frontier or source scope being exhausted.
     """
 
     delta: EvidenceDelta
@@ -161,26 +163,15 @@ class EvidenceReadiness:
     source_complete: bool
     frontier_exhausted: bool
     scope_exhausted: bool
-    retrieval_complete: bool
     consecutive_no_growth: int
     requirements_total: int
     requirements_satisfied: int
     actionable_gaps: int
-    ready_for_reasoning: bool | None
-    stop_recommended: bool
-    stop_reason: str
     coverage_status: CoverageStatus = "unknown"
-    readiness: ReadinessStatus = "unknown"
-    stop: StopReason | None = None
+    acquisition_end_reason: AcquisitionEndReason | None = None
 
     def to_dict(self) -> dict[str, object]:
-        stop_payload: dict[str, object] = {
-            "recommended": self.stop_recommended,
-            "reason": self.stop_reason,
-        }
-        if self.stop is not None:
-            stop_payload.update(self.stop.to_dict())
-        return {
+        payload: dict[str, object] = {
             "delta": self.delta.to_dict(),
             "seen_evidence": self.seen_evidence,
             "seen_lines": self.seen_lines,
@@ -188,30 +179,23 @@ class EvidenceReadiness:
             "source_complete": self.source_complete,
             "frontier_exhausted": self.frontier_exhausted,
             "scope_exhausted": self.scope_exhausted,
-            "retrieval_complete": self.retrieval_complete,
             "consecutive_no_growth": self.consecutive_no_growth,
             "requirements": {
                 "total": self.requirements_total,
                 "satisfied": self.requirements_satisfied,
             },
             "actionable_gaps": self.actionable_gaps,
-            "readiness": self.readiness,
-            "ready_for_reasoning": self.ready_for_reasoning,
-            "stop": stop_payload,
         }
+        if self.acquisition_end_reason is not None:
+            payload["acquisition_end_reason"] = self.acquisition_end_reason.to_dict()
+        return payload
 
 
 @dataclass
 class EvidenceProgressTracker:
-    """Track novelty, covered line ranges, and explainable stop state.
-
-    The tracker does not perform semantic similarity or root-cause reasoning.
-    Callers may supply explicit requirements/gaps, while evidence identity and
-    versioned source ranges are handled deterministically here.
-    """
+    """Track mechanical novelty, covered ranges, and explicit exhaustion facts."""
 
     requirements: Sequence[EvidenceRequirement] = ()
-    no_growth_threshold: int = 1
     _seen_evidence_ids: set[str] = field(default_factory=set, init=False, repr=False)
     _ranges: dict[str, list[tuple[int, int]]] = field(default_factory=dict, init=False, repr=False)
     _source_complete: set[str] = field(default_factory=set, init=False, repr=False)
@@ -222,10 +206,6 @@ class EvidenceProgressTracker:
     _requirements: dict[str, EvidenceRequirement] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if isinstance(self.no_growth_threshold, bool) or not isinstance(self.no_growth_threshold, int):
-            raise ValueError("no_growth_threshold must be a positive integer")
-        if self.no_growth_threshold < 1:
-            raise ValueError("no_growth_threshold must be a positive integer")
         for requirement in self.requirements:
             if not isinstance(requirement, EvidenceRequirement):
                 raise ValueError("requirements must contain EvidenceRequirement values")
@@ -255,8 +235,6 @@ class EvidenceProgressTracker:
 
     @property
     def seen_evidence_ids(self) -> frozenset[str]:
-        """Return immutable mechanical identity history for projection logic."""
-
         return frozenset(self._seen_evidence_ids)
 
     def has_seen_evidence(self, evidence_id: str) -> bool:
@@ -273,8 +251,6 @@ class EvidenceProgressTracker:
         return str(source) in self._source_complete
 
     def unseen_ranges(self, source: str, start: int, end: int) -> tuple[tuple[int, int], ...]:
-        """Return only portions of ``[start, end]`` not already visible."""
-
         start, end = self._normalize_range(start, end)
         pending: list[tuple[int, int]] = [(start, end)]
         for covered_start, covered_end in self._ranges.get(str(source), ()):
@@ -302,12 +278,6 @@ class EvidenceProgressTracker:
         frontier_exhausted: bool | None = None,
         scope_exhausted: bool | None = None,
     ) -> None:
-        """Restore persisted mechanical history without creating a new round.
-
-        Reconstruction from InvestigationState must not increment the current
-        no-growth counter merely because historical ranges are replayed.
-        """
-
         normalized_ids = tuple(
             dict.fromkeys(str(item).strip() for item in evidence_ids if str(item).strip())
         )
@@ -366,7 +336,7 @@ class EvidenceProgressTracker:
         source_complete: bool = False,
         frontier_exhausted: bool | None = None,
         scope_exhausted: bool | None = None,
-    ) -> EvidenceReadiness:
+    ) -> EvidenceProgress:
         normalized_ids = tuple(
             dict.fromkeys(str(item).strip() for item in evidence_ids if str(item).strip())
         )
@@ -407,25 +377,19 @@ class EvidenceProgressTracker:
         self._no_growth = 0 if delta.grew else self._no_growth + 1
         return self.snapshot(delta=delta, source=source)
 
-    def snapshot(self, *, delta: EvidenceDelta | None = None, source: str | None = None) -> EvidenceReadiness:
+    def snapshot(
+        self,
+        *,
+        delta: EvidenceDelta | None = None,
+        source: str | None = None,
+    ) -> EvidenceProgress:
         delta = delta or EvidenceDelta()
         source_is_complete = bool(source and str(source) in self._source_complete)
-        retrieval_complete = self._frontier_exhausted or self._scope_exhausted
-
         requirements_total = len(self._requirements)
         requirements_satisfied = sum(
             1 for item in self._requirements.values() if item.status == "satisfied"
         )
-        requirements_complete = bool(requirements_total) and requirements_satisfied == requirements_total
         actionable_gaps = sum(1 for item in self._gaps.values() if item.actionable)
-
-        ready_for_reasoning: bool | None
-        if not requirements_total:
-            ready_for_reasoning = None
-        else:
-            ready_for_reasoning = bool(
-                requirements_complete and retrieval_complete and actionable_gaps == 0
-            )
 
         if source_is_complete:
             coverage_status: CoverageStatus = "complete"
@@ -434,94 +398,46 @@ class EvidenceProgressTracker:
         else:
             coverage_status = "unknown"
 
-        if ready_for_reasoning is True:
-            readiness: ReadinessStatus = "ready"
-        elif not requirements_total:
-            readiness = "unknown"
-        elif requirements_satisfied or self._seen_evidence_ids:
-            readiness = "partial"
-        else:
-            readiness = "insufficient"
-
-        no_growth_stop = self._no_growth >= self.no_growth_threshold
-        formal_stop: StopReason | None = None
-        if ready_for_reasoning is True:
-            stop_reason = "requirements_satisfied_and_retrieval_complete"
-            stop_recommended = True
-            if self._frontier_exhausted:
-                formal_stop = StopReason(
-                    "frontier_exhausted",
-                    basis=("requirements_satisfied", "frontier_empty"),
-                )
-            elif self._scope_exhausted:
-                formal_stop = StopReason(
-                    "source_exhausted",
-                    scope={"source": str(source)} if source else {},
-                    basis=("requirements_satisfied", "scope_exhausted"),
-                )
-        elif self._frontier_exhausted and no_growth_stop:
-            stop_reason = "retrieval_complete_no_growth"
-            stop_recommended = True
-            formal_stop = StopReason(
+        acquisition_end_reason: AcquisitionEndReason | None = None
+        if self._frontier_exhausted:
+            acquisition_end_reason = AcquisitionEndReason(
                 "frontier_exhausted",
-                basis=("frontier_empty", "no_evidence_growth"),
+                basis=("mechanical_frontier_empty",),
             )
-        elif self._scope_exhausted and no_growth_stop:
-            stop_reason = "retrieval_complete_no_growth"
-            stop_recommended = True
-            formal_stop = StopReason(
+        elif self._scope_exhausted:
+            acquisition_end_reason = AcquisitionEndReason(
                 "source_exhausted",
                 scope={"source": str(source)} if source else {},
-                basis=("scope_exhausted", "no_evidence_growth"),
+                basis=("scope_exhausted",),
             )
-        elif no_growth_stop:
-            stop_reason = "no_evidence_growth"
-            stop_recommended = True
-            formal_stop = StopReason(
-                "no_new_evidence",
-                scope={"source": str(source)} if source else {},
-                basis=("no_evidence_growth",),
-            )
-        elif delta.grew:
-            stop_reason = "evidence_grew"
-            stop_recommended = False
-        else:
-            stop_reason = "continue_if_needed"
-            stop_recommended = False
 
         seen_lines = sum(
             end - start + 1 for ranges in self._ranges.values() for start, end in ranges
         )
-        return EvidenceReadiness(
+        return EvidenceProgress(
             delta=delta,
             seen_evidence=len(self._seen_evidence_ids),
             seen_lines=seen_lines,
             source_complete=source_is_complete,
             frontier_exhausted=self._frontier_exhausted,
             scope_exhausted=self._scope_exhausted,
-            retrieval_complete=retrieval_complete,
             consecutive_no_growth=self._no_growth,
             requirements_total=requirements_total,
             requirements_satisfied=requirements_satisfied,
             actionable_gaps=actionable_gaps,
-            ready_for_reasoning=ready_for_reasoning,
-            stop_recommended=stop_recommended,
-            stop_reason=stop_reason,
             coverage_status=coverage_status,
-            readiness=readiness,
-            stop=formal_stop,
+            acquisition_end_reason=acquisition_end_reason,
         )
 
 
 __all__ = [
+    "AcquisitionEndKind",
+    "AcquisitionEndReason",
     "CoverageStatus",
     "EvidenceDelta",
     "EvidenceGap",
+    "EvidenceProgress",
     "EvidenceProgressTracker",
-    "EvidenceReadiness",
     "EvidenceRequirement",
-    "ReadinessStatus",
     "RequirementStatus",
-    "StopKind",
-    "StopReason",
 ]
