@@ -12,11 +12,6 @@ on:
           - smoke
           - four
           - stability
-  push:
-    branches:
-      - experiment/evidence-intelligence
-    paths:
-      - .github/workflows/pi-evidence-runtime-ab.yml
 
 permissions:
   contents: read
@@ -29,7 +24,7 @@ jobs:
     steps:
       - id: matrix
         env:
-          SCOPE: ${{ inputs.scope || 'smoke' }}
+          SCOPE: ${{ inputs.scope }}
         shell: bash
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
