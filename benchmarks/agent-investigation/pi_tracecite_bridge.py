@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from tracecite.runtime import EvidenceRequest, QueryTarget, RangeTarget
+from tracecite.runtime.repeated_evidence import attach_matched_existing_evidence
 from tracecite.runtime.retrieval_session import RetrievalSessionStore
 from tracecite.runtime.session_retrieval import retrieve_with_session
 
@@ -32,7 +33,8 @@ def _search(args: argparse.Namespace, session: RetrievalSessionStore) -> dict:
         snapshot=True,
         max_evidence=args.max_evidence,
     )
-    return retrieve_with_session(EvidenceRequest(target), session).to_dict()
+    result = retrieve_with_session(EvidenceRequest(target), session)
+    return attach_matched_existing_evidence(result)
 
 
 def _range_target(args: argparse.Namespace) -> RangeTarget:
@@ -50,7 +52,8 @@ def _range_target(args: argparse.Namespace) -> RangeTarget:
 def _expand(args: argparse.Namespace, session: RetrievalSessionStore) -> dict:
     target = _range_target(args)
     if not args.replay:
-        return retrieve_with_session(EvidenceRequest(target), session).to_dict()
+        result = retrieve_with_session(EvidenceRequest(target), session)
+        return attach_matched_existing_evidence(result)
 
     # Replay is an explicit Agent request to re-materialize old evidence.  Use a
     # throw-away retrieval session so replay does not turn old evidence into new
