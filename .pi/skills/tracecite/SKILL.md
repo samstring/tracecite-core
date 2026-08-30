@@ -24,6 +24,16 @@ The goal is not to maximize TraceCite calls. Choose the cheapest retrieval path 
 
 Avoid broad native output when a bounded evidence query would answer the same question with substantially less context.
 
+For a large evidence file, broad `grep`, `awk`, `sed`, `head`, `tail`, or a large `read` used to discover evidence locations is **content retrieval**, not metadata. Prefer TraceCite for that discovery when TraceCite can express the query. Native tools remain appropriate for metadata, aggregation, structural transforms, narrow independent verification, and fallback when TraceCite itself fails.
+
+## Search syntax
+
+`tracecite_search` uses literal matching unless `regex=true`.
+
+- For a plain word or exact phrase, leave `regex` false or omit it.
+- If the query contains regex operators such as `|`, `.*`, `+`, `?`, `[]`, `()`, `^`, or `$`, set `regex=true`.
+- Do not send a regex-looking pattern while leaving `regex` false; TraceCite will search for that pattern literally.
+
 ## Normal workflow
 
 1. Orient with cheap metadata if needed.
@@ -47,13 +57,15 @@ If the needed evidence was already seen:
 - use `replay=true` when intentionally re-reading already exposed text;
 - do not run a near-synonym search merely to retrieve the same evidence again.
 
+For the same immutable source/version, do not repeat the exact same search query with the same regex mode merely to see the same evidence again. Use the existing ref, expand it, or replay it.
+
 Run another search only when the evidence target materially changes, for example to a different entity, identifier, time region, error class, state transition, source region, or hypothesis-specific observation.
 
 ### `no_match`
 
 `no_match` means the query found no matching evidence. It is not proof that an event never happened.
 
-Before changing tools, decide whether the query itself was too narrow, used the wrong identifier, or targeted the wrong source region. Do not turn a retrieval miss into a causal conclusion.
+Before changing tools, check whether the query was too narrow, used the wrong identifier, targeted the wrong source region, or accidentally used regex syntax without `regex=true`. Do not turn a retrieval miss into a causal conclusion.
 
 ### high fanout or truncated evidence
 
@@ -75,6 +87,7 @@ For each returned constraint, inspect these fields when present:
 - `scope_fanout_observed`
 - `source_uniqueness`
 - `scoped_entities`
+- `observed_sibling_entities`
 
 ### If `identifier_only_correlation_safe=true`
 
@@ -87,11 +100,12 @@ Do **not** correlate events by that identifier alone.
 Perform this sequence:
 
 1. Read `minimum_safe_correlation_key` and identify every field required for safe correlation.
-2. Inspect `scoped_entities`, `sibling_entity_count_observed`, and `scope_fanout_observed` to determine whether the same identifier appears under multiple sibling scopes/entities.
-3. Narrow subsequent searches using the required scope/entity plus the identifier, rather than searching the ambiguous identifier globally again.
-4. Materialize representative exact evidence for the relevant scopes with `tracecite_expand`.
-5. Compare ownership, state transitions, or event effects across those safely distinguished entities only if that comparison is relevant to your hypothesis.
-6. Decide yourself whether the identity ambiguity contributes to the failure. TraceCite only establishes that identifier-only correlation is unsafe.
+2. Inspect `scoped_entities`, `observed_sibling_entities`, `sibling_entity_count_observed`, and `scope_fanout_observed` to see which competing identities are mechanically visible.
+3. Treat each different scope/entity plus identifier as a different identity until evidence proves otherwise.
+4. Narrow subsequent searches using the required scope/entity plus the identifier, rather than searching the ambiguous identifier globally again.
+5. Materialize representative exact evidence for the relevant competing scopes with `tracecite_expand`.
+6. Compare ownership, state transitions, or event effects across those safely distinguished entities only if that comparison is relevant to your hypothesis.
+7. Decide yourself whether the identity ambiguity contributes to the failure. TraceCite only establishes that identifier-only correlation is unsafe.
 
 Generic example: if an identifier such as `device42` appears under multiple resources and `minimum_safe_correlation_key` requires `[scoped_entity, device_id]`, treat `resource-A/device42` and `resource-B/device42` as distinct identities. Do not merge their events merely because `device42` matches.
 
@@ -99,7 +113,7 @@ Generic example: if an identifier such as `device42` appears under multiple reso
 
 The search crossed multiple sibling scopes/entities. This is a warning against treating all matches as one timeline.
 
-Use the safe correlation key to separate the evidence by entity before reasoning about sequence, ownership, health, state, or causality.
+Use the safe correlation key and the returned `observed_sibling_entities` to separate evidence by entity before reasoning about sequence, ownership, health, state, or causality. If the returned sibling list is truncated, use a narrower TraceCite query for the relevant entity family before falling back to broad native content retrieval.
 
 ### If `source_uniqueness` is present
 
@@ -136,6 +150,7 @@ Before using native content retrieval after TraceCite, ask: **am I obtaining new
 
 - A search hit is an observation, not proof of causality.
 - Correlation constraints describe identity safety, not root cause.
+- `observed_sibling_entities` are mechanically observed sibling identities and source references, not proof that they share the ambiguous identifier.
 - `observed_relations` describe literal textual or structural co-observation, not root cause.
 - `source_sha256`, when present, identifies the source version associated with the evidence and can be reused for exact expansion/replay.
 - Replayed text is old evidence being re-read; it is not new evidence.
