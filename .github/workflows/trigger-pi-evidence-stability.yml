@@ -1,0 +1,25 @@
+name: Trigger Pi Evidence Stability
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/trigger-pi-evidence-stability.yml
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch stability matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run pi-evidence-runtime-ab.yml \
+            --repo "${{ github.repository }}" \
+            --ref experiment/evidence-intelligence \
+            -f scope=stability
