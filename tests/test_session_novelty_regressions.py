@@ -64,6 +64,39 @@ def test_truncated_search_does_not_resend_visible_repeated_rows(tmp_path: Path) 
     assert repeated["coverage"]["new_evidence"] == 0
     assert repeated["coverage"]["repeated_evidence"] == 3
     assert repeated["evidence"] == []
+    refs = repeated["data"]["matched_existing_evidence"]
+    assert len(refs) == 3
+    assert all(item.get("uri") for item in refs)
+    assert all("label" not in item for item in refs)
+
+
+def test_new_query_keeps_identity_of_old_evidence_match_without_resending_body(tmp_path: Path) -> None:
+    source = tmp_path / "runtime.log"
+    source.write_text(
+        "alpha beta same-line\nunrelated\n",
+        encoding="utf-8",
+    )
+    store = _store(tmp_path)
+
+    first = retrieve_with_session(
+        EvidenceRequest(QueryTarget(source, "alpha", max_evidence=3)),
+        store,
+    ).to_dict()
+    second = retrieve_with_session(
+        EvidenceRequest(QueryTarget(source, "beta", max_evidence=3)),
+        store,
+    ).to_dict()
+
+    assert len(first["evidence"]) == 1
+    assert second["coverage"]["new_evidence"] == 0
+    assert second["coverage"]["repeated_evidence"] == 1
+    assert second["evidence"] == []
+    refs = second["data"]["matched_existing_evidence"]
+    assert len(refs) == 1
+    assert refs[0]["start_line"] == 1
+    assert refs[0]["end_line"] == 1
+    assert refs[0]["uri"] == first["evidence"][0]["uri"]
+    assert "label" not in refs[0]
 
 
 def test_overlapping_expand_projects_only_lines_not_already_exposed(tmp_path: Path) -> None:
@@ -241,5 +274,7 @@ def test_pi_extension_treats_stop_as_agent_owned_and_exposes_replay() -> None:
     assert "decide when the Agent should stop" in extension
     assert "data.new_text" in extension
     assert "source_sha256" in extension
+    assert "matched_existing_evidence" in extension
+    assert "does not mean that evidence is understood, important, causal, or sufficient" in extension
     assert "replay=true" in extension
     assert 'args.push("--replay")' in extension
