@@ -17,7 +17,7 @@ from tracecite.integrations.agent_profile import render_frame
 from tracecite.integrations.agent_projection import project
 from tracecite.integrations.context_engine import ContextEngine
 from tracecite.integrations.evidence_ledger import EvidenceLedger
-from tracecite.runtime.evidence_progress import EvidenceProgressTracker, EvidenceReadiness
+from tracecite.runtime.evidence_progress import EvidenceProgress, EvidenceProgressTracker
 from tracecite.runtime.tools import search as tracecite_search
 
 
@@ -127,14 +127,14 @@ def _line_ranges(line_numbers: Sequence[int] | set[int]) -> tuple[tuple[int, int
     return tuple(ranges)
 
 
-def _progress_line(progress: EvidenceReadiness) -> str:
+def _progress_line(progress: EvidenceProgress) -> str:
     delta = progress.delta
     return (
         "@PROGRESS "
         f"new_evidence={delta.new_evidence} new_lines={delta.new_lines} "
         f"seen_evidence={progress.seen_evidence} seen_lines={progress.seen_lines} "
         f"source_complete={progress.source_complete} "
-        f"no_growth={progress.consecutive_no_growth} stop={progress.stop_reason}"
+        f"no_growth={progress.consecutive_no_growth}"
     )
 
 
@@ -331,7 +331,7 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
                     "@TCI 1 inspect status=no_new_evidence outcome=bounded",
                     f"@SRC file={file_name} bytes={path.stat().st_size}",
                     _progress_line(progress),
-                    "@STOP reason=NO_NEW_EVIDENCE source_scan_complete=True",
+                    "@NOVELTY state=no_new_evidence source_scan_complete=True",
                 ]
             )
 
@@ -390,7 +390,7 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
         )
         sections.append(_progress_line(progress))
         sections.append(
-            "@STOP inspection_output_truncated=" + str(output_truncated)
+            "@ACQ_END inspection_output_truncated=" + str(output_truncated)
             + " source_scan_complete=True"
         )
         return "\n".join(sections)
@@ -440,7 +440,7 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
                     f"@SRC file={file_name}",
                     f"@COV requested_line={line} start_line={start} end_line={end} total_lines={total_lines}",
                     _progress_line(progress),
-                    "@STOP reason=NO_NEW_EVIDENCE requested_range_already_covered=True",
+                    "@NOVELTY state=no_new_evidence requested_range_already_covered=True",
                 ]
             )
 
@@ -498,7 +498,7 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
                     "@TCF 1 search status=no_new_evidence outcome=bounded",
                     f"@SRC file={file_name}",
                     _progress_line(progress),
-                    "@STOP reason=NO_NEW_EVIDENCE exact_query_already_searched=True",
+                    "@NOVELTY state=no_new_evidence exact_query_already_searched=True",
                 ]
             )
         seen.add(normalized_query)
@@ -537,7 +537,7 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
                     f"@R {result_id}",
                     f"@SRC file={file_name}",
                     _progress_line(progress),
-                    "@STOP reason=NO_NEW_EVIDENCE search_returned_only_seen_evidence=True",
+                    "@NOVELTY state=no_new_evidence search_returned_only_seen_evidence=True",
                 ]
             )
 

@@ -43,3 +43,22 @@ def test_unused_requirement_primitive_is_not_advertised_as_runtime_api() -> None
     assert "RequirementStatus" not in runtime.__all__
     assert not hasattr(runtime, "EvidenceRequirement")
     assert not hasattr(runtime, "RequirementStatus")
+
+
+def test_runtime_progress_contract_has_no_epistemic_stop_semantics() -> None:
+    forbidden_exports = {
+        "EvidenceReadiness",
+        "ReadinessStatus",
+        "StopKind",
+        "StopReason",
+    }
+    assert forbidden_exports.isdisjoint(runtime.__all__)
+    for name in forbidden_exports:
+        assert not hasattr(runtime, name)
+
+    source = (ROOT / "src" / "tracecite" / "runtime" / "evidence_progress.py").read_text(
+        encoding="utf-8"
+    )
+    assert "ready_for_reasoning" not in source
+    assert "stop_recommended" not in source
+    assert '"no_new_evidence",' not in source.split("AcquisitionEndKind", 1)[1].split("]", 1)[0]

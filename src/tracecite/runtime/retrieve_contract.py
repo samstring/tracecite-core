@@ -100,7 +100,7 @@ def _with_routing(result: RetrievalResult, decision: RoutingDecision) -> Retriev
         progress=result.progress,
         new_evidence=result.new_evidence,
         repeated_evidence=result.repeated_evidence,
-        stop_reason=result.stop_reason,
+        acquisition_end_reason=result.acquisition_end_reason,
     )
 
 
@@ -117,11 +117,13 @@ def _replace_canonical(
         progress=result.progress,
         new_evidence=result.new_evidence if new_evidence is None else new_evidence,
         repeated_evidence=result.repeated_evidence,
-        stop_reason=result.stop_reason,
+        acquisition_end_reason=result.acquisition_end_reason,
     )
 
 
 def _with_actionable_gap_progress(result: RetrievalResult) -> RetrievalResult:
+    """Expose the number of actionable evidence gaps without judging sufficiency."""
+
     gaps = [
         item
         for item in result.canonical_result.get("missing_evidence") or []
@@ -130,16 +132,7 @@ def _with_actionable_gap_progress(result: RetrievalResult) -> RetrievalResult:
     if not gaps or result.progress.actionable_gaps >= len(gaps):
         return result
 
-    progress = replace(
-        result.progress,
-        actionable_gaps=len(gaps),
-        ready_for_reasoning=(
-            False if result.progress.ready_for_reasoning is True else result.progress.ready_for_reasoning
-        ),
-        stop_recommended=False,
-        stop_reason="actionable_evidence_gap",
-        stop=None,
-    )
+    progress = replace(result.progress, actionable_gaps=len(gaps))
     return RetrievalResult(
         operation=result.operation,
         status=result.status,
@@ -147,7 +140,7 @@ def _with_actionable_gap_progress(result: RetrievalResult) -> RetrievalResult:
         progress=progress,
         new_evidence=result.new_evidence,
         repeated_evidence=result.repeated_evidence,
-        stop_reason=None,
+        acquisition_end_reason=result.acquisition_end_reason,
     )
 
 
@@ -545,7 +538,7 @@ def _correct_range_novelty(result: RetrievalResult, request: EvidenceRequest) ->
         progress=result.progress,
         new_evidence=canonical_evidence,
         repeated_evidence=result.repeated_evidence,
-        stop_reason=None,
+        acquisition_end_reason=result.acquisition_end_reason,
     )
 
 

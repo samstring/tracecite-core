@@ -18,7 +18,6 @@ from tracecite.runtime import (
     QueryTarget,
     RangeTarget,
     SourceVersion,
-    StopReason,
     investigate,
     retrieve,
 )
@@ -77,18 +76,25 @@ def test_progress_restore_does_not_create_fake_no_growth_round() -> None:
     assert snapshot.seen_evidence == 1
     assert snapshot.seen_lines == 11
     assert snapshot.consecutive_no_growth == 0
-    assert snapshot.stop_recommended is False
+    payload = snapshot.to_dict()
+    assert "ready_for_reasoning" not in payload
+    assert "stop_recommended" not in payload
+    assert "stop" not in payload
+    assert snapshot.acquisition_end_reason is None
 
 
-def test_progress_exposes_formal_no_new_evidence_stop() -> None:
+def test_progress_no_growth_remains_mechanical() -> None:
     tracker = EvidenceProgressTracker()
     tracker.observe(evidence_ids=("E1",))
-    readiness = tracker.observe(evidence_ids=("E1",))
+    progress = tracker.observe(evidence_ids=("E1",))
 
-    assert readiness.stop_recommended is True
-    assert isinstance(readiness.stop, StopReason)
-    assert readiness.stop.kind == "no_new_evidence"
-    assert readiness.to_dict()["stop"]["kind"] == "no_new_evidence"
+    assert progress.delta.new_evidence == 0
+    assert progress.consecutive_no_growth == 1
+    assert progress.acquisition_end_reason is None
+    payload = progress.to_dict()
+    assert "ready_for_reasoning" not in payload
+    assert "stop_recommended" not in payload
+    assert "stop" not in payload
 
 
 def test_retrieve_query_suppresses_repeated_evidence(tmp_path) -> None:
@@ -115,8 +121,10 @@ def test_retrieve_query_suppresses_repeated_evidence(tmp_path) -> None:
     assert second.status == "no_new_evidence"
     assert second.new_evidence == ()
     assert second.repeated_evidence == 1
-    assert second.stop_reason is not None
-    assert second.stop_reason.kind == "no_new_evidence"
+    assert second.acquisition_end_reason is None
+    novelty = second.to_dict()["data"]["novelty"]
+    assert novelty["state"] == "no_new_evidence"
+    assert "all_returned_evidence_already_seen" in novelty["basis"]
     assert second.to_dict()["evidence"] == []
     assert len(second.canonical_result["evidence"]) == 1
 
@@ -201,8 +209,10 @@ def test_retrieve_range_hard_stops_only_for_same_immutable_version(tmp_path) -> 
 
     assert first.status == "ok"
     assert second.status == "no_new_evidence"
-    assert second.stop_reason is not None
-    assert "immutable_source_identity" in second.stop_reason.basis
+    assert second.acquisition_end_reason is None
+    novelty = second.to_dict()["data"]["novelty"]
+    assert novelty["state"] == "no_new_evidence"
+    assert "immutable_source_identity" in novelty["basis"]
 
     source.write_text("one\ntwo changed\nthree\nfour\nfive\n", encoding="utf-8")
     changed = retrieve(
@@ -247,7 +257,7 @@ def test_range_coverage_remains_owned_by_session_without_audit_executions(tmp_pa
 
     assert first.status == "ok"
     assert second.status == "no_new_evidence"
-    assert "requested_context_already_covered" in second.stop_reason.basis
+    assert "requested_context_already_covered" in second.to_dict()["data"]["novelty"]["basis"]
 
 
 def test_range_context_growth_is_not_suppressed_by_prior_search_pointer(tmp_path) -> None:
@@ -274,7 +284,7 @@ def test_range_context_growth_is_not_suppressed_by_prior_search_pointer(tmp_path
     )
     assert expanded.status == "ok"
     assert expanded.progress.delta.new_lines == 3
-    assert expanded.stop_reason is None
+    assert expanded.acquisition_end_reason is None
     assert expanded.new_evidence
     text = expanded.to_dict()["data"]["text"]
     assert "2: two" in text
@@ -345,6 +355,7 @@ def test_investigate_reports_mechanical_frontier_stop() -> None:
 
     assert result.investigation.status == "ok"
     assert result.investigation.stop_reason == "frontier_exhausted"
-    assert result.stop_reason is not None
-    assert result.stop_reason.kind == "frontier_exhausted"
+    assert result.acquisition_end_reason is not None
+    assert result.acquisition_end_reason.kind == "frontier_exhausted"
     assert result.progress.frontier_exhausted is True
+    assert "stop" not in result.to_dict()
