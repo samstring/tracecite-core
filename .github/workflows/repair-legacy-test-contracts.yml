@@ -1,0 +1,35 @@
+name: Repair Legacy Test Contracts
+
+on:
+  push:
+    branches:
+      - work/evidence-intelligence-finalize
+    paths:
+      - scripts/repair_legacy_test_imports.py
+      - .github/workflows/repair-legacy-test-contracts.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/evidence-intelligence-finalize
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Migrate tests to canonical/secondary import boundaries
+        run: python scripts/repair_legacy_test_imports.py
+      - name: Commit migrated tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name tracecite-refactor-bot
+          git config user.email actions@users.noreply.github.com
+          git add -A
+          git commit -m "test: align suite with canonical public surface"
+          git push origin HEAD:work/evidence-intelligence-finalize
