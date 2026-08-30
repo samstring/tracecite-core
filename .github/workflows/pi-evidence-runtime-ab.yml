@@ -56,7 +56,7 @@ jobs:
   compare:
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -177,7 +177,7 @@ jobs:
             cd "$INPUT_ROOT"
             set +e
             if [[ "$arm" == native ]]; then
-              timeout -k 30s 600s pi \
+              timeout -k 30s 1200s pi \
                 --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
                 --thinking off --mode text --print \
                 --session-dir "$RESULT_ROOT/pi-native-session" \
@@ -189,7 +189,7 @@ jobs:
               TRACE_PROMPT="$BASE_PROMPT This is the controlled TraceCite arm of a native-vs-TraceCite capability A/B test. Every operation that inspects or derives from evidence content MUST use the TraceCite Evidence Runtime tools exposed by this Host: tracecite_retrieve, tracecite_materialize, tracecite_replay, tracecite_aggregate, tracecite_traverse, and tracecite_verify. Native evidence-content tools are intentionally unavailable. find/ls may only locate files; do not use them as substitutes for evidence retrieval. You still own hypotheses, the query/entity/range/seed you choose, causal reasoning, evidence sufficiency, the conclusion, and when to stop."
               TRACECITE_PI_SESSION="$RESULT_ROOT/tracecite-retrieval-session.json" \
               TRACECITE_PI_ACTIVITY="$RESULT_ROOT/tracecite-host-tool-activity.json" \
-              timeout -k 30s 600s pi \
+              timeout -k 30s 1200s pi \
                 --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
                 --thinking off --mode text --print \
                 --session-dir "$RESULT_ROOT/pi-tracecite-session" \
