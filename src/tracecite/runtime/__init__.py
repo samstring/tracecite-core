@@ -33,6 +33,11 @@ from .investigation import (
     create_investigation, load_investigation,
 )
 
+# Activate the mechanical Finding persistence gate whenever Runtime exposes
+# InvestigationStore. Validation helpers remain a secondary module and are not
+# added to the public Runtime surface.
+from . import finding_validation as _finding_validation
+
 __all__ = [
     "AcquisitionEndKind", "AcquisitionEndReason", "AggregateOperation", "AggregateRequest",
     "CanonicalTraversalResult", "CapabilityError", "CapabilitySpec", "CoverageStatus",
