@@ -438,7 +438,7 @@ def retrieve_with_session(
     if request.investigation_path is not None:
         raise ValueError("independent retrieval session cannot also use investigation_path")
     if request.hypothesis_id is not None or request.test_id is not None:
-        raise ValueError("hypothesis_id/test_id require InvestigationState")
+        raise ValueError("hypothesis_id/test_id require optional InvestigationState, not RetrievalSession")
 
     with state_lock(session.path):
         state = session.load()

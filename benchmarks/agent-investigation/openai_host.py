@@ -17,7 +17,7 @@ from tracecite.integrations.evidence_package import build_evidence_package
 from tracecite.integrations.investigator import investigate
 from tracecite.integrations.json_evidence_provider import JsonEvidenceProvider
 from tracecite.runtime.correlation import EvidenceNode, correlate
-from tracecite.runtime.frontier import ExplorationPolicy
+from tracecite.runtime.traversal_frontier import TraversalLimits
 from tracecite.runtime.grouping import group_evidence
 from tracecite.runtime.reducer import ReductionPolicy, reduce_evidence
 
@@ -429,7 +429,7 @@ class ToolRuntime:
         result = investigate(
             self.providers,
             seed_evidence_ids=(seed,),
-            exploration_policy=ExplorationPolicy(max_depth=3, max_retrievals=20, max_no_growth_rounds=4),
+            exploration_policy=TraversalLimits(max_depth=3, max_retrievals=20, max_no_growth_rounds=4),
             reduction_policy=ReductionPolicy(seed_ids=(seed,), max_items=24),
             max_tokens=2400,
             recovery_limit=24,

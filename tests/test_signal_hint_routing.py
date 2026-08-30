@@ -25,10 +25,10 @@ def test_truncated_search_exposes_late_panic_as_hint_until_materialized(tmp_path
         fallback_direct_chars=1,
         max_direct_chars=1,
         bounded_max_evidence=5,
-        investigate_max_evidence=2,
+        focused_max_evidence=2,
         signal_hint_limit=4,
         signal_signature_cap=16,
-        investigate_match_records=100,
+        focused_match_records=100,
     )
 
     searched = retrieve(

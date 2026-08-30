@@ -376,9 +376,9 @@ def _bounded_query(
 ) -> EvidenceRequest:
     assert isinstance(request.target, QueryTarget)
     target = request.target
-    if route == EvidenceRoute.INVESTIGATE:
-        evidence_cap = policy.investigate_max_evidence
-        line_cap = policy.investigate_max_line_chars
+    if route == EvidenceRoute.FOCUSED:
+        evidence_cap = policy.focused_max_evidence
+        line_cap = policy.focused_max_line_chars
     else:
         evidence_cap = policy.bounded_max_evidence
         line_cap = policy.bounded_max_line_chars
@@ -692,7 +692,7 @@ def retrieve(
     if isinstance(request.target, SourceTarget):
         if decision.route == EvidenceRoute.DIRECT:
             return _direct_source(request, decision, policy)
-        if decision.route == EvidenceRoute.INVESTIGATE:
+        if decision.route == EvidenceRoute.FOCUSED:
             return _investigate_source(request, decision, policy)
         return _bounded_source(request, decision)
 

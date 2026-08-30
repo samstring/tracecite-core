@@ -1,8 +1,8 @@
-"""Deterministic frontier and stop policy for evidence investigation.
+"""Bounded deterministic frontier for caller-scoped Evidence traversal.
 
-The frontier replaces model-driven "what should I search next?" loops with a
-bounded queue of stable entities discovered from evidence. It deliberately has
-no source-specific semantics and no LLM dependency.
+The caller selects traversal seeds and scope. This queue only executes that
+mechanical traversal under hard limits; it never chooses what the Agent should
+investigate next.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from tracecite.extension.evidence import EntityRef
 
 
 @dataclass(frozen=True)
-class ExplorationPolicy:
+class TraversalLimits:
     """Hard limits for one deterministic evidence exploration."""
 
     max_depth: int = 3
@@ -60,7 +60,7 @@ class ExplorationPolicy:
 
 
 @dataclass(frozen=True)
-class FrontierItem:
+class TraversalItem:
     entity: EntityRef
     depth: int
     discovered_from: str = ""
@@ -73,12 +73,12 @@ class FrontierItem:
         object.__setattr__(self, "discovered_from", str(self.discovered_from or "")[:256])
 
 
-class ExpansionFrontier:
+class TraversalFrontier:
     """A stable min-depth frontier with duplicate/stale-entry suppression."""
 
-    def __init__(self, policy: ExplorationPolicy) -> None:
+    def __init__(self, policy: TraversalLimits) -> None:
         self.policy = policy
-        self._heap: list[tuple[int, str, int, FrontierItem]] = []
+        self._heap: list[tuple[int, str, int, TraversalItem]] = []
         self._best_depth: dict[tuple[str, str, str], int] = {}
         self._expanded: set[tuple[str, str, str]] = set()
         self._counter = 0
@@ -103,12 +103,12 @@ class ExpansionFrontier:
             self.dropped_limit += 1
             return False
         self._best_depth[key] = depth
-        item = FrontierItem(entity=entity, depth=depth, discovered_from=discovered_from)
+        item = TraversalItem(entity=entity, depth=depth, discovered_from=discovered_from)
         self._counter += 1
         heapq.heappush(self._heap, (depth, entity.identity, self._counter, item))
         return True
 
-    def pop(self) -> FrontierItem | None:
+    def pop(self) -> TraversalItem | None:
         while self._heap:
             depth, _, _, item = heapq.heappop(self._heap)
             key = item.entity.key
@@ -147,7 +147,7 @@ class ExpansionFrontier:
 
 
 @dataclass(frozen=True)
-class ExplorationStats:
+class TraversalStats:
     retrievals: int = 0
     evidence: int = 0
     sources: int = 0
@@ -161,7 +161,7 @@ class ExplorationStats:
         object.__setattr__(self, "details", dict(self.details))
 
 
-def budget_stop_reason(policy: ExplorationPolicy, stats: ExplorationStats) -> str | None:
+def bounded_end_reason(policy: TraversalLimits, stats: TraversalStats) -> str | None:
     """Return the first hard stop reason in stable priority order.
 
     ``max_sources`` is admission-based: reaching N sources does not stop the
@@ -188,9 +188,9 @@ def budget_stop_reason(policy: ExplorationPolicy, stats: ExplorationStats) -> st
 
 
 __all__ = [
-    "ExpansionFrontier",
-    "ExplorationPolicy",
-    "ExplorationStats",
-    "FrontierItem",
-    "budget_stop_reason",
+    "TraversalFrontier",
+    "TraversalLimits",
+    "TraversalStats",
+    "TraversalItem",
+    "bounded_end_reason",
 ]

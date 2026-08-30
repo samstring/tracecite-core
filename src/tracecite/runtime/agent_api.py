@@ -24,9 +24,9 @@ from . import tools as _tools
 from .correlation import EvidenceNode
 from .evidence_identity import file_source_version, pointer_source_key
 from .evidence_progress import AcquisitionEndReason, EvidenceProgress, EvidenceProgressTracker
-from .frontier import ExplorationPolicy
+from .traversal_frontier import TraversalLimits
 from .investigation import InvestigationStore
-from .orchestrator import EvidenceInvestigation, investigate_evidence
+from .traversal import EvidenceTraversal, traverse_evidence
 from .reducer import ReductionPolicy
 from .retrieval_session import (
     DEFAULT_MAX_SEEN_EVIDENCE,
@@ -164,20 +164,20 @@ class RetrievalResult:
 
 
 @dataclass(frozen=True)
-class CanonicalInvestigationResult:
+class CanonicalTraversalResult:
     """Current deterministic provider traversal result plus mechanical progress.
 
-    ``investigate``/``EvidenceInvestigation`` are retained only until the
+    ``investigate``/``EvidenceTraversal`` are retained only until the
     dedicated traversal refactor.  The end reason here describes only why this
     bounded mechanical acquisition ended.
     """
 
-    investigation: EvidenceInvestigation
+    traversal: EvidenceTraversal
     progress: EvidenceProgress
     acquisition_end_reason: AcquisitionEndReason | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        payload = self.investigation.to_dict()
+        payload = self.traversal.to_dict()
         payload["progress"] = self.progress.to_dict()
         if self.acquisition_end_reason is not None:
             payload["acquisition_end_reason"] = self.acquisition_end_reason.to_dict()
@@ -244,71 +244,20 @@ def _restore_from_session(state: RetrievalSessionState) -> EvidenceProgressTrack
     return tracker
 
 
-def _legacy_progress_from_audit(
-    investigation_path: Union[str, Path],
-) -> tuple[EvidenceProgressTracker, RetrievalSessionState]:
-    """Replay old audit executions once when no RetrievalSession exists yet.
+def _restore_progress(investigation_path: Union[str, Path, None]) -> EvidenceProgressTracker:
+    """Restore only canonical RetrievalSession state.
 
-    This migration is scheduled for removal when InvestigationState is fully
-    decoupled from retrieval novelty; it is not a semantic owner.
+    InvestigationState audit executions are never replayed into retrieval
+    novelty. If a caller explicitly supplies an investigation path, it gets a
+    dedicated RetrievalSession namespace and starts empty unless that canonical
+    session already exists.
     """
 
-    tracker = EvidenceProgressTracker()
-    store = RetrievalSessionStore.for_investigation(investigation_path)
-    seen_order: list[str] = []
-    seen_set: set[str] = set()
-    covered: dict[str, list[tuple[int, int]]] = {}
-    state = InvestigationStore(investigation_path).load()
-    for execution in state.executions:
-        evidence = [item for item in execution.get("evidence") or [] if isinstance(item, Mapping)]
-        evidence_ids = tuple(
-            dict.fromkeys(
-                [str(item).strip() for item in execution.get("evidence_refs") or [] if str(item).strip()]
-                + list(_pointer_ids(evidence))
-            )
-        )
-        tracker.restore(evidence_ids=evidence_ids)
-        for evidence_id in evidence_ids:
-            if evidence_id not in seen_set:
-                seen_set.add(evidence_id)
-                seen_order.append(evidence_id)
-
-        if str(execution.get("operation") or "") != "expand" or not evidence:
-            continue
-        coverage = execution.get("coverage") or {}
-        if not isinstance(coverage, Mapping) or bool(coverage.get("truncated")):
-            continue
-        start = coverage.get("context_start_line")
-        end = coverage.get("context_end_line")
-        if not isinstance(start, int) or isinstance(start, bool):
-            continue
-        if not isinstance(end, int) or isinstance(end, bool) or end < start:
-            continue
-        source_key = pointer_source_key(evidence[0])
-        if source_key:
-            tracker.restore(source=source_key, line_ranges=((start, end),))
-            covered.setdefault(source_key, []).append((start, end))
-
-    migrated = RetrievalSessionState(
-        context_id=store.context_id,
-        revision=1 if seen_order or covered else 0,
-        seen_evidence=tuple(seen_order),
-        covered_ranges={key: tuple(value) for key, value in covered.items()},
-    )
-    return tracker, migrated
-
-
-def _restore_progress(investigation_path: Union[str, Path, None]) -> EvidenceProgressTracker:
     if investigation_path is None:
         return EvidenceProgressTracker()
     store = RetrievalSessionStore.for_investigation(investigation_path)
-    if store.path.exists():
-        return _bind_progress_store(_restore_from_session(store.load()), store)
-
-    tracker, migrated = _legacy_progress_from_audit(investigation_path)
-    store.save(migrated)
+    tracker = _restore_from_session(store.load())
     return _bind_progress_store(tracker, store)
-
 
 def _persist_observation(
     investigation_path: Union[str, Path, None],
@@ -636,17 +585,17 @@ def retrieve(request: EvidenceRequest) -> RetrievalResult:
     raise AssertionError("unreachable retrieval target")
 
 
-def investigate(
+def traverse(
     providers: Sequence[EvidenceProvider],
     *,
     seed_nodes: Sequence[EvidenceNode] = (),
     seed_evidence_ids: Sequence[str] = (),
     seed_entities: Sequence[EntityRef] = (),
-    exploration_policy: ExplorationPolicy | None = None,
+    exploration_policy: TraversalLimits | None = None,
     reduction_policy: ReductionPolicy | None = None,
     temporal_window_seconds: float | None = None,
     clock: Callable[[], float] | None = None,
-) -> CanonicalInvestigationResult:
+) -> CanonicalTraversalResult:
     """Run the current bounded mechanical provider exploration implementation.
 
     The dedicated traversal refactor will replace the investigation naming and
@@ -664,47 +613,47 @@ def investigate(
     }
     if clock is not None:
         kwargs["clock"] = clock
-    investigation = investigate_evidence(providers, **kwargs)
+    traversal = traverse_evidence(providers, **kwargs)
     tracker = EvidenceProgressTracker()
     identities = tuple(
         dict.fromkeys(
             node.evidence_uri or node.id
-            for node in investigation.graph.nodes
+            for node in traversal.graph.nodes
             if node.evidence_uri or node.id
         )
     )
     progress = tracker.observe(
         evidence_ids=identities,
-        new_entities=sum(len(node.entities) for node in investigation.graph.nodes),
-        new_relations=len(investigation.graph.relations),
-        frontier_exhausted=investigation.stop_reason in {"frontier_exhausted", "no_evidence"},
-        scope_exhausted=bool(investigation.coverage.get("complete")),
+        new_entities=sum(len(node.entities) for node in traversal.graph.nodes),
+        new_relations=len(traversal.graph.relations),
+        frontier_exhausted=traversal.stop_reason in {"frontier_exhausted", "no_evidence"},
+        scope_exhausted=bool(traversal.coverage.get("complete")),
     )
     acquisition_end_reason: AcquisitionEndReason | None = None
-    if investigation.stop_reason == "frontier_exhausted":
+    if traversal.stop_reason == "frontier_exhausted":
         acquisition_end_reason = AcquisitionEndReason(
             "frontier_exhausted",
             basis=("mechanical_frontier_empty",),
         )
-    elif investigation.stop_reason == "no_evidence":
+    elif traversal.stop_reason == "no_evidence":
         acquisition_end_reason = AcquisitionEndReason(
             "frontier_exhausted",
             basis=("mechanical_frontier_empty", "no_evidence"),
         )
-    elif "provider" in investigation.stop_reason:
+    elif "provider" in traversal.stop_reason:
         acquisition_end_reason = AcquisitionEndReason(
             "provider_unavailable",
-            basis=(investigation.stop_reason,),
+            basis=(traversal.stop_reason,),
         )
-    return CanonicalInvestigationResult(
-        investigation=investigation,
+    return CanonicalTraversalResult(
+        traversal=traversal,
         progress=progress,
         acquisition_end_reason=acquisition_end_reason,
     )
 
 
 __all__ = [
-    "CanonicalInvestigationResult",
+    "CanonicalTraversalResult",
     "EvidenceRequest",
     "ProviderTarget",
     "QueryTarget",
@@ -712,6 +661,6 @@ __all__ = [
     "RetrievalResult",
     "RetrieveTarget",
     "SourceTarget",
-    "investigate",
+    "traverse",
     "retrieve",
 ]

@@ -1,8 +1,7 @@
-"""Bounded deterministic exploration over evidence providers.
+"""Bounded deterministic traversal over caller-selected Evidence seeds.
 
-This module is intentionally not an Agent. It moves the mechanical loop
-"retrieve -> discover stable entity -> retrieve related evidence" below the
-model while leaving hypotheses, causality, and final diagnosis to the Agent.
+Traversal follows stable identities/entities inside the scope supplied by the
+caller. It is not an Agent, planner, root-cause engine, or next-step selector.
 """
 
 from __future__ import annotations
@@ -15,13 +14,13 @@ from tracecite.extension.evidence import EntityRef, EvidenceRelation
 from tracecite.extension.retrieval import EvidenceProvider, ProviderEvidence, RetrieveRequest, RetrieveResult
 
 from .correlation import CorrelationGraph, EvidenceNode, correlate
-from .frontier import ExpansionFrontier, ExplorationPolicy, ExplorationStats, budget_stop_reason
+from .traversal_frontier import TraversalFrontier, TraversalLimits, TraversalStats, bounded_end_reason
 from .grouping import GroupingResult, group_evidence
 from .reducer import ReductionPolicy, ReductionResult, reduce_evidence
 
 
 @dataclass(frozen=True)
-class ExplorationStep:
+class TraversalStep:
     provider: str
     reason: str
     depth: int
@@ -54,14 +53,14 @@ class ExplorationStep:
 
 
 @dataclass(frozen=True)
-class EvidenceInvestigation:
+class EvidenceTraversal:
     status: str
     stop_reason: str
     graph: CorrelationGraph
     grouping: GroupingResult
     reduction: ReductionResult
     coverage: Mapping[str, Any]
-    trace: tuple[ExplorationStep, ...]
+    trace: tuple[TraversalStep, ...]
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -123,17 +122,17 @@ def _relation_key(relation: EvidenceRelation) -> tuple[str, str, str, str, str]:
     return relation.identity
 
 
-def investigate_evidence(
+def traverse_evidence(
     providers: Sequence[EvidenceProvider],
     *,
     seed_nodes: Sequence[EvidenceNode] = (),
     seed_evidence_ids: Sequence[str] = (),
     seed_entities: Sequence[EntityRef] = (),
-    exploration_policy: ExplorationPolicy | None = None,
+    exploration_policy: TraversalLimits | None = None,
     reduction_policy: ReductionPolicy | None = None,
     temporal_window_seconds: float | None = None,
     clock: Callable[[], float] = time.monotonic,
-) -> EvidenceInvestigation:
+) -> EvidenceTraversal:
     """Explore related runtime evidence under deterministic hard limits.
 
     Every provider is attempted at most once for the initial seed request and
@@ -142,7 +141,7 @@ def investigate_evidence(
     Coverage; they never become causal Findings.
     """
 
-    policy = exploration_policy or ExplorationPolicy()
+    policy = exploration_policy or TraversalLimits()
     ordered_providers = sorted(tuple(providers), key=_provider_name)
     names = [_provider_name(provider) for provider in ordered_providers]
     if len(names) != len(set(names)):
@@ -151,7 +150,7 @@ def investigate_evidence(
     nodes: dict[str, EvidenceNode] = {}
     sources: set[str] = set()
     pending_relations: dict[tuple[str, str, str, str, str], EvidenceRelation] = {}
-    trace: list[ExplorationStep] = []
+    trace: list[TraversalStep] = []
     conflicts: list[str] = []
     unsupported_entities: list[str] = []
     provider_non_ok: list[dict[str, str]] = []
@@ -162,7 +161,7 @@ def investigate_evidence(
     source_limit_exhausted = False
     evidence_limit_exhausted = False
     start = clock()
-    frontier = ExpansionFrontier(policy)
+    frontier = TraversalFrontier(policy)
 
     seed_ids = tuple(dict.fromkeys(str(item).strip() for item in seed_evidence_ids if str(item).strip()))
     seed_entity_values = tuple(seed_entities)
@@ -177,8 +176,8 @@ def investigate_evidence(
     def elapsed() -> float:
         return max(0.0, float(clock() - start))
 
-    def stats() -> ExplorationStats:
-        return ExplorationStats(
+    def stats() -> TraversalStats:
+        return TraversalStats(
             retrievals=retrievals,
             evidence=len(nodes),
             sources=len(sources),
@@ -233,7 +232,7 @@ def investigate_evidence(
             provider_errors += 1
             provider_non_ok.append({"provider": name, "status": "error", "phase": "can_handle"})
             trace.append(
-                ExplorationStep(
+                TraversalStep(
                     provider=name,
                     reason=request.reason,
                     depth=request.depth,
@@ -253,7 +252,7 @@ def investigate_evidence(
             provider_errors += 1
             provider_non_ok.append({"provider": name, "status": "error", "phase": "retrieve"})
             trace.append(
-                ExplorationStep(
+                TraversalStep(
                     provider=name,
                     reason=request.reason,
                     depth=request.depth,
@@ -283,7 +282,7 @@ def investigate_evidence(
                 next_depth = 1 if request.depth == 0 else request.depth + 1
                 new_entities += add_frontier_from(node, depth=next_depth)
         trace.append(
-            ExplorationStep(
+            TraversalStep(
                 provider=name,
                 reason=request.reason,
                 depth=request.depth,
@@ -314,7 +313,7 @@ def investigate_evidence(
         )
         handled = 0
         for provider in ordered_providers:
-            hard_stop = budget_stop_reason(policy, stats())
+            hard_stop = bounded_end_reason(policy, stats())
             if hard_stop is not None:
                 break
             result, state = call_provider(provider, seed_request)
@@ -324,7 +323,7 @@ def investigate_evidence(
         if handled == 0:
             provider_non_ok.append({"provider": "*", "status": "unavailable", "phase": "seed"})
 
-    stop_reason: str | None = budget_stop_reason(policy, stats())
+    stop_reason: str | None = bounded_end_reason(policy, stats())
     interrupted_entity = ""
     while stop_reason is None:
         item = frontier.pop()
@@ -341,7 +340,7 @@ def investigate_evidence(
         handled = 0
         round_new = 0
         for provider in ordered_providers:
-            hard_stop = budget_stop_reason(policy, stats())
+            hard_stop = bounded_end_reason(policy, stats())
             if hard_stop is not None:
                 stop_reason = hard_stop
                 interrupted_entity = item.entity.identity
@@ -360,7 +359,7 @@ def investigate_evidence(
             no_growth_rounds = 0
         else:
             no_growth_rounds += 1
-        stop_reason = budget_stop_reason(policy, stats())
+        stop_reason = bounded_end_reason(policy, stats())
 
     active_relations: list[EvidenceRelation] = []
     dangling_relations = 0
@@ -464,7 +463,7 @@ def investigate_evidence(
             "per_request_limit": policy.per_request_limit,
         },
     }
-    return EvidenceInvestigation(
+    return EvidenceTraversal(
         status=status,
         stop_reason=final_stop,
         graph=graph,
@@ -476,4 +475,4 @@ def investigate_evidence(
     )
 
 
-__all__ = ["EvidenceInvestigation", "ExplorationStep", "investigate_evidence"]
+__all__ = ["EvidenceTraversal", "TraversalStep", "traverse_evidence"]

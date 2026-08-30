@@ -7,9 +7,9 @@ from tracecite.extension.retrieval import RetrieveRequest
 from tracecite.integrations.investigator import investigate
 from tracecite.integrations.json_evidence_provider import JsonEvidenceProvider
 from tracecite.runtime.correlation import EvidenceNode, correlate
-from tracecite.runtime.frontier import ExplorationPolicy
+from tracecite.runtime.traversal_frontier import TraversalLimits
 from tracecite.runtime.grouping import group_evidence
-from tracecite.runtime.orchestrator import investigate_evidence
+from tracecite.runtime.traversal import traverse_evidence
 from tracecite.runtime.reducer import ReductionPolicy, reduce_evidence
 
 
@@ -34,7 +34,7 @@ def test_investigate_follows_session_request_trace_without_agent_loop() -> None:
     result = investigate(
         providers,
         seed_evidence_ids=("crash:C123",),
-        exploration_policy=ExplorationPolicy(
+        exploration_policy=TraversalLimits(
             max_depth=3,
             max_retrievals=20,
             max_no_growth_rounds=3,
@@ -76,7 +76,7 @@ def test_package_citations_resolve_back_to_provider_records() -> None:
     result = investigate(
         providers,
         seed_evidence_ids=("crash:C123",),
-        exploration_policy=ExplorationPolicy(max_retrievals=20, max_no_growth_rounds=3),
+        exploration_policy=TraversalLimits(max_retrievals=20, max_no_growth_rounds=3),
         max_tokens=2400,
     )
     by_name = {provider.name: provider for provider in providers}
@@ -106,10 +106,10 @@ def test_missing_provider_evidence_is_explicitly_incomplete() -> None:
         def retrieve(self, request: RetrieveRequest):
             raise RuntimeError("provider unavailable")
 
-    result = investigate_evidence(
+    result = traverse_evidence(
         [BrokenProvider()],
         seed_evidence_ids=("crash:missing",),
-        exploration_policy=ExplorationPolicy(max_provider_errors=2),
+        exploration_policy=TraversalLimits(max_provider_errors=2),
     )
     assert result.status == "empty"
     assert result.coverage["complete"] is False
@@ -119,10 +119,10 @@ def test_missing_provider_evidence_is_explicitly_incomplete() -> None:
 
 
 def test_retrieval_budget_stops_with_partial_coverage() -> None:
-    result = investigate_evidence(
+    result = traverse_evidence(
         _providers(),
         seed_evidence_ids=("crash:C123",),
-        exploration_policy=ExplorationPolicy(
+        exploration_policy=TraversalLimits(
             max_retrievals=2,
             max_depth=3,
             max_no_growth_rounds=3,
@@ -198,10 +198,10 @@ def test_integration_investigator_delegates_public_runtime_facade(monkeypatch) -
     from types import SimpleNamespace
 
     providers = _providers()
-    canonical = investigate_evidence(
+    canonical = traverse_evidence(
         providers,
         seed_evidence_ids=("crash:C123",),
-        exploration_policy=ExplorationPolicy(max_retrievals=20, max_no_growth_rounds=3),
+        exploration_policy=TraversalLimits(max_retrievals=20, max_no_growth_rounds=3),
     )
     calls = []
 
@@ -213,7 +213,7 @@ def test_integration_investigator_delegates_public_runtime_facade(monkeypatch) -
     result = facade.investigate(
         providers,
         seed_evidence_ids=("crash:C123",),
-        exploration_policy=ExplorationPolicy(max_retrievals=20, max_no_growth_rounds=3),
+        exploration_policy=TraversalLimits(max_retrievals=20, max_no_growth_rounds=3),
         max_tokens=2400,
     )
 
@@ -228,5 +228,5 @@ def test_integration_investigator_does_not_import_orchestrator_function() -> Non
     import tracecite.integrations.investigator as facade
 
     source = inspect.getsource(facade)
-    assert "investigate_evidence(" not in source
+    assert "traverse_evidence(" not in source
     assert "runtime_investigate(" in source

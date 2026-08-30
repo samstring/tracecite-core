@@ -12,7 +12,7 @@ The complete comparison matrix is:
 3. `tracecite` — bounded TraceCite search/expand transport.
 4. `tracecite_context` — TraceCite plus cross-turn seen-Evidence suppression.
 5. `tracecite_intelligence` — the Agent still chooses retrieval operations, but returned canonical evidence may be correlated, grouped, deterministically reduced, token-budgeted, and projected as an EvidencePackage.
-6. `tracecite_investigate` — exposes the high-level deterministic investigation path. TraceCite may expand stable Evidence IDs / EntityRefs through providers under an ExplorationPolicy, then correlate/group/reduce/package the result. The Agent still owns hypotheses, causality, and the final diagnosis.
+6. `tracecite_investigate` — exposes the high-level deterministic investigation path. TraceCite may expand stable Evidence IDs / EntityRefs through providers under an TraversalLimits, then correlate/group/reduce/package the result. The Agent still owns hypotheses, causality, and the final diagnosis.
 
 `free_shell` exists to answer the stronger practical question: whether TraceCite still reduces model/tool loops when the baseline Agent can choose normal local investigation utilities rather than being limited to a purpose-built search tool.
 

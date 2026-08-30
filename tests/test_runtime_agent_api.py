@@ -18,7 +18,7 @@ from tracecite.runtime import (
     QueryTarget,
     RangeTarget,
     SourceVersion,
-    investigate,
+    traverse,
     retrieve,
 )
 from tracecite.runtime.retrieval_session import RetrievalSessionStore
@@ -152,7 +152,7 @@ def test_retrieval_session_remains_novelty_owner_without_audit_executions(tmp_pa
     assert second.repeated_evidence == 1
 
 
-def test_legacy_audit_progress_migrates_once_when_sidecar_is_missing(tmp_path) -> None:
+def test_audit_history_is_not_migrated_into_retrieval_novelty(tmp_path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("ERROR timeout request=7\n", encoding="utf-8")
     state_path = tmp_path / "investigation.json"
@@ -171,8 +171,9 @@ def test_legacy_audit_progress_migrates_once_when_sidecar_is_missing(tmp_path) -
     )
 
     assert session_store.path.is_file()
-    assert migrated.status == "no_new_evidence"
-    assert migrated.repeated_evidence == 1
+    assert migrated.status == "ok"
+    assert migrated.new_evidence
+    assert migrated.repeated_evidence == 0
 
 
 def test_retrieve_range_hard_stops_only_for_same_immutable_version(tmp_path) -> None:
@@ -351,10 +352,10 @@ def test_provider_target_extends_retrieve_without_new_top_level_api(tmp_path) ->
 
 
 def test_investigate_reports_mechanical_frontier_stop() -> None:
-    result = investigate((_Provider(),), seed_evidence_ids=("record-1",))
+    result = traverse((_Provider(),), seed_evidence_ids=("record-1",))
 
-    assert result.investigation.status == "ok"
-    assert result.investigation.stop_reason == "frontier_exhausted"
+    assert result.traversal.status == "ok"
+    assert result.traversal.stop_reason == "frontier_exhausted"
     assert result.acquisition_end_reason is not None
     assert result.acquisition_end_reason.kind == "frontier_exhausted"
     assert result.progress.frontier_exhausted is True

@@ -14,7 +14,7 @@ from typing import Any, Sequence
 
 from tracecite.integrations.investigator import investigate
 from tracecite.integrations.json_evidence_provider import JsonEvidenceProvider
-from tracecite.runtime.frontier import ExplorationPolicy
+from tracecite.runtime.traversal_frontier import TraversalLimits
 
 
 FIXTURE_NAMES = (
@@ -42,7 +42,7 @@ def run_investigation_benchmark(case_dir: str | Path) -> dict[str, Any]:
     result = investigate(
         providers,
         seed_evidence_ids=("crash:C123",),
-        exploration_policy=ExplorationPolicy(
+        exploration_policy=TraversalLimits(
             max_depth=3,
             max_retrievals=20,
             max_no_growth_rounds=3,

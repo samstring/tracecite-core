@@ -25,15 +25,15 @@ def test_routing_policy_uses_remaining_context_fraction_not_magic_file_size() ->
 
 
 def test_investigate_transport_must_not_be_wider_than_bounded_transport() -> None:
-    with pytest.raises(ValueError, match="investigate_max_evidence"):
+    with pytest.raises(ValueError, match="focused_max_evidence"):
         EvidenceRoutingPolicy(
             bounded_max_evidence=5,
-            investigate_max_evidence=6,
+            focused_max_evidence=6,
         )
-    with pytest.raises(ValueError, match="investigate_max_line_chars"):
+    with pytest.raises(ValueError, match="focused_max_line_chars"):
         EvidenceRoutingPolicy(
             bounded_max_line_chars=400,
-            investigate_max_line_chars=401,
+            focused_max_line_chars=401,
         )
 
 
@@ -104,7 +104,7 @@ def test_multiple_unseen_tiny_sources_stay_direct_while_aggregate_fits_budget(tm
     policy = EvidenceRoutingPolicy(
         fallback_direct_chars=8_000,
         max_direct_chars=8_000,
-        investigate_after_executions=2,
+        focused_after_executions=2,
     )
 
     modes = []
@@ -130,7 +130,7 @@ def test_repeated_query_same_source_does_not_repeat_raw_direct_dump(tmp_path) ->
     policy = EvidenceRoutingPolicy(
         fallback_direct_chars=8_000,
         max_direct_chars=8_000,
-        investigate_after_executions=10,
+        focused_after_executions=10,
     )
 
     first = retrieve(
@@ -158,9 +158,9 @@ def test_after_direct_read_query_becomes_bounded_and_can_escalate(tmp_path) -> N
         fallback_direct_chars=8_000,
         max_direct_chars=8_000,
         bounded_max_evidence=5,
-        investigate_max_evidence=2,
+        focused_max_evidence=2,
         bounded_match_records=4,
-        investigate_match_records=100,
+        focused_match_records=100,
     )
 
     first = retrieve(
@@ -179,7 +179,7 @@ def test_after_direct_read_query_becomes_bounded_and_can_escalate(tmp_path) -> N
     payload = searched.to_dict()
 
     assert payload["data"]["routing"]["mode"] == "bounded"
-    assert payload["data"]["routing"]["next_mode"] == "investigate"
+    assert payload["data"]["routing"]["next_mode"] == "focused"
     assert payload["coverage"]["match_records"] == 20
     assert payload["coverage"]["evidence_returned"] == 5
     assert payload["coverage"]["evidence_truncated"] is True
@@ -194,11 +194,11 @@ def test_deep_query_uses_tighter_investigate_transport_cap(tmp_path) -> None:
         fallback_direct_chars=1,
         max_direct_chars=1,
         bounded_max_evidence=5,
-        investigate_max_evidence=2,
+        focused_max_evidence=2,
         bounded_max_line_chars=128,
-        investigate_max_line_chars=64,
-        investigate_after_executions=2,
-        investigate_match_records=100,
+        focused_max_line_chars=64,
+        focused_after_executions=2,
+        focused_match_records=100,
     )
 
     for query in ("item=0", "item=1"):
@@ -219,7 +219,7 @@ def test_deep_query_uses_tighter_investigate_transport_cap(tmp_path) -> None:
     )
     payload = result.to_dict()
 
-    assert payload["data"]["routing"]["mode"] == EvidenceRoute.INVESTIGATE.value
+    assert payload["data"]["routing"]["mode"] == EvidenceRoute.FOCUSED.value
     assert "exploration_depth" in payload["data"]["routing"]["reasons"]
     assert payload["coverage"]["match_records"] == 20
     assert payload["coverage"]["evidence_returned"] == 2
@@ -265,7 +265,7 @@ def test_deep_history_monotonically_escalates_source_inspection_to_investigate(t
     policy = EvidenceRoutingPolicy(
         fallback_direct_chars=8_000,
         max_direct_chars=8_000,
-        investigate_after_executions=4,
+        focused_after_executions=4,
     )
 
     for query in ("alpha", "beta", "gamma", "delta"):
@@ -283,6 +283,6 @@ def test_deep_history_monotonically_escalates_source_inspection_to_investigate(t
     )
     payload = result.to_dict()
 
-    assert payload["data"]["routing"]["mode"] == EvidenceRoute.INVESTIGATE.value
+    assert payload["data"]["routing"]["mode"] == EvidenceRoute.FOCUSED.value
     assert "exploration_depth" in payload["data"]["routing"]["reasons"]
     assert result.operation == "survey"

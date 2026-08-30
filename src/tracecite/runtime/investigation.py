@@ -1849,7 +1849,7 @@ class InvestigationStore:
         return values
 
     @staticmethod
-    def _budget_stop_reason(detail: str) -> Dict[str, Any]:
+    def _bounded_end_reason(detail: str) -> Dict[str, Any]:
         return {
             "kind": "budget_exhausted",
             "detail": _required_text(detail, field_name="stop_reason.detail"),
@@ -1925,7 +1925,7 @@ class InvestigationStore:
                 # records the terminal budget_exhausted stop reason.
                 if not state.budget_reservations:
                     state.status = "completed"
-                    state.stop_reason = self._budget_stop_reason(detail)
+                    state.stop_reason = self._bounded_end_reason(detail)
                 state.revision += 1
                 state.updated_at = _now_iso()
                 atomic_write_json(self.path, InvestigationState.from_dict(state.to_dict()).to_dict())
@@ -1999,7 +1999,7 @@ class InvestigationStore:
                     violations.append(limit_name)
             if violations and state.status == "active":
                 state.status = "completed"
-                state.stop_reason = self._budget_stop_reason(
+                state.stop_reason = self._bounded_end_reason(
                     "执行后测量值超过调查预算: " + ", ".join(violations)
                 )
             state.budget_usage = usage

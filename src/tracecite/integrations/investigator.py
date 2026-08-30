@@ -9,8 +9,8 @@ from tracecite.extension.evidence import EntityRef
 from tracecite.extension.retrieval import EvidenceProvider
 from tracecite.runtime import investigate as runtime_investigate
 from tracecite.runtime.correlation import EvidenceNode
-from tracecite.runtime.frontier import ExplorationPolicy
-from tracecite.runtime.orchestrator import EvidenceInvestigation
+from tracecite.runtime.traversal_frontier import TraversalLimits
+from tracecite.runtime.traversal import EvidenceTraversal
 from tracecite.runtime.reducer import ReductionPolicy
 
 from .evidence_package import EvidencePackage, build_evidence_package
@@ -18,7 +18,7 @@ from .evidence_package import EvidencePackage, build_evidence_package
 
 @dataclass(frozen=True)
 class InvestigationPackageResult:
-    investigation: EvidenceInvestigation
+    investigation: EvidenceTraversal
     package: EvidencePackage
 
     def to_dict(self) -> dict[str, Any]:
@@ -38,7 +38,7 @@ def investigate(
     seed_nodes: Sequence[EvidenceNode] = (),
     seed_evidence_ids: Sequence[str] = (),
     seed_entities: Sequence[EntityRef] = (),
-    exploration_policy: ExplorationPolicy | None = None,
+    exploration_policy: TraversalLimits | None = None,
     reduction_policy: ReductionPolicy | None = None,
     temporal_window_seconds: float | None = None,
     max_tokens: int = 3000,
