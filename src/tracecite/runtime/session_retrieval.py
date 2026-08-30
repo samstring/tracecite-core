@@ -44,6 +44,40 @@ def _pointer_ids(evidence: tuple[Mapping[str, Any], ...]) -> tuple[str, ...]:
     )
 
 
+def _matched_existing_evidence_refs(
+    evidence: tuple[Mapping[str, Any], ...],
+    new_rows: tuple[Mapping[str, Any], ...],
+) -> tuple[dict[str, Any], ...]:
+    """Project repeated matches as lightweight identities, never repeated bodies.
+
+    A repeated match only means the current retrieval matched evidence that was
+    delivered earlier in this RetrievalSession.  It does not imply that the
+    Agent understood, used, or should ignore that evidence now.
+    """
+
+    new_ids = set(_pointer_ids(new_rows))
+    refs: list[dict[str, Any]] = []
+    for item in evidence:
+        uri = str(item.get("uri") or "").strip()
+        if not uri or uri in new_ids:
+            continue
+        ref: dict[str, Any] = {"uri": uri}
+        source_path = str(item.get("source_path") or "").strip()
+        if source_path:
+            ref["source_path"] = source_path
+        start = item.get("start_line")
+        end = item.get("end_line")
+        if isinstance(start, int) and not isinstance(start, bool) and start > 0:
+            ref["start_line"] = start
+        if isinstance(end, int) and not isinstance(end, bool) and end > 0:
+            ref["end_line"] = end
+        sha256 = str(item.get("sha256") or "").strip().lower()
+        if re.fullmatch(r"[0-9a-f]{64}", sha256):
+            ref["sha256"] = sha256
+        refs.append(ref)
+    return tuple(refs)
+
+
 def _relation_ids(canonical: Mapping[str, Any]) -> tuple[str, ...]:
     data = canonical.get("data") or {}
     if not isinstance(data, Mapping):
@@ -390,6 +424,13 @@ def retrieve_with_session(
         source_observation=source_observation,
         line_ranges=line_ranges,
     )
+
+    if repeated:
+        matched_existing = _matched_existing_evidence_refs(evidence, new_rows)
+        if matched_existing:
+            data = dict(canonical.get("data") or {})
+            data["matched_existing_evidence"] = [dict(item) for item in matched_existing]
+            canonical["data"] = data
 
     if isinstance(request.target, RangeTarget):
         data = dict(canonical.get("data") or {})
