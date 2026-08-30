@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tracecite import (
+from tracecite.runtime import (
     CapabilityError,
     CapabilitySpec,
     execute_capability,

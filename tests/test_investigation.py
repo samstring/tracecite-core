@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from tracecite import InvestigationError, InvestigationStore, search
-from tracecite.runtime import assess_test, tools
+from tracecite.runtime import InvestigationError, InvestigationStore, tools
+from tracecite.runtime.test_assessment import assess_test
+from tracecite.runtime.tools import search
 from tracecite.integrations import cli
 
 

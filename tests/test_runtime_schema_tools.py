@@ -3,9 +3,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from tracecite import RESULT_SCHEMA_VERSION
 from tracecite.runtime import tools
-from tracecite.runtime.schema import AgentResult, ScenarioDocument
+from tracecite.runtime.schema import RESULT_SCHEMA_VERSION, AgentResult, ScenarioDocument
 from tracecite.runtime.tools import expand, probe, run, search, verify
 
 

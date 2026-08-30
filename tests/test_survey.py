@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from tracecite import survey
+from tracecite.runtime.tools import survey
 from tracecite.integrations import cli
 from tracecite_core.survey import survey_file
 

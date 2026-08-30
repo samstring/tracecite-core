@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from tracecite import (
+from tracecite.runtime import (
     BudgetExhausted,
     BudgetPolicy,
-    InvestigationCacheStore,
     InvestigationError,
     InvestigationStore,
 )
+from tracecite.runtime.investigation import InvestigationCacheStore
 from tracecite.runtime import investigation as investigation_module
 from tracecite.runtime import tools
 from tracecite.runtime.tools import expand, probe, sample, search, survey, verify

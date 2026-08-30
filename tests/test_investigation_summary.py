@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tracecite.runtime import assess_test
+from tracecite.runtime.test_assessment import assess_test
 from tracecite.runtime.investigation import InvestigationStore
 from tracecite.runtime.investigation_summary import (
     MAX_SUMMARY_OUTPUT_CHARS,
@@ -11,7 +11,6 @@ from tracecite.runtime.investigation_summary import (
     InvestigationSummaryError,
     summarize_investigation,
 )
-from tracecite import summarize_investigation as public_summarize_investigation
 from tracecite.integrations import cli
 
 
@@ -326,7 +325,7 @@ def test_small_output_is_still_valid_json_and_invalid_limits_are_explicit(
 def test_public_export_and_cli_route_read_only_summary(tmp_path: Path, capsys) -> None:
     store = _store(tmp_path)
     revision = store.load().revision
-    assert public_summarize_investigation(store.path)["advisory"] is True
+    assert summarize_investigation(store.path)["advisory"] is True
 
     assert cli.main(
         [

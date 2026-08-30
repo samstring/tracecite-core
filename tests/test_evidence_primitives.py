@@ -57,12 +57,9 @@ def test_output_layout_loads_defaults(tmp_path, monkeypatch) -> None:
     assert layout.output_root == (Path.home() / "Documents" / "TraceCite").resolve()
 
 
-def test_output_layout_is_public_from_tracecite_root() -> None:
-    import tracecite
-    from tracecite import DEFAULT_OUTPUT_ROOT, OutputLayout, load_output_config, write_output_config
-    from tracecite.output_layout import OutputLayout as ModuleOutputLayout
+def test_output_layout_remains_available_from_its_secondary_module() -> None:
+    from tracecite_core.output_layout import DEFAULT_OUTPUT_ROOT, OutputLayout as ModuleOutputLayout
 
-    assert tracecite.OutputLayout is OutputLayout
     assert ModuleOutputLayout is OutputLayout
     assert DEFAULT_OUTPUT_ROOT == "~/Documents/TraceCite"
     assert callable(load_output_config)

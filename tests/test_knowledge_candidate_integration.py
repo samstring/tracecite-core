@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from tracecite import InvestigationError, InvestigationStore
+from tracecite.runtime import InvestigationError, InvestigationStore
 from tracecite.knowledge import KnowledgeGovernanceError, KnowledgeGovernanceStore
-from tracecite.runtime import assess_test
+from tracecite.runtime.test_assessment import assess_test
 
 
 SUPPORT_REF = "evidence://sha256/" + ("a" * 64) + "#L2-L3"

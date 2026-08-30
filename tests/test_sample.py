@@ -4,7 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from tracecite import InvestigationStore, sample
+from tracecite.runtime import InvestigationStore
+from tracecite.runtime.tools import sample
 from tracecite.integrations import cli
 from tracecite_core.sample import sample_file
 

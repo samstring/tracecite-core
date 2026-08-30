@@ -5,12 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tracecite import (
-    BudgetPolicy,
-    InvestigationStore,
-    compare_investigations as public_compare_investigations,
-    timeline_investigation as public_timeline_investigation,
-)
+from tracecite.runtime import BudgetPolicy, InvestigationStore
 from tracecite.integrations import cli
 from tracecite.runtime.investigation_compare import (
     COMPARE_SCHEMA_VERSION,
@@ -248,12 +243,10 @@ def test_output_char_cap_and_strict_error(tmp_path: Path) -> None:
         timeline_investigation(tmp_path / "missing.json", strict=True)
 
 
-def test_public_exports_and_cli_routes_are_read_only(tmp_path: Path, capsys) -> None:
+def test_secondary_cli_routes_are_read_only(tmp_path: Path, capsys) -> None:
     path, store = _state(tmp_path)
     revision = store.load().revision
 
-    assert public_timeline_investigation(path)["kind"] == "timeline"
-    assert public_compare_investigations(path, path)["revision_delta"] == 0
 
     assert cli.main(
         [
