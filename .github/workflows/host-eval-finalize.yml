@@ -1,0 +1,679 @@
+name: Finalize Host Observation and Evaluation
+
+on:
+  push:
+    branches: [experiment/evidence-intelligence]
+    paths: [.github/workflows/host-eval-finalize.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/evidence-intelligence
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply Host observation and scorer convergence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+
+          support = r'''from __future__ import annotations
+
+import re
+from typing import Any, Mapping
+
+ROOT_CAUSE_DIMENSIONS = (
+    "failure_localization",
+    "immediate_failure_mechanism",
+    "upstream_contributor",
+    "fix_alignment",
+)
+ALLOWED_SUPPORT = {"supported", "inference_supported", "unsupported_from_log"}
+INFERENCE_RE = re.compile(
+    r"\b(?:likely|plausible|suggests?|indicat(?:e|es|ed)|consistent\s+with|"
+    r"may|might|could|appears?|inference|infer(?:red|ence)?|should|would|"
+    r"not\s+directly\s+(?:shown|proven|established|observed))\b",
+    re.IGNORECASE,
+)
+
+
+def _patterns(value: Any, key: str = "patterns") -> tuple[str, ...]:
+    if isinstance(value, Mapping):
+        value = value.get(key)
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"{key} must be a list")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{key} must contain non-empty strings")
+        re.compile(item)
+        result.append(item)
+    return tuple(result)
+
+
+def _hit(text: str, patterns: tuple[str, ...]) -> bool:
+    return bool(patterns) and any(
+        re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL) is not None
+        for pattern in patterns
+    )
+
+
+def _blocks(answer: str) -> list[str]:
+    return [block.strip() for block in re.split(r"\n\s*\n", answer) if block.strip()]
+
+
+def _index(items: Any) -> dict[str, Mapping[str, Any]]:
+    result: dict[str, Mapping[str, Any]] = {}
+    if not isinstance(items, list):
+        return result
+    for item in items:
+        if isinstance(item, Mapping):
+            item_id = str(item.get("id") or "")
+            if item_id:
+                result[item_id] = item
+    return result
+
+
+def validate_support_levels(gold: Mapping[str, Any]) -> None:
+    raw = gold.get("evidence_sufficiency")
+    if raw is None:
+        return
+    if not isinstance(raw, Mapping):
+        raise ValueError("evidence_sufficiency must be an object")
+    rubric = gold.get("root_cause")
+    if not isinstance(rubric, Mapping):
+        raise ValueError("root_cause must be an object")
+    for dimension in ROOT_CAUSE_DIMENSIONS:
+        level = str(raw.get(dimension) or "supported")
+        if level not in ALLOWED_SUPPORT:
+            raise ValueError(f"unsupported evidence_sufficiency value for {dimension}: {level}")
+        entry = rubric.get(dimension)
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"root_cause.{dimension} must be an object")
+        if level == "unsupported_from_log" and not _patterns(entry, "boundary_patterns"):
+            raise ValueError(
+                f"root_cause.{dimension}.boundary_patterns is required for unsupported_from_log"
+            )
+
+
+def apply_support_levels(
+    score: Mapping[str, Any], gold: Mapping[str, Any], answer: str
+) -> dict[str, Any]:
+    out = dict(score)
+    quality = dict(out.get("quality") or {})
+    rubric = gold.get("root_cause") or {}
+    if not isinstance(rubric, Mapping):
+        raise ValueError("gold.root_cause must be an object")
+
+    raw_levels = gold.get("evidence_sufficiency") or {}
+    if not isinstance(raw_levels, Mapping):
+        raise ValueError("gold.evidence_sufficiency must be an object")
+    levels: dict[str, str] = {}
+    for dimension in ROOT_CAUSE_DIMENSIONS:
+        level = str(raw_levels.get(dimension) or "supported")
+        if level not in ALLOWED_SUPPORT:
+            raise ValueError(f"unsupported evidence_sufficiency value for {dimension}: {level}")
+        levels[dimension] = level
+
+    dimension_rows = _index(quality.get("dimensions"))
+    support_rows = _index(quality.get("dimension_evidence_support"))
+    answer_blocks = _blocks(answer)
+    support_level_rows: list[dict[str, Any]] = []
+    required_claims: list[str] = []
+    unsupported_dimensions: list[str] = []
+    unsupported_overreach = 0
+
+    for dimension in ROOT_CAUSE_DIMENSIONS:
+        entry = rubric.get(dimension)
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"gold.root_cause.{dimension} must be an object")
+        claim_patterns = _patterns(entry, "patterns")
+        boundary_patterns = _patterns(entry, "boundary_patterns")
+        hit = bool(dimension_rows.get(dimension, {}).get("hit"))
+        cited = bool(support_rows.get(dimension, {}).get("supported"))
+        matching_blocks = [block for block in answer_blocks if _hit(block, claim_patterns)]
+        inference_qualified = any(INFERENCE_RE.search(block) for block in matching_blocks)
+        boundary_hit = _hit(answer, boundary_patterns)
+        level = levels[dimension]
+
+        if level == "supported":
+            required_claims.append(dimension)
+            level_ok = bool(hit and cited)
+            overreach = False
+        elif level == "inference_supported":
+            required_claims.append(dimension)
+            level_ok = bool(hit and cited and inference_qualified)
+            overreach = bool(hit and not inference_qualified)
+        else:
+            unsupported_dimensions.append(dimension)
+            overreach = bool(hit and not boundary_hit)
+            level_ok = bool(boundary_hit and not overreach)
+
+        unsupported_overreach += int(overreach)
+        support_level_rows.append(
+            {
+                "id": dimension,
+                "support_level": level,
+                "claim_hit": hit,
+                "evidence_cited_in_claim_block": cited,
+                "inference_qualified": inference_qualified,
+                "boundary_hit": boundary_hit,
+                "overreach": overreach,
+                "support_level_ok": level_ok,
+            }
+        )
+
+    claim_hits = sum(bool(dimension_rows.get(dim, {}).get("hit")) for dim in required_claims)
+    claim_supported = sum(bool(support_rows.get(dim, {}).get("supported")) for dim in required_claims)
+    dimension_recall = claim_hits / len(required_claims) if required_claims else 1.0
+    supported_dimension_recall = claim_supported / len(required_claims) if required_claims else 1.0
+    boundary_recall = (
+        sum(
+            row["boundary_hit"]
+            for row in support_level_rows
+            if row["support_level"] == "unsupported_from_log"
+        )
+        / len(unsupported_dimensions)
+        if unsupported_dimensions
+        else 1.0
+    )
+    support_level_accuracy = sum(row["support_level_ok"] for row in support_level_rows) / len(
+        support_level_rows
+    )
+
+    quality["legacy_dimension_recall"] = quality.get("dimension_recall")
+    quality["legacy_supported_dimension_recall"] = quality.get("supported_dimension_recall")
+    quality["dimension_recall"] = round(dimension_recall, 4)
+    quality["supported_dimension_recall"] = round(supported_dimension_recall, 4)
+    quality["evidence_boundary_recall"] = round(boundary_recall, 4)
+    quality["support_level_accuracy"] = round(support_level_accuracy, 4)
+    quality["unsupported_dimension_overreach_hits"] = unsupported_overreach
+    quality["support_levels"] = support_level_rows
+    out["quality"] = quality
+
+    thresholds = gold.get("root_cause_thresholds") or {}
+    if not isinstance(thresholds, Mapping):
+        thresholds = {}
+    min_dimensions = float(thresholds.get("dimension_recall", 0.75))
+    min_supported = float(thresholds.get("supported_dimension_recall", 0.0))
+    min_citations = float(thresholds.get("citation_accuracy", 0.5))
+    min_markers = float(thresholds.get("evidence_marker_recall", 0.0))
+    min_boundary = float(thresholds.get("evidence_boundary_recall", 0.0))
+    min_support_level = float(thresholds.get("support_level_accuracy", 0.0))
+    max_unsupported = int(thresholds.get("max_unsupported_claim_hits", 0))
+    max_contradictions = int(thresholds.get("max_contradiction_hits", 0))
+    max_dimension_overreach = int(thresholds.get("max_unsupported_dimension_overreach_hits", 0))
+
+    citation = quality.get("citation") or {}
+    if not isinstance(citation, Mapping):
+        citation = {}
+    support_aware_passed = bool(answer.strip()) and all(
+        (
+            dimension_recall >= min_dimensions,
+            supported_dimension_recall >= min_supported,
+            float(citation.get("accuracy") or 0.0) >= min_citations,
+            float(quality.get("evidence_marker_recall") or 0.0) >= min_markers,
+            boundary_recall >= min_boundary,
+            support_level_accuracy >= min_support_level,
+            int(quality.get("unsupported_claim_hits") or 0) <= max_unsupported,
+            int(quality.get("contradiction_hits") or 0) <= max_contradictions,
+            unsupported_overreach <= max_dimension_overreach,
+        )
+    )
+    out["legacy_passed"] = bool(score.get("passed"))
+    out["support_aware_passed"] = support_aware_passed
+    out["passed"] = support_aware_passed
+    return out
+
+
+def self_test() -> None:
+    score = {
+        "passed": False,
+        "quality": {
+            "dimension_recall": 0.5,
+            "supported_dimension_recall": 0.5,
+            "dimensions": [
+                {"id": "failure_localization", "hit": True},
+                {"id": "immediate_failure_mechanism", "hit": True},
+                {"id": "upstream_contributor", "hit": False},
+                {"id": "fix_alignment", "hit": False},
+            ],
+            "dimension_evidence_support": [
+                {"id": "failure_localization", "supported": True},
+                {"id": "immediate_failure_mechanism", "supported": True},
+                {"id": "upstream_contributor", "supported": False},
+                {"id": "fix_alignment", "supported": False},
+            ],
+            "citation": {"accuracy": 1.0},
+            "evidence_marker_recall": 1.0,
+            "unsupported_claim_hits": 0,
+            "contradiction_hits": 0,
+        },
+    }
+    gold = {
+        "root_cause": {
+            "failure_localization": {"patterns": ["worker queue"]},
+            "immediate_failure_mechanism": {"patterns": ["checksum mismatch"]},
+            "upstream_contributor": {
+                "patterns": ["stale cache"],
+                "boundary_patterns": ["upstream.{0,80}(?:not established|cannot be determined)"],
+            },
+            "fix_alignment": {
+                "patterns": ["invalidate cache"],
+                "boundary_patterns": ["fix.{0,80}(?:not established|cannot be determined)"],
+            },
+        },
+        "evidence_sufficiency": {
+            "failure_localization": "supported",
+            "immediate_failure_mechanism": "inference_supported",
+            "upstream_contributor": "unsupported_from_log",
+            "fix_alignment": "unsupported_from_log",
+        },
+        "root_cause_thresholds": {
+            "dimension_recall": 1.0,
+            "supported_dimension_recall": 1.0,
+            "citation_accuracy": 1.0,
+            "evidence_marker_recall": 1.0,
+            "evidence_boundary_recall": 1.0,
+            "support_level_accuracy": 1.0,
+            "max_unsupported_claim_hits": 0,
+            "max_contradiction_hits": 0,
+            "max_unsupported_dimension_overreach_hits": 0,
+        },
+    }
+    answer = (
+        "The worker queue hit what is likely a checksum mismatch. L12.\n\n"
+        "The upstream cause is not established by the supplied evidence and cannot be determined.\n\n"
+        "The fix is not established by the supplied evidence and cannot be determined."
+    )
+    updated = apply_support_levels(score, gold, answer)
+    assert updated["support_aware_passed"] is True
+    assert updated["quality"]["dimension_recall"] == 1.0
+    assert updated["quality"]["evidence_boundary_recall"] == 1.0
+    assert updated["quality"]["unsupported_dimension_overreach_hits"] == 0
+'''
+          (root / 'src/tracecite/support_scoring.py').write_text(support, encoding='utf-8')
+
+          scorer = root / 'src/tracecite/root_cause_benchmarking.py'
+          text = scorer.read_text(encoding='utf-8')
+          if 'from .support_scoring import apply_support_levels, validate_support_levels' not in text:
+              text = text.replace(
+                  'from . import benchmarking as legacy\n',
+                  'from . import benchmarking as legacy\nfrom .support_scoring import apply_support_levels, validate_support_levels\n',
+                  1,
+              )
+          validation = '''    for dimension in ROOT_CAUSE_DIMENSIONS:\n        _patterns(rubric.get(dimension), field=f"root_cause.{dimension}")\n\n    for field in ("unsupported_claims", "contradictions"):\n'''
+          if 'validate_support_levels(gold)' not in text:
+              text = text.replace(
+                  validation,
+                  '''    for dimension in ROOT_CAUSE_DIMENSIONS:\n        _patterns(rubric.get(dimension), field=f"root_cause.{dimension}")\n    validate_support_levels(gold)\n\n    for field in ("unsupported_claims", "contradictions"):\n''',
+                  1,
+              )
+          old_return = '''    return {\n        "schema_version": ROOT_CAUSE_SCHEMA_VERSION,\n'''
+          if old_return in text:
+              text = text.replace(
+                  old_return,
+                  '''    result = {\n        "schema_version": ROOT_CAUSE_SCHEMA_VERSION,\n''',
+                  1,
+              )
+          parser_marker = '''    }\n\n\ndef _parser() -> argparse.ArgumentParser:\n'''
+          if 'return apply_support_levels(result, gold, answer)' not in text:
+              pos = text.rfind(parser_marker)
+              if pos < 0:
+                  raise SystemExit('could not find scorer return/parser boundary')
+              text = (
+                  text[:pos]
+                  + '''    }\n    return apply_support_levels(result, gold, answer)\n\n\ndef _parser() -> argparse.ArgumentParser:\n'''
+                  + text[pos + len(parser_marker):]
+              )
+          scorer.write_text(text, encoding='utf-8')
+
+          compat = r'''from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+from tracecite.support_scoring import apply_support_levels, self_test
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return value
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Compatibility helper for support-aware score files. Canonical benchmark scoring now applies support levels inside tracecite.root_cause_benchmarking."
+    )
+    parser.add_argument("--gold", type=Path)
+    parser.add_argument("--answer", type=Path)
+    parser.add_argument("--score", type=Path)
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+    if args.self_test:
+        self_test()
+        print(json.dumps({"status": "ok"}))
+        return 0
+    if args.gold is None or args.answer is None or args.score is None:
+        parser.error("--gold, --answer and --score are required unless --self-test is used")
+    updated = apply_support_levels(
+        _read_json(args.score),
+        _read_json(args.gold),
+        args.answer.read_text(encoding="utf-8", errors="replace"),
+    )
+    print(json.dumps(updated, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+          (root / 'benchmarks/agent-investigation/support_level_score.py').write_text(compat, encoding='utf-8')
+
+          extension = root / 'benchmarks/agent-investigation/pi_tracecite_extension.ts'
+          text = extension.read_text(encoding='utf-8')
+          if 'node:fs/promises' not in text:
+              text = text.replace(
+                  'import { execFile } from "node:child_process";\n',
+                  'import { execFile } from "node:child_process";\nimport { mkdir, writeFile } from "node:fs/promises";\n',
+                  1,
+              )
+          text = text.replace('import { join } from "node:path";', 'import { dirname, join } from "node:path";', 1)
+          activity_block = r'''
+type HostToolCategory = "tracecite_evidence" | "native_search" | "native_read" | "native_other" | "other";
+type HostToolActivity = {
+  tool: string;
+  category: HostToolCategory;
+  duration_ms: number;
+  status: string;
+  metadata?: Record<string, unknown>;
+};
+
+const ACTIVITY_PATH =
+  process.env.TRACECITE_PI_ACTIVITY || join(dirname(SESSION), "host-tool-activity.json");
+const activityStarted = new Map<string, number>();
+const activityEvents: HostToolActivity[] = [];
+let activityWrite: Promise<void> = Promise.resolve();
+
+function classifyHostTool(tool: string): HostToolCategory {
+  if (tool === "tracecite_search" || tool === "tracecite_expand") return "tracecite_evidence";
+  if (tool === "grep" || tool === "find") return "native_search";
+  if (tool === "read") return "native_read";
+  if (tool === "bash" || tool === "ls") return "native_other";
+  return "other";
+}
+
+function hostActivitySummary() {
+  const categories: Record<string, number> = {};
+  const tools: Record<string, number> = {};
+  let observed_duration_ms = 0;
+  for (const event of activityEvents) {
+    categories[event.category] = (categories[event.category] || 0) + 1;
+    tools[event.tool] = (tools[event.tool] || 0) + 1;
+    observed_duration_ms += event.duration_ms;
+  }
+  return {
+    total_tool_calls: activityEvents.length,
+    categories: Object.fromEntries(Object.entries(categories).sort(([a], [b]) => a.localeCompare(b))),
+    tools: Object.fromEntries(Object.entries(tools).sort(([a], [b]) => a.localeCompare(b))),
+    observed_duration_ms,
+  };
+}
+
+async function persistHostActivity(): Promise<void> {
+  await mkdir(dirname(ACTIVITY_PATH), { recursive: true });
+  await writeFile(
+    ACTIVITY_PATH,
+    JSON.stringify({ schema_version: 1, summary: hostActivitySummary(), events: activityEvents }, null, 2) + "\n",
+    "utf8",
+  );
+}
+
+function queueHostActivityWrite(): Promise<void> {
+  activityWrite = activityWrite.then(persistHostActivity, persistHostActivity);
+  return activityWrite;
+}
+'''
+          if 'const ACTIVITY_PATH =' not in text:
+              text = text.replace('\nasync function runBridge', '\n' + activity_block + '\nasync function runBridge', 1)
+          hooks = r'''  pi.on("tool_call", async (event) => {
+    activityStarted.set(event.toolCallId, Date.now());
+  });
+
+  pi.on("tool_result", async (event) => {
+    const started = activityStarted.get(event.toolCallId) ?? Date.now();
+    activityStarted.delete(event.toolCallId);
+    const row: HostToolActivity = {
+      tool: event.toolName,
+      category: classifyHostTool(event.toolName),
+      duration_ms: Math.max(0, Date.now() - started),
+      status: event.isError ? "error" : "ok",
+      metadata: event.toolName === "bash" ? { opaque: true } : undefined,
+    };
+    activityEvents.push(row);
+    if (activityEvents.length > 512) activityEvents.splice(0, activityEvents.length - 512);
+    await queueHostActivityWrite();
+    const baseDetails =
+      event.details && typeof event.details === "object" && !Array.isArray(event.details)
+        ? (event.details as Record<string, unknown>)
+        : {};
+    return {
+      details: {
+        ...baseDetails,
+        tracecite_host_activity: row,
+        tracecite_host_activity_summary: hostActivitySummary(),
+      },
+    } as any;
+  });
+
+'''
+          marker = 'export default function traceciteTools(pi: ExtensionAPI) {\n'
+          if 'tracecite_host_activity_summary' not in text:
+              text = text.replace(marker, marker + hooks, 1)
+          extension.write_text(text, encoding='utf-8')
+
+          adapter = root / 'benchmarks/agent-investigation/pi_session_to_transcript.py'
+          text = adapter.read_text(encoding='utf-8')
+          old = '''        if role == "toolResult":\n            events.append(\n                {\n                    "type": "tool",\n                    "name": str(message.get("toolName") or "unknown"),\n                    "output": _text_content(message.get("content")),\n                }\n            )\n            continue\n'''
+          new = '''        if role == "toolResult":\n            tool_event: dict[str, Any] = {\n                "type": "tool",\n                "name": str(message.get("toolName") or "unknown"),\n                "output": _text_content(message.get("content")),\n            }\n            details = message.get("details")\n            if isinstance(details, Mapping):\n                activity = details.get("tracecite_host_activity")\n                if isinstance(activity, Mapping):\n                    tool_event["activity"] = dict(activity)\n                    duration = activity.get("duration_ms")\n                    if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration >= 0:\n                        tool_event["duration_ms"] = duration\n                summary = details.get("tracecite_host_activity_summary")\n                if isinstance(summary, Mapping):\n                    tool_event["activity_summary"] = dict(summary)\n            events.append(tool_event)\n            continue\n'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif 'tracecite_host_activity' not in text:
+              raise SystemExit('could not patch pi_session_to_transcript toolResult block')
+          adapter.write_text(text, encoding='utf-8')
+
+          test_support = r'''from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from tracecite.root_cause_benchmarking import score_transcript
+
+
+def _write(path: Path, value: object) -> None:
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def test_support_aware_scoring_is_part_of_canonical_root_cause_scorer(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    _write(
+        case_dir / "case.json",
+        {
+            "schema_version": 1,
+            "id": "support-aware-demo",
+            "question_file": "question.md",
+            "gold_file": "gold.json",
+            "inputs": [{"id": "runtime", "url": "https://example.invalid/runtime.log", "filename": "runtime.log", "sha256": "a" * 64}],
+            "provenance": {"project": "example/project"},
+        },
+    )
+    (case_dir / "question.md").write_text("Why?\n", encoding="utf-8")
+    _write(
+        case_dir / "gold.json",
+        {
+            "root_cause_schema_version": 1,
+            "root_cause": {
+                "failure_localization": {"patterns": ["worker queue"]},
+                "immediate_failure_mechanism": {"patterns": ["checksum mismatch"]},
+                "upstream_contributor": {"patterns": ["stale cache"], "boundary_patterns": ["upstream.{0,120}(?:not established|cannot be determined)"]},
+                "fix_alignment": {"patterns": ["invalidate cache"], "boundary_patterns": ["fix.{0,120}(?:not established|cannot be determined)"]},
+            },
+            "evidence_sufficiency": {
+                "failure_localization": "supported",
+                "immediate_failure_mechanism": "inference_supported",
+                "upstream_contributor": "unsupported_from_log",
+                "fix_alignment": "unsupported_from_log",
+            },
+            "evidence_markers": [],
+            "unsupported_claims": [],
+            "contradictions": [],
+            "root_cause_thresholds": {
+                "dimension_recall": 1.0,
+                "supported_dimension_recall": 1.0,
+                "citation_accuracy": 1.0,
+                "evidence_boundary_recall": 1.0,
+                "support_level_accuracy": 1.0,
+                "max_unsupported_claim_hits": 0,
+                "max_contradiction_hits": 0,
+                "max_unsupported_dimension_overreach_hits": 0,
+            },
+        },
+    )
+    transcript = tmp_path / "run.jsonl"
+    events = [
+        {"type": "session", "mode": "tracecite", "model": "demo"},
+        {"type": "tool", "name": "tracecite_search", "output": "runtime.log #L12 worker queue checksum mismatch"},
+        {"type": "final", "answer": "The worker queue hit what is likely a checksum mismatch. Evidence: L12.\n\nThe upstream cause is not established by the supplied evidence and cannot be determined.\n\nThe fix is not established by the supplied evidence and cannot be determined."},
+    ]
+    transcript.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+
+    score = score_transcript(case_dir, transcript)
+    assert score["legacy_passed"] is False
+    assert score["support_aware_passed"] is True
+    assert score["passed"] is True
+    assert score["quality"]["dimension_recall"] == 1.0
+    assert score["quality"]["evidence_boundary_recall"] == 1.0
+    assert score["quality"]["support_level_accuracy"] == 1.0
+'''
+          (root / 'tests/test_support_aware_root_cause_benchmarking.py').write_text(test_support, encoding='utf-8')
+
+          test_activity = r'''from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "benchmarks" / "agent-investigation" / "pi_session_to_transcript.py"
+EXTENSION = ROOT / "benchmarks" / "agent-investigation" / "pi_tracecite_extension.ts"
+
+
+def test_pi_extension_observes_native_and_tracecite_tools() -> None:
+    text = EXTENSION.read_text(encoding="utf-8")
+    assert 'pi.on("tool_call"' in text
+    assert 'pi.on("tool_result"' in text
+    assert 'tool === "grep"' in text
+    assert 'tool === "read"' in text
+    assert 'tool === "bash"' in text
+    assert 'metadata: event.toolName === "bash" ? { opaque: true }' in text
+    assert 'TRACECITE_PI_ACTIVITY' in text
+
+
+def test_pi_session_adapter_preserves_host_tool_activity(tmp_path: Path) -> None:
+    session = tmp_path / "session.jsonl"
+    answer = tmp_path / "answer.md"
+    output = tmp_path / "transcript.jsonl"
+    session.write_text(
+        json.dumps(
+            {
+                "type": "message",
+                "message": {
+                    "role": "toolResult",
+                    "toolName": "grep",
+                    "content": [{"type": "text", "text": "12\terror"}],
+                    "details": {
+                        "tracecite_host_activity": {"tool": "grep", "category": "native_search", "duration_ms": 7, "status": "ok"},
+                        "tracecite_host_activity_summary": {"total_tool_calls": 1, "categories": {"native_search": 1}, "tools": {"grep": 1}, "observed_duration_ms": 7},
+                    },
+                },
+            }
+        ) + "\n",
+        encoding="utf-8",
+    )
+    answer.write_text("Done.\n", encoding="utf-8")
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), str(session), str(answer), str(output), "--mode", "pi-tracecite", "--model", "demo"],
+        cwd=ROOT,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert completed.returncode == 0, completed.stderr
+    events = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines() if line.strip()]
+    tool = next(item for item in events if item.get("type") == "tool")
+    assert tool["activity"]["category"] == "native_search"
+    assert tool["duration_ms"] == 7
+    assert tool["activity_summary"]["total_tool_calls"] == 1
+'''
+          (root / 'tests/test_pi_host_tool_activity.py').write_text(test_activity, encoding='utf-8')
+          PY
+
+      - name: Verify focused architecture gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          pytest -q \
+            tests/test_canonical_evidence_contract.py \
+            tests/test_runtime_session_retrieval.py \
+            tests/test_session_novelty_regressions.py \
+            tests/test_evidence_routing.py \
+            tests/test_evidence_selection.py \
+            tests/test_root_cause_benchmarking.py \
+            tests/test_support_aware_root_cause_benchmarking.py \
+            tests/test_pi_session_to_transcript.py \
+            tests/test_pi_host_tool_activity.py
+          python scripts/check_architecture.py
+          python benchmarks/agent-investigation/support_level_score.py --self-test
+          python -m compileall -q src/tracecite
+
+      - name: Commit verified implementation and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'tracecite-refactor-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/tracecite/support_scoring.py \
+            src/tracecite/root_cause_benchmarking.py \
+            benchmarks/agent-investigation/support_level_score.py \
+            benchmarks/agent-investigation/pi_tracecite_extension.ts \
+            benchmarks/agent-investigation/pi_session_to_transcript.py \
+            tests/test_support_aware_root_cause_benchmarking.py \
+            tests/test_pi_host_tool_activity.py
+          git commit -m 'integration: observe full Pi tool activity and formalize support scoring'
+          git rm .github/workflows/host-eval-finalize.yml
+          git commit -m 'chore: remove host-eval one-shot workflow'
+          git push origin HEAD:experiment/evidence-intelligence
