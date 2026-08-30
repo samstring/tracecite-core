@@ -88,6 +88,7 @@ Inspect relevant result fields independently. Common fields include:
 - `status`
 - `outcome`
 - `coverage`
+- `session_progress`
 - `missing_evidence`
 - `warnings`
 - `verification`
@@ -105,7 +106,16 @@ Semantics:
 - Correlation constraints describe identity safety, not root cause.
 - `observed_sibling_entities` are mechanically observed identities and evidence refs, not an instruction to compare those entities.
 - `new_evidence=0` means no newly exposed evidence in the current retrieval session, not that the investigation is complete.
+- `session_progress` is bounded mechanical history of retrieval outcomes, not evidence sufficiency, root-cause confidence, or a stop recommendation.
 - Missing evidence is a retrieval fact, not a stopping recommendation.
+
+### Mechanical `session_progress`
+
+When present, `session_progress` may report total search/expand calls, unique evidence identities already exposed, exact duplicate query count, and a bounded recent window of searches that produced new evidence, repeated-only matches, or `no_match`.
+
+A recent window with low novelty means only that recent retrieval calls have covered little new evidence. It does **not** establish that evidence is sufficient, a hypothesis is correct, a root cause has been found, no materially different source could help, or the investigation should stop.
+
+Use this telemetry only to observe retrieval behavior. The Agent remains responsible for deciding whether a materially different evidence target is needed and when to stop.
 
 ## Provenance and citation
 
