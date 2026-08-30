@@ -81,7 +81,10 @@ def _materialize(args: argparse.Namespace, session: RetrievalSessionStore) -> di
 
 def _replay(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[str, Any]:
     result = replay(_range_target(args), session=session)
-    return result.to_dict()
+    payload = result.to_dict()
+    coverage = payload.setdefault("coverage", {})
+    coverage.setdefault("replayed_evidence", 1)
+    return payload
 
 
 def _aggregate(args: argparse.Namespace) -> dict[str, Any]:
