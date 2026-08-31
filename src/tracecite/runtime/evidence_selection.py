@@ -1,6 +1,6 @@
 """Bounded, diagnosis-free retention of high-signal search candidates.
 
-Search result transport may be much smaller than the complete match set.  This
+Search result transport may be much smaller than the complete match set. This
 module lets Runtime scan the already-produced matched-record artifact and keep
 a tiny set of line-addressable incident candidates without turning those hints
 into canonical EvidencePointers prematurely.
@@ -44,6 +44,7 @@ _NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?\d+(?![A-Za-z])")
 _SPACE_RE = re.compile(r"\s+")
 DEFAULT_SIGNAL_SIGNATURE_CAP = 256
 DEFAULT_SIGNAL_HINT_LIMIT = 4
+_SIGNAL_LABEL_CHARS = 240
 
 
 def signal_severity(text: str) -> int:
@@ -60,6 +61,19 @@ def signal_signature(text: str) -> str:
     value = _NUMBER_RE.sub("<num>", value)
     value = _SPACE_RE.sub(" ", value).strip()
     return value[:600]
+
+
+def _signal_label(text: str, *, limit: int = _SIGNAL_LABEL_CHARS) -> str:
+    """Keep both the routing prefix and failure suffix of one long record."""
+
+    raw = next((item.strip() for item in text.splitlines() if item.strip()), "")
+    if len(raw) <= limit:
+        return raw
+    # Long runtime records often put wrappers/identity at the front and the
+    # load-bearing error at the end. Preserve both without interpreting either.
+    head = max(1, (limit - 5) // 2)
+    tail = max(1, limit - 5 - head)
+    return f"{raw[:head]} ... {raw[-tail:]}"
 
 
 def select_signal_hints(
@@ -102,10 +116,14 @@ def select_signal_hints(
                 continue
             if not isinstance(end_line, int) or isinstance(end_line, bool) or end_line < start_line:
                 end_line = start_line
-            label = next((item.strip() for item in text.splitlines() if item.strip()), "")[:240]
-            if not label:
+
+            raw_label = next((item.strip() for item in text.splitlines() if item.strip()), "")
+            if not raw_label:
                 continue
-            signature = signal_signature(label)
+            # Cluster on the fuller normalized record so suffix-only failure
+            # differences are not erased by the Agent-facing display bound.
+            signature = signal_signature(raw_label)
+            label = _signal_label(raw_label)
             existing = clusters.get(signature)
             if existing is not None:
                 existing["count"] += 1
