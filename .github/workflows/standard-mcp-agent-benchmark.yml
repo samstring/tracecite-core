@@ -1,0 +1,539 @@
+name: Standard MCP Agent Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "Agent Host to benchmark"
+        required: true
+        default: both
+        type: choice
+        options:
+          - pi
+          - codex
+          - both
+      scope:
+        description: "smoke = first case; four = one pass over all four"
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - four
+      mcp_ref:
+        description: "tracecite-mcp ref to checkout"
+        required: true
+        default: feature_for_agent
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - id: matrix
+        env:
+          SCOPE: ${{ inputs.scope }}
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          cases = [
+              {"case_id": "kubernetes-140039-runc-5347-scale", "case_dir": "benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347"},
+              {"case_id": "kubernetes-139417-scale", "case_dir": "benchmarks/agent-investigation/scale-cases/kubernetes-139417"},
+              {"case_id": "kubernetes-140848-scale", "case_dir": "benchmarks/agent-investigation/scale-cases/kubernetes-140848"},
+              {"case_id": "kubernetes-140268", "case_dir": "benchmarks/agent-investigation/scale-cases/kubernetes-140268"},
+          ]
+          chosen = cases[:1] if os.environ["SCOPE"] == "smoke" else cases
+          include = []
+          for index, case in enumerate(chosen):
+              row = dict(case)
+              row["repetition"] = 1
+              row["arm_order"] = "native tracecite" if index % 2 == 0 else "tracecite native"
+              include.append(row)
+          print("value=" + json.dumps({"include": include}, separators=(",", ":")))
+          PY
+
+  pi:
+    if: ${{ inputs.host == 'pi' || inputs.host == 'both' }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/tracecite-pi-standard-mcp
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      CASE_ID: ${{ matrix.case_id }}
+      CASE_DIR: ${{ matrix.case_dir }}
+      ARM_ORDER: ${{ matrix.arm_order }}
+      RESULT_ROOT: /tmp/tracecite-standard-mcp/pi/${{ matrix.case_id }}
+      PREP: /tmp/tracecite-standard-mcp/pi/${{ matrix.case_id }}/prepared
+
+    steps:
+      - name: Checkout TraceCite Core benchmark
+        uses: actions/checkout@v4
+
+      - name: Require private MCP checkout token
+        env:
+          MCP_REPO_TOKEN: ${{ secrets.TRACECITE_MCP_REPO_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "$MCP_REPO_TOKEN" ]]; then
+            echo "Configure repository secret TRACECITE_MCP_REPO_TOKEN with read access to samstring/tracecite-mcp." >&2
+            exit 2
+          fi
+
+      - name: Checkout TraceCite MCP implementation
+        uses: actions/checkout@v4
+        with:
+          repository: samstring/tracecite-mcp
+          ref: ${{ inputs.mcp_ref }}
+          path: tracecite-mcp
+          token: ${{ secrets.TRACECITE_MCP_REPO_TOKEN }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Core, external MCP, Pi, and adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -e ".[dev]"
+          python -m pip install -e "$GITHUB_WORKSPACE/tracecite-mcp[dev]"
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          pi install npm:pi-mcp-adapter@2.27.0 --approve
+          pi --version
+
+      - name: Verify benchmark and MCP boundary contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_canonical_evidence_contract.py \
+            tests/test_runtime_session_retrieval.py \
+            tests/test_session_novelty_regressions.py \
+            tests/test_pi_session_to_transcript.py \
+            tests/test_standard_mcp_benchmark.py \
+            tests/test_root_cause_benchmarking.py \
+            tests/test_benchmark_run_result.py
+          python scripts/check_architecture.py
+          (cd tracecite-mcp && python -m pytest -q tests/test_server.py tests/test_projection.py tests/test_stdio_integration.py)
+
+      - name: Configure Pi model provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BENCH_MODEL"
+          test -n "$OPENAI_API_KEY"
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ["BENCH_MODEL"]
+          payload = {"providers": {"gmi": {
+              "name": "Benchmark OpenAI-compatible",
+              "baseUrl": os.environ["OPENAI_BASE_URL"],
+              "api": "openai-completions",
+              "models": [{
+                  "id": model,
+                  "name": model,
+                  "reasoning": False,
+                  "input": ["text"],
+                  "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                  "contextWindow": 1_000_000,
+                  "maxTokens": 4_096,
+                  "compat": {"supportsDeveloperRole": False, "supportsReasoningEffort": False},
+              }],
+          }}}
+          (Path(os.environ["PI_CODING_AGENT_DIR"]) / "models.json").write_text(json.dumps(payload, indent=2) + "\n")
+          PY
+
+      - name: Prepare isolated native and TraceCite arms
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT_ROOT"
+          mkdir -p "$RESULT_ROOT" "$PREP"
+          python -m tracecite.root_cause_benchmarking validate "$CASE_DIR" > "$RESULT_ROOT/validate.json"
+          python -m tracecite.root_cause_benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT_ROOT/prepare.json"
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          python - "$PREPARED" >> "$GITHUB_ENV" <<'PY'
+          import json, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text())
+          inputs = data.get("inputs") or []
+          if len(inputs) != 1:
+              raise SystemExit(f"expected one benchmark input, got {len(inputs)}")
+          source = Path(inputs[0]["path"]).resolve()
+          root = Path(__import__("os").environ["RESULT_ROOT"])
+          native = root / "native-work"
+          tracecite = root / "tracecite-work"
+          native.mkdir(parents=True, exist_ok=True)
+          tracecite.mkdir(parents=True, exist_ok=True)
+          (native / source.name).write_bytes(source.read_bytes())
+          (tracecite / source.name).write_bytes(source.read_bytes())
+          print(f"INPUT_FILE={source.name}")
+          print(f"NATIVE_WORK={native}")
+          print(f"TRACE_WORK={tracecite}")
+          print(f"QUESTION_FILE={Path(data['question']).resolve()}")
+          PY
+          python benchmarks/agent-investigation/standard_mcp_benchmark.py configure-pi \
+            --workspace "$TRACE_WORK" \
+            --state-dir "$RESULT_ROOT/tracecite-state"
+
+      - name: Run paired Pi benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          BASE_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, investigation order, conclusions, evidence sufficiency, and when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly state when supplied evidence is insufficient.'
+          TRACE_PROMPT="$BASE_PROMPT This is the controlled TraceCite arm. Every operation that inspects or derives from runtime evidence content MUST use the six TraceCite MCP tools. Native read, grep, or shell access to runtime evidence is not permitted. find/ls may only locate files. The TraceCite skill describes generic API semantics only; you still own all reasoning and stopping decisions."
+
+          run_arm() {
+            arm="$1"
+            session_dir="$RESULT_ROOT/pi-${arm}-session"
+            mkdir -p "$session_dir"
+            set +e
+            if [[ "$arm" == native ]]; then
+              cd "$NATIVE_WORK"
+              timeout -k 30s 1200s pi \
+                --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+                --thinking off --mode text --print \
+                --session-dir "$session_dir" \
+                --tools read,bash,grep,find,ls \
+                --no-extensions --no-skills --no-prompt-templates --no-context-files \
+                --system-prompt "$BASE_PROMPT" "$QUESTION" \
+                > "$RESULT_ROOT/pi-native-answer.md" 2> "$RESULT_ROOT/pi-native-stderr.log"
+            else
+              cd "$TRACE_WORK"
+              timeout -k 30s 1200s pi \
+                --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+                --thinking off --mode text --print \
+                --session-dir "$session_dir" \
+                --tools find,ls,tracecite_retrieve,tracecite_materialize,tracecite_replay,tracecite_aggregate,tracecite_traverse,tracecite_verify \
+                --no-skills --skill "$GITHUB_WORKSPACE/tracecite-mcp/skills/tracecite/SKILL.md" \
+                --no-prompt-templates --no-context-files \
+                --system-prompt "$TRACE_PROMPT" "$QUESTION" \
+                > "$RESULT_ROOT/pi-tracecite-answer.md" 2> "$RESULT_ROOT/pi-tracecite-stderr.log"
+            fi
+            code=$?
+            set -e
+            echo "$code" > "$RESULT_ROOT/pi-${arm}-exit.txt"
+            cd "$GITHUB_WORKSPACE"
+          }
+
+          echo "$ARM_ORDER" > "$RESULT_ROOT/arm-order.txt"
+          run_arm "${ARM_ORDER%% *}"
+          sleep 5
+          run_arm "${ARM_ORDER##* }"
+
+      - name: Normalize, score, and classify Pi runs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arm in native tracecite; do
+            SESSION="$(find "$RESULT_ROOT/pi-${arm}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+            ANSWER="$RESULT_ROOT/pi-${arm}-answer.md"
+            EXIT="$RESULT_ROOT/pi-${arm}-exit.txt"
+            [[ -n "$SESSION" && -f "$ANSWER" && -f "$EXIT" ]] || continue
+            TRANSCRIPT="$RESULT_ROOT/pi-${arm}-transcript.jsonl"
+            SCORE="$RESULT_ROOT/pi-${arm}-score.json"
+            RUN_RESULT="$RESULT_ROOT/pi-${arm}-run-result.json"
+            python benchmarks/agent-investigation/pi_session_to_transcript.py \
+              "$SESSION" "$ANSWER" "$TRANSCRIPT" --mode "pi-${arm}" --model "$BENCH_MODEL"
+            python -m tracecite.root_cause_benchmarking score "$CASE_DIR" "$TRANSCRIPT" > "$SCORE" || true
+            if [[ -s "$SCORE" ]]; then
+              python benchmarks/agent-investigation/run_result.py \
+                --score "$SCORE" --exit-code-file "$EXIT" \
+                --stderr "$RESULT_ROOT/pi-${arm}-stderr.log" \
+                --session "$SESSION" --transcript "$TRANSCRIPT" --output "$RUN_RESULT" || true
+            fi
+          done
+          python benchmarks/agent-investigation/standard_mcp_benchmark.py validate-transcript \
+            --host pi --transcript "$RESULT_ROOT/pi-tracecite-transcript.jsonl" \
+            --output "$RESULT_ROOT/pi-tracecite-mcp-contract.json" || true
+
+      - name: Summarize Pi comparison
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RESULT_ROOT"])
+          def read(name):
+              path = root / name
+              return json.loads(path.read_text()) if path.is_file() else None
+          native = read("pi-native-run-result.json")
+          tracecite = read("pi-tracecite-run-result.json")
+          contract = read("pi-tracecite-mcp-contract.json")
+          valid = lambda value: bool(value and (value.get("run_validity") or {}).get("valid_for_comparison"))
+          report = {
+              "schema_version": 3,
+              "host": "pi",
+              "transport": "standard-mcp",
+              "mcp_repository": "samstring/tracecite-mcp",
+              "mcp_ref": os.environ.get("MCP_REF"),
+              "case_id": os.environ["CASE_ID"],
+              "arm_order": (root / "arm-order.txt").read_text().strip() if (root / "arm-order.txt").is_file() else None,
+              "native": native,
+              "tracecite": tracecite,
+              "tracecite_mcp_contract": contract,
+          }
+          report["comparison_valid"] = valid(native) and valid(tracecite) and bool(contract and contract.get("contract_valid"))
+          (root / "comparison.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+        env:
+          MCP_REF: ${{ inputs.mcp_ref }}
+
+      - name: Upload Pi benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: standard-mcp-pi-${{ matrix.case_id }}
+          path: ${{ env.RESULT_ROOT }}
+          if-no-files-found: warn
+
+  codex:
+    if: ${{ inputs.host == 'codex' || inputs.host == 'both' }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      CODEX_BENCH_BASE_URL: ${{ vars.TRACECITE_CODEX_BENCH_BASE_URL }}
+      CODEX_BENCH_MODEL: ${{ vars.TRACECITE_CODEX_BENCH_MODEL }}
+      CASE_ID: ${{ matrix.case_id }}
+      CASE_DIR: ${{ matrix.case_dir }}
+      ARM_ORDER: ${{ matrix.arm_order }}
+      RESULT_ROOT: /tmp/tracecite-standard-mcp/codex/${{ matrix.case_id }}
+      PREP: /tmp/tracecite-standard-mcp/codex/${{ matrix.case_id }}/prepared
+
+    steps:
+      - name: Checkout TraceCite Core benchmark
+        uses: actions/checkout@v4
+
+      - name: Require private MCP checkout token
+        env:
+          MCP_REPO_TOKEN: ${{ secrets.TRACECITE_MCP_REPO_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "$MCP_REPO_TOKEN" ]]; then
+            echo "Configure repository secret TRACECITE_MCP_REPO_TOKEN with read access to samstring/tracecite-mcp." >&2
+            exit 2
+          fi
+
+      - name: Checkout TraceCite MCP implementation
+        uses: actions/checkout@v4
+        with:
+          repository: samstring/tracecite-mcp
+          ref: ${{ inputs.mcp_ref }}
+          path: tracecite-mcp
+          token: ${{ secrets.TRACECITE_MCP_REPO_TOKEN }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Core, external MCP, and Codex
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CODEX_BENCH_BASE_URL"
+          test -n "$CODEX_BENCH_MODEL"
+          test -n "$OPENAI_API_KEY"
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -e ".[dev]"
+          python -m pip install -e "$GITHUB_WORKSPACE/tracecite-mcp[dev]"
+          npm install -g @openai/codex@0.151.0
+          codex --version
+
+      - name: Verify benchmark and MCP boundary contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_standard_mcp_benchmark.py tests/test_root_cause_benchmarking.py tests/test_benchmark_run_result.py
+          python scripts/check_architecture.py
+          (cd tracecite-mcp && python -m pytest -q tests/test_server.py tests/test_projection.py tests/test_stdio_integration.py)
+
+      - name: Prepare isolated native and TraceCite arms
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT_ROOT"
+          mkdir -p "$RESULT_ROOT" "$PREP"
+          python -m tracecite.root_cause_benchmarking validate "$CASE_DIR" > "$RESULT_ROOT/validate.json"
+          python -m tracecite.root_cause_benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT_ROOT/prepare.json"
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          python - "$PREPARED" >> "$GITHUB_ENV" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text())
+          inputs = data.get("inputs") or []
+          if len(inputs) != 1:
+              raise SystemExit(f"expected one benchmark input, got {len(inputs)}")
+          source = Path(inputs[0]["path"]).resolve()
+          root = Path(os.environ["RESULT_ROOT"])
+          native = root / "native-work"
+          tracecite = root / "tracecite-work"
+          native.mkdir(parents=True, exist_ok=True)
+          tracecite.mkdir(parents=True, exist_ok=True)
+          (native / source.name).write_bytes(source.read_bytes())
+          (tracecite / source.name).write_bytes(source.read_bytes())
+          print(f"NATIVE_WORK={native}")
+          print(f"TRACE_WORK={tracecite}")
+          print(f"QUESTION_FILE={Path(data['question']).resolve()}")
+          PY
+
+          mkdir -p "$TRACE_WORK/.agents/skills/tracecite"
+          cp "$GITHUB_WORKSPACE/tracecite-mcp/skills/tracecite/SKILL.md" "$TRACE_WORK/.agents/skills/tracecite/SKILL.md"
+
+          python benchmarks/agent-investigation/standard_mcp_benchmark.py configure-codex \
+            --codex-home "$RESULT_ROOT/codex-native-home" \
+            --workspace "$NATIVE_WORK" --state-dir "$RESULT_ROOT/native-unused-state" \
+            --model "$CODEX_BENCH_MODEL" --provider benchmark \
+            --base-url "$CODEX_BENCH_BASE_URL" --env-key OPENAI_API_KEY --no-mcp
+          python benchmarks/agent-investigation/standard_mcp_benchmark.py configure-codex \
+            --codex-home "$RESULT_ROOT/codex-tracecite-home" \
+            --workspace "$TRACE_WORK" --state-dir "$RESULT_ROOT/tracecite-state" \
+            --model "$CODEX_BENCH_MODEL" --provider benchmark \
+            --base-url "$CODEX_BENCH_BASE_URL" --env-key OPENAI_API_KEY
+
+          cat > "$RESULT_ROOT/native-instructions.txt" <<'EOF'
+          You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, investigation order, conclusions, evidence sufficiency, and when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly state when supplied evidence is insufficient.
+          EOF
+          cat > "$RESULT_ROOT/tracecite-instructions.txt" <<'EOF'
+          You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, investigation order, conclusions, evidence sufficiency, and when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly state when supplied evidence is insufficient. This is the controlled TraceCite arm. Every operation that inspects or derives from runtime evidence content MUST use the TraceCite MCP server. Do not use command execution, shell, or other native file-content access on the runtime evidence. The installed TraceCite skill is generic API documentation only and does not decide hypotheses, sufficiency, root cause, or stopping.
+          EOF
+
+      - name: Run paired Codex benchmark through app-server
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_arm() {
+            arm="$1"
+            if [[ "$arm" == native ]]; then
+              work="$NATIVE_WORK"
+              home="$RESULT_ROOT/codex-native-home"
+              instructions="$RESULT_ROOT/native-instructions.txt"
+            else
+              work="$TRACE_WORK"
+              home="$RESULT_ROOT/codex-tracecite-home"
+              instructions="$RESULT_ROOT/tracecite-instructions.txt"
+            fi
+            mkdir -p "$RESULT_ROOT/$arm"
+            set +e
+            timeout -k 30s 1200s env CODEX_HOME="$home" \
+              python benchmarks/agent-investigation/codex_app_server_to_transcript.py \
+                --workspace "$work" \
+                --question-file "$QUESTION_FILE" \
+                --output-dir "$RESULT_ROOT/$arm" \
+                --model "$CODEX_BENCH_MODEL" \
+                --provider benchmark \
+                --developer-instructions-file "$instructions"
+            code=$?
+            set -e
+            echo "$code" > "$RESULT_ROOT/codex-${arm}-exit.txt"
+          }
+
+          echo "$ARM_ORDER" > "$RESULT_ROOT/arm-order.txt"
+          run_arm "${ARM_ORDER%% *}"
+          sleep 5
+          run_arm "${ARM_ORDER##* }"
+
+      - name: Score and classify Codex runs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arm in native tracecite; do
+            TRANSCRIPT="$RESULT_ROOT/$arm/codex-transcript.jsonl"
+            ANSWER="$RESULT_ROOT/$arm/codex-answer.md"
+            RAW="$RESULT_ROOT/$arm/codex-app-server.jsonl"
+            STDERR="$RESULT_ROOT/$arm/codex-stderr.log"
+            EXIT="$RESULT_ROOT/codex-${arm}-exit.txt"
+            [[ -f "$TRANSCRIPT" && -f "$ANSWER" && -f "$EXIT" ]] || continue
+            SCORE="$RESULT_ROOT/codex-${arm}-score.json"
+            RUN_RESULT="$RESULT_ROOT/codex-${arm}-run-result.json"
+            python -m tracecite.root_cause_benchmarking score "$CASE_DIR" "$TRANSCRIPT" > "$SCORE" || true
+            if [[ -s "$SCORE" ]]; then
+              python benchmarks/agent-investigation/run_result.py \
+                --score "$SCORE" --exit-code-file "$EXIT" \
+                --stderr "$STDERR" --session "$RAW" --transcript "$TRANSCRIPT" --output "$RUN_RESULT" || true
+            fi
+          done
+          python benchmarks/agent-investigation/standard_mcp_benchmark.py validate-transcript \
+            --host codex --transcript "$RESULT_ROOT/tracecite/codex-transcript.jsonl" \
+            --output "$RESULT_ROOT/codex-tracecite-mcp-contract.json" || true
+
+      - name: Summarize Codex comparison
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RESULT_ROOT"])
+          def read(name):
+              path = root / name
+              return json.loads(path.read_text()) if path.is_file() else None
+          native = read("codex-native-run-result.json")
+          tracecite = read("codex-tracecite-run-result.json")
+          contract = read("codex-tracecite-mcp-contract.json")
+          valid = lambda value: bool(value and (value.get("run_validity") or {}).get("valid_for_comparison"))
+          report = {
+              "schema_version": 3,
+              "host": "codex",
+              "transport": "standard-mcp",
+              "mcp_repository": "samstring/tracecite-mcp",
+              "mcp_ref": os.environ.get("MCP_REF"),
+              "case_id": os.environ["CASE_ID"],
+              "arm_order": (root / "arm-order.txt").read_text().strip() if (root / "arm-order.txt").is_file() else None,
+              "native": native,
+              "tracecite": tracecite,
+              "tracecite_mcp_contract": contract,
+          }
+          report["comparison_valid"] = valid(native) and valid(tracecite) and bool(contract and contract.get("contract_valid"))
+          (root / "comparison.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+        env:
+          MCP_REF: ${{ inputs.mcp_ref }}
+
+      - name: Upload Codex benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: standard-mcp-codex-${{ matrix.case_id }}
+          path: ${{ env.RESULT_ROOT }}
+          if-no-files-found: warn
