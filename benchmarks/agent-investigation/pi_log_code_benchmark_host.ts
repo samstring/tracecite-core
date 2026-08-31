@@ -1,9 +1,14 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const CODE_ROOT = resolve(process.env.TRACECITE_CODE_ROOT || process.cwd());
 const RUNTIME_LOG = resolve(process.env.TRACECITE_RUNTIME_LOG || "");
+const AGENT_RESOURCE_ROOTS = String(process.env.TRACECITE_AGENT_RESOURCE_ROOTS || "")
+  .split(delimiter)
+  .map((value) => value.trim())
+  .filter(Boolean)
+  .map((value) => resolve(value));
 const GUARD_PATH = process.env.TRACECITE_LOG_GUARD_ACTIVITY || "";
 const ACCESS_PATH = process.env.TRACECITE_LOG_ACCESS_ACTIVITY || "";
 const ACTIVITY_PATH = process.env.TRACECITE_HOST_ACTIVITY || "";
@@ -78,6 +83,11 @@ function within(root: string, candidate: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
+function withinNativeResource(candidate: string): boolean {
+  if (within(CODE_ROOT, candidate)) return true;
+  return AGENT_RESOURCE_ROOTS.some((root) => within(root, candidate));
+}
+
 function resolveInputPath(raw: unknown, cwd: string): string | null {
   const value = String(raw || "").trim();
   if (!value) return null;
@@ -141,20 +151,20 @@ function guardReason(event: any, cwd: string): string | null {
   const input = event?.input && typeof event.input === "object" ? event.input : {};
   if (event?.toolName === "read") {
     const path = resolveInputPath((input as any).path, cwd);
-    if (path && !within(CODE_ROOT, path)) {
-      return "Native read is restricted to the pre-fix source tree in the TraceCite arm; inspect the runtime log through TraceCite MCP.";
+    if (path && !withinNativeResource(path)) {
+      return "Native read is restricted to the pre-fix source tree and explicitly declared Agent resource roots in the TraceCite arm; inspect runtime evidence through TraceCite MCP.";
     }
   }
   if (event?.toolName === "grep") {
     const path = resolveInputPath((input as any).path || ".", cwd);
-    if (path && !within(CODE_ROOT, path)) {
-      return "Native grep is restricted to the pre-fix source tree in the TraceCite arm; search the runtime log through TraceCite MCP.";
+    if (path && !withinNativeResource(path)) {
+      return "Native grep is restricted to the pre-fix source tree and explicitly declared Agent resource roots in the TraceCite arm; search runtime evidence through TraceCite MCP.";
     }
   }
   if (event?.toolName === "bash") {
     const command = String((input as any).command || "");
     if (bashTouchesRuntimeLog(command)) {
-      return "Native shell access to the runtime-log area is blocked in the TraceCite arm. Shell exploration of the checked-out source tree remains unrestricted.";
+      return "Native shell access to the runtime-log area is blocked in the TraceCite arm. Shell exploration of the checked-out source tree and declared Agent resources remains available.";
     }
   }
   return null;
