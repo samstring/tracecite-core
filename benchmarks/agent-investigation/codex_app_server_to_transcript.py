@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Mapping, TextIO
 
@@ -83,9 +82,6 @@ def _reject_unexpected_server_request(server: AppServer, message: Mapping[str, A
     method = message.get("method")
     if request_id is None or not isinstance(method, str):
         return
-    # The benchmark is intentionally non-interactive. approvalPolicy=never
-    # should prevent approval requests; any remaining elicitation is rejected
-    # rather than allowing the harness to make an Agent decision.
     server.write(
         {
             "id": request_id,
@@ -140,6 +136,7 @@ def run(
     workspace: Path,
     question: str,
     output_dir: Path,
+    mode: str,
     model: str,
     provider: str,
     developer_instructions: str,
@@ -153,7 +150,7 @@ def run(
     stderr_path = output_dir / "codex-stderr.log"
 
     transcript: list[dict[str, Any]] = [
-        {"type": "session", "mode": "codex-standard-mcp", "model": model}
+        {"type": "session", "mode": mode, "model": model}
     ]
     final_answer = ""
     latest_usage: Mapping[str, Any] | None = None
@@ -298,6 +295,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--question-file", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--mode", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--provider", default="benchmark")
     parser.add_argument("--developer-instructions-file", type=Path, required=True)
@@ -310,6 +308,7 @@ def main() -> int:
         workspace=args.workspace,
         question=args.question_file.read_text(encoding="utf-8"),
         output_dir=args.output_dir,
+        mode=args.mode,
         model=args.model,
         provider=args.provider,
         developer_instructions=args.developer_instructions_file.read_text(encoding="utf-8"),
