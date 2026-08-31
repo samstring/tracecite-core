@@ -43,6 +43,33 @@ When the Host exposes only TraceCite Evidence tools plus file-location helpers s
 
 This makes the benchmark a capability comparison, not a tool-adoption test.
 
+## Convergence discipline
+
+TraceCite exposes mechanical novelty and coverage so the Agent can avoid wasting investigation steps. These signals do not decide stopping for the Agent.
+
+Before making a follow-up evidence call, keep one explicit unresolved question in mind and know what materially different evidence the next call is expected to add. Do not continue merely because another synonym or nearby keyword can be tried.
+
+Treat these as low-novelty signals:
+
+- `status=no_match`;
+- `status=no_new_evidence`;
+- `coverage.new_evidence=0` with repeated evidence;
+- a materialization that exposes no unseen range or new text;
+- Host `agent_feedback.convergence_checkpoint.triggered=true`.
+
+When the Host convergence checkpoint is triggered, reassess before another evidence operation:
+
+1. State the strongest conclusion currently supported by observed evidence.
+2. Identify the exact unresolved question that still matters to the task.
+3. Decide whether the supplied inputs actually contain the evidence class needed to resolve it.
+4. Continue only if the next operation targets a materially different evidence frontier, such as a different source, component, entity, time window, error signature, or previously unseen range.
+5. Do not continue by merely paraphrasing the same query or repeatedly materializing already-covered context.
+6. If the required deeper evidence is not present in the supplied inputs, stop that line of investigation and state the evidence boundary explicitly.
+
+A search miss is not the same as evidence insufficiency. One miss may justify a different retrieval strategy. Repeated low-novelty operations across the relevant source/component/time region are evidence that the current investigation direction is exhausted, not proof that the hypothesized event never happened.
+
+The Agent still owns the decision to continue, switch hypotheses, answer, or declare insufficient evidence. The Host checkpoint only exposes recent evidence progress and requires deliberate reassessment.
+
 ## `tracecite_retrieve`
 
 `tracecite_retrieve` performs caller-selected evidence retrieval.
@@ -60,6 +87,7 @@ Use exact refs and returned source SHA-256 for later materialization/replay.
 
 `tracecite_materialize` materializes exact bounded context around a caller-selected line/range.
 
+- `radius` is bounded to `0..30`; use multiple deliberate ranges rather than requesting a larger invalid radius.
 - It preserves immutable source identity when a SHA-256 is supplied.
 - Previously covered immutable context may be suppressed rather than returned as fake new evidence.
 - Materialized text is evidence; any interpretation of that text remains the Agent's responsibility.
@@ -134,6 +162,8 @@ Evaluation may distinguish:
 - `unsupported_from_log`.
 
 If a claim is an inference, qualify it. If supplied evidence does not establish a deeper cause or fix, state that boundary rather than presenting outside knowledge as observed fact.
+
+When a deeper upstream cause or corrective fix would require source code, internal component logs, telemetry, or another artifact that is not present, say so directly instead of repeatedly searching the same supplied evidence for confirmation that cannot exist there.
 
 ## What TraceCite does not decide
 
