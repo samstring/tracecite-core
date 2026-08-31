@@ -27,9 +27,13 @@ _CITATION_PATTERNS = (
     re.compile(r"\bline\s+(?P<line>\d+)\b", re.IGNORECASE),
 )
 # ``cat -n`` and ``nl`` render line-addressable evidence as ``N<TAB>text``.
-# This pattern is intentionally tool-output-only: applying it to the final
+# These patterns are intentionally tool-output-only: applying them to the final
 # answer would turn ordinary numbered lists into fabricated citations.
 _TOOL_NUMBERED_LINE_PATTERN = re.compile(r"(?m)^\s*(?P<line>\d+)\t")
+# TraceCite materialization renders canonical line-addressed evidence as
+# ``N: text``. Require whitespace (or end-of-line) after the colon so ordinary
+# timestamps such as ``12:34:56`` are not misclassified as evidence line refs.
+_TOOL_COLON_LINE_PATTERN = re.compile(r"(?m)^\s*(?P<line>\d+):(?:[ \t]+|$)")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -227,13 +231,14 @@ def _line_refs(text: str, evidence_filenames: Iterable[str] = ()) -> set[int]:
 
 def _tool_line_refs(text: str, evidence_filenames: Iterable[str] = ()) -> set[int]:
     result = _line_refs(text, evidence_filenames)
-    for match in _TOOL_NUMBERED_LINE_PATTERN.finditer(text):
-        try:
-            line = int(match.group("line"))
-        except (TypeError, ValueError):
-            continue
-        if line > 0:
-            result.add(line)
+    for pattern in (_TOOL_NUMBERED_LINE_PATTERN, _TOOL_COLON_LINE_PATTERN):
+        for match in pattern.finditer(text):
+            try:
+                line = int(match.group("line"))
+            except (TypeError, ValueError):
+                continue
+            if line > 0:
+                result.add(line)
     return result
 
 
