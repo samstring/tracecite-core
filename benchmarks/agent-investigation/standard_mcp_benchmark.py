@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -106,12 +105,7 @@ tool_timeout_sec = 120
 TRACECITE_MCP_ALLOWED_ROOTS = {_json_string(str(workspace))}
 TRACECITE_MCP_STATE_DIR = {_json_string(str(state_dir))}
 """
-    path = codex_home / "config.toml"
-    path.write_text(config, encoding="utf-8")
-    # Fail while preparing the benchmark rather than during a model run if the
-    # generated host config is malformed.
-    with path.open("rb") as handle:
-        tomllib.load(handle)
+    (codex_home / "config.toml").write_text(config, encoding="utf-8")
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
