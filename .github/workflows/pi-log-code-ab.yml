@@ -120,14 +120,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY' >> "$GITHUB_ENV"
-          import json, os
+          eval "$(python - <<'PY'
+          import json, os, shlex
           from pathlib import Path
           case = json.loads((Path(os.environ['CASE_DIR']) / 'case.json').read_text())
           source = case['source_checkout']
-          print('SOURCE_REPOSITORY=' + source['repository'])
-          print('SOURCE_COMMIT=' + source['commit'])
+          print('SOURCE_REPOSITORY=' + shlex.quote(source['repository']))
+          print('SOURCE_COMMIT=' + shlex.quote(source['commit']))
           PY
+          )"
+          {
+            echo "SOURCE_REPOSITORY=$SOURCE_REPOSITORY"
+            echo "SOURCE_COMMIT=$SOURCE_COMMIT"
+          } >> "$GITHUB_ENV"
           rm -rf "$SOURCE_ROOT"
           git init -q "$SOURCE_ROOT"
           git -C "$SOURCE_ROOT" remote add origin "$SOURCE_REPOSITORY"
