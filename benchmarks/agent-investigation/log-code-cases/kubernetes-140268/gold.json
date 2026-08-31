@@ -1,0 +1,54 @@
+{
+  "root_cause_schema_version": 1,
+  "root_cause": {
+    "failure_localization": {
+      "patterns": ["(?:kubelet.{0,100}device.?manager|device.?manager.{0,100}kubelet|podDevices|getPodAndContainerForDevice|device health.{0,120}pod)"]
+    },
+    "immediate_failure_mechanism": {
+      "patterns": ["(?:health (?:change|update).{0,180}(?:wrong|incorrect|other) pod|wrong pod.{0,180}(?:health|sync|update)|(?:right|actual|expected) pod.{0,180}(?:remain|stays|kept).{0,80}Healthy|unhealthy.{0,180}(?:wrong|other) pod)"]
+    },
+    "upstream_contributor": {
+      "patterns": ["(?:device ID.{0,180}(?:only )?unique.{0,120}resource|same device ID.{0,180}different resource|duplicate device ID.{0,180}resource|lookup.{0,180}device ID.{0,80}(?:alone|only)|map iteration.{0,120}nondetermin)"]
+    },
+    "fix_alignment": {
+      "patterns": ["(?:scope.{0,120}lookup.{0,120}resource|resourceName.{0,120}deviceID|resource name.{0,120}device ID|lookup.{0,120}resource.{0,120}device)"]
+    }
+  },
+  "evidence_sufficiency": {
+    "failure_localization": "supported",
+    "immediate_failure_mechanism": "supported",
+    "upstream_contributor": "supported",
+    "fix_alignment": "inference_supported"
+  },
+  "evidence_markers": [
+    "device-plugin-failures-3083",
+    "device-plugin-failures-5477"
+  ],
+  "unsupported_claims": [
+    {
+      "id": "plugin-never-reported-unhealthy",
+      "patterns": ["device plugin.{0,120}(?:never|did not|failed to).{0,80}report.{0,80}Unhealthy"]
+    }
+  ],
+  "contradictions": [
+    {
+      "id": "globally-unique-device-ids",
+      "patterns": ["device IDs?.{0,100}(?:globally|across resources).{0,80}unique"]
+    }
+  ],
+  "root_cause_thresholds": {
+    "dimension_recall": 1.0,
+    "supported_dimension_recall": 1.0,
+    "citation_accuracy": 0.5,
+    "evidence_marker_recall": 1.0,
+    "evidence_boundary_recall": 1.0,
+    "support_level_accuracy": 1.0,
+    "max_unsupported_claim_hits": 0,
+    "max_contradiction_hits": 0,
+    "max_unsupported_dimension_overreach_hits": 0
+  },
+  "leak_terms": [
+    "getPodAndContainerForDevice",
+    "device IDs are only unique within a single resource"
+  ]
+}
