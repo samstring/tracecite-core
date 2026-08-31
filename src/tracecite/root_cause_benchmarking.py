@@ -229,16 +229,45 @@ def _line_refs(text: str, evidence_filenames: Iterable[str] = ()) -> set[int]:
     return result
 
 
+def _tool_visible_texts(text: str) -> Iterable[str]:
+    """Yield text the Agent could actually read from a tool result.
+
+    Pi transcripts store TraceCite results as JSON strings, so materialized
+    evidence such as ``123: message`` can be escaped inside a ``text`` field.
+    Decode JSON tool payloads and inspect their string values as rendered
+    content while retaining the original text for native/plain-text tools.
+    """
+
+    yield text
+    try:
+        payload = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        return
+
+    stack: list[Any] = [payload]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, Mapping):
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value)
+
+
 def _tool_line_refs(text: str, evidence_filenames: Iterable[str] = ()) -> set[int]:
-    result = _line_refs(text, evidence_filenames)
-    for pattern in (_TOOL_NUMBERED_LINE_PATTERN, _TOOL_COLON_LINE_PATTERN):
-        for match in pattern.finditer(text):
-            try:
-                line = int(match.group("line"))
-            except (TypeError, ValueError):
-                continue
-            if line > 0:
-                result.add(line)
+    result: set[int] = set()
+    filenames = tuple(evidence_filenames)
+    for visible_text in _tool_visible_texts(text):
+        result.update(_line_refs(visible_text, filenames))
+        for pattern in (_TOOL_NUMBERED_LINE_PATTERN, _TOOL_COLON_LINE_PATTERN):
+            for match in pattern.finditer(visible_text):
+                try:
+                    line = int(match.group("line"))
+                except (TypeError, ValueError):
+                    continue
+                if line > 0:
+                    result.add(line)
     return result
 
 
