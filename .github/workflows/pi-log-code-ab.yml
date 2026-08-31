@@ -1,8 +1,17 @@
 name: Pi Log + Full Code A/B
 
-# The workflow is manual after this first branch-scoped push trigger.
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "140268 = hard case only; other-three = remaining three cases once each; all-four = all log+code cases once each"
+        required: true
+        default: other-three
+        type: choice
+        options:
+          - other-three
+          - 140268
+          - all-four
   push:
     branches:
       - experiment/evidence-intelligence
@@ -13,9 +22,60 @@ permissions:
   contents: read
 
 jobs:
-  compare-140268:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - id: matrix
+        env:
+          SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.scope || 'other-three' }}
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          cases = {
+              "140039": {
+                  "case_id": "kubernetes-140039-runc-5347-log-code",
+                  "case_dir": "benchmarks/agent-investigation/log-code-cases/kubernetes-140039-runc-5347",
+                  "arm_order": "native tracecite",
+              },
+              "139417": {
+                  "case_id": "kubernetes-139417-log-code",
+                  "case_dir": "benchmarks/agent-investigation/log-code-cases/kubernetes-139417",
+                  "arm_order": "tracecite native",
+              },
+              "140848": {
+                  "case_id": "kubernetes-140848-log-code",
+                  "case_dir": "benchmarks/agent-investigation/log-code-cases/kubernetes-140848",
+                  "arm_order": "native tracecite",
+              },
+              "140268": {
+                  "case_id": "kubernetes-140268-log-code",
+                  "case_dir": "benchmarks/agent-investigation/log-code-cases/kubernetes-140268",
+                  "arm_order": "tracecite native",
+              },
+          }
+          scope = os.environ["SCOPE"]
+          if scope == "other-three":
+              selected = [cases["140039"], cases["139417"], cases["140848"]]
+          elif scope == "140268":
+              selected = [cases["140268"]]
+          elif scope == "all-four":
+              selected = [cases["140039"], cases["139417"], cases["140848"], cases["140268"]]
+          else:
+              raise SystemExit(f"unknown scope: {scope}")
+          print("value=" + json.dumps({"include": selected}, separators=(",", ":")))
+          PY
+
+  compare:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
@@ -23,12 +83,13 @@ jobs:
       PI_CODING_AGENT_DIR: /tmp/pi-agent-config
       PI_SKIP_VERSION_CHECK: "1"
       PI_TELEMETRY: "0"
-      CASE_DIR: benchmarks/agent-investigation/log-code-cases/kubernetes-140268
-      RESULT_ROOT: /tmp/pi-log-code-ab/kubernetes-140268/r1
-      PREP: /tmp/pi-log-code-ab/kubernetes-140268/r1/prepared
-      WORK_ROOT: /tmp/pi-log-code-ab/kubernetes-140268/r1/workspace
-      SOURCE_ROOT: /tmp/pi-log-code-ab/kubernetes-140268/r1/workspace/source
-      ARM_ORDER: native tracecite
+      CASE_ID: ${{ matrix.case_id }}
+      CASE_DIR: ${{ matrix.case_dir }}
+      RESULT_ROOT: /tmp/pi-log-code-ab/${{ matrix.case_id }}/r1
+      PREP: /tmp/pi-log-code-ab/${{ matrix.case_id }}/r1/prepared
+      WORK_ROOT: /tmp/pi-log-code-ab/${{ matrix.case_id }}/r1/workspace
+      SOURCE_ROOT: /tmp/pi-log-code-ab/${{ matrix.case_id }}/r1/workspace/source
+      ARM_ORDER: ${{ matrix.arm_order }}
 
     steps:
       - uses: actions/checkout@v4
@@ -116,7 +177,7 @@ jobs:
           print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
           PY
 
-      - name: Checkout complete pre-fix Kubernetes repository
+      - name: Checkout complete pre-fix source repository
         shell: bash
         run: |
           set -euo pipefail
@@ -140,13 +201,22 @@ jobs:
           git -C "$SOURCE_ROOT" checkout -q --detach FETCH_HEAD
           test "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_COMMIT"
           git -C "$SOURCE_ROOT" remote remove origin
-          grep -q 'getPodAndContainerForDevice(deviceID string)' \
-            "$SOURCE_ROOT/pkg/kubelet/cm/devicemanager/pod_devices.go"
-          if grep -q 'getPodAndContainerForDevice(resourceName, deviceID string)' \
-            "$SOURCE_ROOT/pkg/kubelet/cm/devicemanager/pod_devices.go"; then
-            echo 'post-fix source leaked into benchmark' >&2
-            exit 1
-          fi
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          case = json.loads((Path(os.environ['CASE_DIR']) / 'case.json').read_text())
+          source = case['source_checkout']
+          root = Path(os.environ['SOURCE_ROOT'])
+          for assertion in source.get('pre_fix_assertions') or []:
+              path = root / assertion['path']
+              text = path.read_text(encoding='utf-8', errors='replace')
+              required = assertion.get('contains')
+              forbidden = assertion.get('not_contains')
+              if required and required not in text:
+                  raise SystemExit(f"pre-fix assertion missing in {path}: {required}")
+              if forbidden and forbidden in text:
+                  raise SystemExit(f"post-fix source leaked in {path}: {forbidden}")
+          PY
           printf '%s\n' "$SOURCE_COMMIT" > "$RESULT_ROOT/source-commit.txt"
 
       - name: Run one paired log-access A/B
@@ -154,7 +224,7 @@ jobs:
         run: |
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
-          BASE_PROMPT="You are a real coding agent debugging a failure with a complete pre-fix Kubernetes source checkout as your current working directory. The source tree is fixed to the bug-producing commit; do not use the web, issue/PR content, remote git operations, or post-fix knowledge. A failing runtime log is available at $RUNTIME_LOG. You own hypotheses, causal reasoning, source-code exploration, investigation order, conclusions, evidence sufficiency, and when to stop. You may freely explore the checked-out source code with read, grep, bash, find, and ls. Cite important claims as exact path:L<line> references you actually observed. Distinguish direct observation from inference."
+          BASE_PROMPT="You are a real coding agent debugging a failure with a complete pre-fix source repository as your current working directory. The source tree is fixed to the bug-producing pre-fix commit; do not use the web, issue/PR content, remote git operations, or post-fix knowledge. A failing runtime log is available at $RUNTIME_LOG. You own hypotheses, causal reasoning, source-code exploration, investigation order, conclusions, evidence sufficiency, and when to stop. You may freely explore the checked-out source code with read, grep, bash, find, and ls. Cite important claims as exact runtime-log or source path:L<line> references you actually observed. Distinguish direct observation from inference."
 
           run_arm() {
             arm="$1"
@@ -176,6 +246,7 @@ jobs:
               TRACECITE_PI_SESSION="$RESULT_ROOT/tracecite-retrieval-session.json" \
               TRACECITE_PI_ACTIVITY="$RESULT_ROOT/tracecite-host-tool-activity.json" \
               TRACECITE_LOG_GUARD_ACTIVITY="$RESULT_ROOT/tracecite-log-guard-blocks.jsonl" \
+              TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT_ROOT/tracecite-runtime-log-access.jsonl" \
               TRACECITE_CODE_ROOT="$SOURCE_ROOT" \
               TRACECITE_RUNTIME_LOG="$RUNTIME_LOG" \
               timeout -k 30s 1200s pi \
@@ -244,23 +315,29 @@ jobs:
           def read(name):
               path = root / name
               return json.loads(path.read_text()) if path.is_file() else None
+          def read_jsonl(name):
+              path = root / name
+              rows = []
+              if path.is_file():
+                  for line in path.read_text().splitlines():
+                      if line.strip():
+                          rows.append(json.loads(line))
+              return rows
           def valid(value):
               return bool(value and (value.get('run_validity') or {}).get('valid_for_comparison'))
           native = read('pi-native-run-result.json')
           tracecite = read('pi-tracecite-run-result.json')
           activity = read('tracecite-host-tool-activity.json')
-          blocks_path = root / 'tracecite-log-guard-blocks.jsonl'
-          blocked = []
-          if blocks_path.is_file():
-              for line in blocks_path.read_text().splitlines():
-                  if line.strip():
-                      blocked.append(json.loads(line))
+          blocked = read_jsonl('tracecite-log-guard-blocks.jsonl')
+          runtime_log_access = read_jsonl('tracecite-runtime-log-access.jsonl')
           trajectory = (tracecite or {}).get('trajectory') or {}
           tracecite_calls = int(trajectory.get('tracecite_evidence_calls') or 0)
+          runtime_log_tracecite_calls = len(runtime_log_access)
           report = {
-              'schema_version': 1,
-              'case_id': 'kubernetes-140268-log-code',
+              'schema_version': 2,
+              'case_id': os.environ['CASE_ID'],
               'repetition': 1,
+              'source_repository': os.environ.get('SOURCE_REPOSITORY'),
               'source_commit': os.environ.get('SOURCE_COMMIT'),
               'runtime_log_bytes': int(os.environ.get('RUNTIME_LOG_BYTES') or 0),
               'arm_order': (root / 'arm-order.txt').read_text().strip() if (root / 'arm-order.txt').is_file() else None,
@@ -268,9 +345,12 @@ jobs:
               'tracecite': tracecite,
               'tracecite_host_activity': activity,
               'blocked_native_log_attempts': blocked,
-              'tracecite_runtime_log_used': tracecite_calls > 0,
-              'tracecite_log_contract_valid': tracecite_calls > 0,
-              'comparison_valid': valid(native) and valid(tracecite) and tracecite_calls > 0,
+              'tracecite_runtime_log_access': runtime_log_access,
+              'tracecite_total_evidence_calls': tracecite_calls,
+              'tracecite_runtime_log_calls': runtime_log_tracecite_calls,
+              'tracecite_runtime_log_used': runtime_log_tracecite_calls > 0,
+              'tracecite_log_contract_valid': runtime_log_tracecite_calls > 0,
+              'comparison_valid': valid(native) and valid(tracecite) and runtime_log_tracecite_calls > 0,
               'experimental_contract': {
                   'source_code_access': 'native tools unrestricted for both arms inside identical pre-fix checkout',
                   'native_runtime_log_access': 'native read/grep/bash',
@@ -285,6 +365,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pi-log-code-ab-kubernetes-140268-r1
+          name: pi-log-code-ab-${{ matrix.case_id }}-r1
           path: ${{ env.RESULT_ROOT }}
           if-no-files-found: warn
