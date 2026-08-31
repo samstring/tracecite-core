@@ -12,59 +12,65 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 4
     env:
       GMI_API_KEY: ${{ secrets.GMI_API_KEY || secrets.OPENAI_API_KEY }}
       GMI_MODEL: ${{ vars.GMI_MODEL || vars.TRACECITE_BENCH_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/pi-minimax-probe
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
     steps:
-      - name: Probe MiniMax/GMI API
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Probe MiniMax through Pi
         shell: bash
         run: |
           set -euo pipefail
           test -n "${GMI_API_KEY:-}" || { echo 'missing_api_key'; exit 2; }
           test -n "${GMI_MODEL:-}" || { echo 'missing_model'; exit 2; }
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4 >/dev/null
+          mkdir -p "$PI_CODING_AGENT_DIR" /tmp/pi-minimax-probe-work
           python - <<'PY'
-          import json, os, urllib.error, urllib.request
-
-          url = 'https://api.gmi-serving.com/v1/chat/completions'
-          body = json.dumps({
-              'model': os.environ['GMI_MODEL'],
-              'messages': [{'role': 'user', 'content': 'Reply with exactly OK.'}],
-              'max_tokens': 8,
-              'temperature': 0,
-          }).encode()
-          req = urllib.request.Request(
-              url,
-              data=body,
-              headers={
-                  'Authorization': 'Bearer ' + os.environ['GMI_API_KEY'],
-                  'Content-Type': 'application/json',
-              },
-              method='POST',
-          )
-          try:
-              with urllib.request.urlopen(req, timeout=30) as resp:
-                  raw = resp.read().decode('utf-8', 'replace')
-                  data = json.loads(raw)
-                  content = (((data.get('choices') or [{}])[0].get('message') or {}).get('content'))
-                  print('http_status=', resp.status)
-                  print('model=', data.get('model') or os.environ['GMI_MODEL'])
-                  print('content=', repr(content))
-                  if resp.status != 200:
-                      raise SystemExit(1)
-          except urllib.error.HTTPError as exc:
-              raw = exc.read().decode('utf-8', 'replace')
-              print('http_status=', exc.code)
-              try:
-                  data = json.loads(raw)
-                  err = data.get('error') or data
-                  if isinstance(err, dict):
-                      print('error_type=', err.get('type') or err.get('code'))
-                      print('error_code=', err.get('code'))
-                      print('error_message=', str(err.get('message'))[:500])
-                  else:
-                      print('error=', str(err)[:500])
-              except Exception:
-                  print('body=', raw[:500])
-              raise SystemExit(1)
+          import json, os
+          from pathlib import Path
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': 'https://api.gmi-serving.com/v1',
+              'api': 'openai-completions',
+              'models': [{
+                  'id': os.environ['GMI_MODEL'],
+                  'name': os.environ['GMI_MODEL'],
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 64,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
           PY
+          cd /tmp/pi-minimax-probe-work
+          set +e
+          timeout 90s pi \
+            --provider gmi \
+            --model "$GMI_MODEL" \
+            --api-key "$GMI_API_KEY" \
+            --thinking off \
+            --mode text \
+            --print \
+            --no-skills \
+            --no-prompt-templates \
+            --no-context-files \
+            "Reply with exactly OK." \
+            > /tmp/pi-probe-out.txt 2> /tmp/pi-probe-err.txt
+          code=$?
+          set -e
+          echo "pi_exit=$code"
+          echo '--- stdout ---'
+          cat /tmp/pi-probe-out.txt
+          echo '--- stderr ---'
+          cat /tmp/pi-probe-err.txt
+          exit "$code"
