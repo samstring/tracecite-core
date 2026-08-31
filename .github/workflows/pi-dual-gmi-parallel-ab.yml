@@ -47,7 +47,7 @@ jobs:
       WORK_ROOT: /tmp/pi-dual-gmi/${{ inputs.case_key || '140039' }}/${{ matrix.arm }}/workspace
       PREP: /tmp/pi-dual-gmi/${{ inputs.case_key || '140039' }}/${{ matrix.arm }}/prepared
       SOURCE_ROOT: /tmp/pi-dual-gmi/${{ inputs.case_key || '140039' }}/${{ matrix.arm }}/source
-      TRACECITE_MCP_REF: 09215adbf01bd612b3115186951b9154320c5ca5
+      TRACECITE_MCP_REF: 71ca06d7e16a1c6ed7ebde65658f9944a10d7c51
 
     steps:
       - name: Checkout TraceCite Core under test
