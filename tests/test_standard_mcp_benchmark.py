@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import json
-import tomllib
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +49,9 @@ def test_pi_config_exposes_direct_canonical_tools(tmp_path: Path) -> None:
 
 
 def test_codex_config_points_at_external_mcp_server(tmp_path: Path) -> None:
+    if importlib.util.find_spec("tomllib") is None:
+        pytest.skip("tomllib is built in on Python 3.11+")
+    tomllib = importlib.import_module("tomllib")
     module = _load_module()
     workspace = tmp_path / "workspace"
     state = tmp_path / "state"
