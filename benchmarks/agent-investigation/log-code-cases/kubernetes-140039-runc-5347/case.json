@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "kubernetes-140039-runc-5347-log-code",
+  "title": "runc seccomp failure with complete pre-fix source checkout",
+  "source_issue": "https://github.com/kubernetes/kubernetes/issues/140039",
+  "fix_reference": "https://github.com/opencontainers/runc/pull/5347",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "containerd-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-containerd-e2e-ubuntu-gce/2070389396091179008/artifacts/bootstrap-e2e-master/containerd.log",
+      "filename": "containerd.log",
+      "sha256": "77d5ff0fa00bfffdeb4722879c1bf8ff667444cfb34a8cf55344273307e78ff8",
+      "required": true
+    }
+  ],
+  "source_checkout": {
+    "repository": "https://github.com/opencontainers/runc.git",
+    "commit": "1aff3ed358ea555c22ad75cc8f085c025f048b48",
+    "pre_fix_assertions": [
+      {
+        "path": "libcontainer/seccomp/patchbpf/enosys_linux.go",
+        "contains": "if waitKill, err := filter.GetWaitKill(); err != nil {",
+        "not_contains": "err != nil && !errors.Is(err, unix.EINVAL)"
+      }
+    ]
+  },
+  "provenance": {
+    "project": "opencontainers/runc",
+    "incident_project": "kubernetes/kubernetes",
+    "public_log": true,
+    "evidence_bytes": 2292856,
+    "source_snapshot": "pre-fix PR base commit",
+    "notes": "Agent receives the original runtime log plus the complete runc repository at the pre-fix base commit. Issue/PR content and post-fix code are excluded."
+  }
+}
