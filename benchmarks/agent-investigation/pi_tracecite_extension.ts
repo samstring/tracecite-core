@@ -23,12 +23,12 @@ const TRACE_TOOLS = new Set([
 type Category = "tracecite_evidence" | "native_search" | "native_read" | "opaque_shell" | "native_other" | "other";
 type Activity = { tool: string; category: Category; duration_ms: number; status: string; metadata?: Record<string, unknown> };
 type EvidenceProgressEvent = {
-  operation: "retrieve" | "materialize";
+  operation: string;
   status: string;
   new_evidence: number | null;
   repeated_evidence: number | null;
   unseen_range_count: number;
-  added_evidence: boolean;
+  frontier_expanding: boolean;
   low_novelty: boolean;
 };
 
@@ -36,6 +36,10 @@ const starts = new Map<string, number>();
 const events: Activity[] = [];
 const recentEvidenceProgress: EvidenceProgressEvent[] = [];
 let activityWrite: Promise<void> = Promise.resolve();
+let traceciteOperationCount = 0;
+let checkpointPending = false;
+let checkpointReason: string | null = null;
+let lastCheckpointAtOperation = 0;
 
 function category(tool: string): Category {
   if (TRACE_TOOLS.has(tool)) return "tracecite_evidence";
@@ -131,63 +135,97 @@ function compact(text: string): string {
   return text;
 }
 
+function currentCheckpointFeedback() {
+  return checkpointPending ? {
+    triggered: true,
+    reason: checkpointReason,
+    next_evidence_call_requires_investigation_goal: true,
+    reassess_before_next_evidence_call: [
+      "What exact unresolved question still matters to the task?",
+      "What materially different evidence should the next call add?",
+      "Does the supplied evidence actually contain the source/component/time range needed to resolve that question?",
+      "If not, state the evidence boundary instead of paraphrasing the same search or repeating derived analysis.",
+    ],
+  } : { triggered: false, next_evidence_call_requires_investigation_goal: false };
+}
+
 function addAgentFeedback(text: string): string {
   let payload: any;
   try { payload = JSON.parse(text); } catch { return text; }
   if (!payload || typeof payload !== "object") return text;
 
   const operation = String(payload.operation || "");
-  if (operation === "retrieve" || operation === "materialize") {
+  const isEvidenceOperation = ["retrieve", "materialize", "replay", "aggregate", "traverse", "verify"].includes(operation);
+  if (isEvidenceOperation) {
+    traceciteOperationCount += 1;
     const coverage = payload.coverage && typeof payload.coverage === "object" ? payload.coverage : {};
     const newEvidence = Number.isInteger(coverage.new_evidence) ? Number(coverage.new_evidence) : null;
     const repeatedEvidence = Number.isInteger(coverage.repeated_evidence) ? Number(coverage.repeated_evidence) : null;
     const unseenRangeCount = Array.isArray(payload.unseen_ranges) ? payload.unseen_ranges.length : 0;
     const hasEvidence = Array.isArray(payload.evidence) && payload.evidence.length > 0;
     const hasText = typeof payload.text === "string" && payload.text.trim().length > 0;
-    const addedEvidence = hasEvidence || hasText || unseenRangeCount > 0 || (newEvidence !== null && newEvidence > 0);
     const status = String(payload.status || "");
-    const lowNovelty = status === "no_match" || status === "no_new_evidence" || (
-      !addedEvidence && newEvidence === 0 && (repeatedEvidence ?? 0) > 0
-    );
+
+    let frontierExpanding = false;
+    let lowNovelty = false;
+    if (operation === "retrieve" || operation === "materialize") {
+      frontierExpanding = hasEvidence || hasText || unseenRangeCount > 0 || (newEvidence !== null && newEvidence > 0);
+      lowNovelty = status === "no_match" || status === "no_new_evidence" || (
+        !frontierExpanding && newEvidence === 0 && (repeatedEvidence ?? 0) > 0
+      );
+    } else if (operation === "traverse") {
+      frontierExpanding = Boolean(payload.graph || payload.trace || (payload.progress && payload.progress.new_evidence));
+    }
+
     recentEvidenceProgress.push({
       operation,
       status,
       new_evidence: newEvidence,
       repeated_evidence: repeatedEvidence,
       unseen_range_count: unseenRangeCount,
-      added_evidence: addedEvidence,
+      frontier_expanding: frontierExpanding,
       low_novelty: lowNovelty,
     });
     if (recentEvidenceProgress.length > 12) recentEvidenceProgress.splice(0, recentEvidenceProgress.length - 12);
-  }
 
-  const recent = recentEvidenceProgress.slice(-4);
-  let lowNoveltyStreak = 0;
-  for (let index = recentEvidenceProgress.length - 1; index >= 0; index -= 1) {
-    if (!recentEvidenceProgress[index].low_novelty) break;
-    lowNoveltyStreak += 1;
-  }
-  const lowNoveltyInRecentWindow = recent.filter((item) => item.low_novelty).length;
-  const checkpointTriggered = lowNoveltyStreak >= 3 || (recent.length === 4 && lowNoveltyInRecentWindow >= 3);
+    const recentFrontier = recentEvidenceProgress.filter((item) => item.operation === "retrieve" || item.operation === "materialize");
+    let lowNoveltyStreak = 0;
+    for (let index = recentFrontier.length - 1; index >= 0; index -= 1) {
+      if (!recentFrontier[index].low_novelty) break;
+      lowNoveltyStreak += 1;
+    }
+    const recentFourFrontier = recentFrontier.slice(-4);
+    const lowNoveltyInRecentWindow = recentFourFrontier.filter((item) => item.low_novelty).length;
+    const recentSix = recentEvidenceProgress.slice(-6);
+    const nonFrontierInRecentWindow = recentSix.filter((item) => !item.frontier_expanding).length;
+    const operationsSinceCheckpoint = traceciteOperationCount - lastCheckpointAtOperation;
 
-  payload.agent_feedback = {
-    evidence_progress: {
-      recent_frontier_operations: recent.length,
-      low_novelty_streak: lowNoveltyStreak,
-      low_novelty_in_recent_window: lowNoveltyInRecentWindow,
-      recent,
-    },
-    convergence_checkpoint: checkpointTriggered ? {
-      triggered: true,
-      reason: "Recent retrieve/materialize operations are mostly repeating covered evidence or returning no new evidence.",
-      reassess_before_next_evidence_call: [
-        "What exact unresolved question still matters to the task?",
-        "What materially different evidence should the next call add?",
-        "Does the supplied evidence actually contain the source/component/time range needed to resolve that question?",
-        "If not, state the evidence boundary instead of paraphrasing the same search again.",
-      ],
-    } : { triggered: false },
-  };
+    if (!checkpointPending && lowNoveltyStreak >= 3) {
+      checkpointPending = true;
+      checkpointReason = "Three consecutive retrieve/materialize operations added no meaningful new evidence frontier.";
+    } else if (!checkpointPending && recentFourFrontier.length === 4 && lowNoveltyInRecentWindow >= 3) {
+      checkpointPending = true;
+      checkpointReason = "Most recent retrieve/materialize operations are repeating covered evidence or returning no new evidence.";
+    } else if (!checkpointPending && recentSix.length === 6 && nonFrontierInRecentWindow >= 4 && operationsSinceCheckpoint >= 6) {
+      checkpointPending = true;
+      checkpointReason = "Recent TraceCite operations are dominated by replay/aggregate/verification or other non-frontier work rather than new source evidence.";
+    } else if (!checkpointPending && traceciteOperationCount >= 20 && operationsSinceCheckpoint >= 10) {
+      checkpointPending = true;
+      checkpointReason = "The investigation has accumulated many TraceCite evidence operations without an explicit convergence reassessment.";
+    }
+
+    payload.agent_feedback = {
+      evidence_progress: {
+        total_tracecite_operations: traceciteOperationCount,
+        operations_since_checkpoint: operationsSinceCheckpoint,
+        low_novelty_streak: lowNoveltyStreak,
+        low_novelty_in_recent_frontier_window: lowNoveltyInRecentWindow,
+        non_frontier_in_recent_operation_window: nonFrontierInRecentWindow,
+        recent: recentEvidenceProgress.slice(-6),
+      },
+      convergence_checkpoint: currentCheckpointFeedback(),
+    };
+  }
   return JSON.stringify(payload);
 }
 
@@ -195,11 +233,39 @@ function output(text: string, details: Record<string, unknown>) {
   return { content: [{ type: "text" as const, text: addAgentFeedback(text) }], details: { ...details, persistent_retrieval_session: true, evidence_only: true } };
 }
 
+function checkpointGate(operation: string, investigationGoal: unknown) {
+  if (!checkpointPending) return null;
+  const goal = String(investigationGoal || "").trim();
+  if (goal.length >= 16) {
+    checkpointPending = false;
+    checkpointReason = null;
+    lastCheckpointAtOperation = traceciteOperationCount;
+    recentEvidenceProgress.splice(0, recentEvidenceProgress.length);
+    return null;
+  }
+  const payload = {
+    operation,
+    status: "checkpoint_required",
+    agent_feedback: {
+      evidence_progress: {
+        total_tracecite_operations: traceciteOperationCount,
+        operations_since_checkpoint: traceciteOperationCount - lastCheckpointAtOperation,
+      },
+      convergence_checkpoint: currentCheckpointFeedback(),
+      required_field: "investigation_goal",
+      requirement: "Before another TraceCite evidence operation, provide a concrete unresolved question and the materially different evidence this call is expected to obtain. If no such evidence exists in the supplied inputs, answer at the current evidence boundary instead.",
+    },
+  };
+  return { content: [{ type: "text" as const, text: JSON.stringify(payload) }], details: { operation, convergence_checkpoint_blocked: true, evidence_only: true } };
+}
+
 function rangeArgs(command: string, params: any): string[] {
   const args = [command, params.file, String(params.line), "--radius", String(params.radius ?? 8), "--max-chars", "12000"];
   if (params.sha256) args.push("--sha256", params.sha256);
   return args;
 }
+
+const investigationGoal = Type.Optional(Type.String({ minLength: 16, maxLength: 500 }));
 
 export default function traceciteTools(pi: ExtensionAPI) {
   pi.on("tool_call", async (event) => { starts.set(event.toolCallId, Date.now()); });
@@ -221,13 +287,15 @@ export default function traceciteTools(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "tracecite_retrieve", label: "TraceCite Retrieve",
-    description: "Canonical retrieve for caller-selected local evidence. Preserves provenance, coverage, identity safety and RetrievalSession novelty; returns Agent-facing mechanical convergence feedback but never chooses hypotheses or stopping.",
+    description: "Canonical retrieve for caller-selected local evidence. Preserves provenance, coverage, identity safety and RetrievalSession novelty. Host feedback may require investigation_goal after a convergence checkpoint; the Agent still owns hypotheses and stopping.",
     parameters: Type.Object({
       file: Type.String(), query: Type.Optional(Type.String()), regex: Type.Optional(Type.Boolean()),
       max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
-      glob: Type.Optional(Type.String()), recursive: Type.Optional(Type.Boolean()),
+      glob: Type.Optional(Type.String()), recursive: Type.Optional(Type.Boolean()), investigation_goal: investigationGoal,
     }),
     async execute(_id, p, signal, _update, ctx) {
+      const blocked = checkpointGate("retrieve", p.investigation_goal);
+      if (blocked) return blocked;
       const args = ["retrieve", p.file, "--max-evidence", String(p.max_evidence ?? 20)];
       if (p.query) args.push("--query", p.query);
       if (p.regex) args.push("--regex");
@@ -239,37 +307,43 @@ export default function traceciteTools(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "tracecite_materialize", label: "TraceCite Materialize",
-    description: "Canonical materialize of exact bounded caller-selected source context with immutable identity and session coverage. Radius is 0..30; use deliberate adjacent ranges instead of invalid larger radii.",
+    description: "Canonical materialize of exact bounded caller-selected source context with immutable identity and session coverage. Radius is 0..30. Host feedback may require investigation_goal after a convergence checkpoint.",
     parameters: Type.Object({
       file: Type.String(), line: Type.Integer({ minimum: 1 }),
-      radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.Optional(Type.String()),
+      radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.Optional(Type.String()), investigation_goal: investigationGoal,
     }),
     async execute(_id, p, signal, _update, ctx) {
+      const blocked = checkpointGate("materialize", p.investigation_goal);
+      if (blocked) return blocked;
       return output(compact(await bridge(rangeArgs("materialize", p), ctx.cwd, signal)), { operation: "materialize", canonical_operation: true });
     },
   });
 
   pi.registerTool({
     name: "tracecite_replay", label: "TraceCite Replay",
-    description: "Canonical replay of previously materialized immutable context without counting it as new evidence. Radius is 0..30.",
+    description: "Canonical replay of previously materialized immutable context without counting it as new evidence. Radius is 0..30. Replay does not expand the evidence frontier.",
     parameters: Type.Object({
       file: Type.String(), line: Type.Integer({ minimum: 1 }),
-      radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.String(),
+      radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.String(), investigation_goal: investigationGoal,
     }),
     async execute(_id, p, signal, _update, ctx) {
+      const blocked = checkpointGate("replay", p.investigation_goal);
+      if (blocked) return blocked;
       return output(compact(await bridge(rangeArgs("replay", p), ctx.cwd, signal)), { operation: "replay", canonical_operation: true });
     },
   });
 
   pi.registerTool({
     name: "tracecite_aggregate", label: "TraceCite Aggregate",
-    description: "Canonical deterministic count/distinct/group over caller-selected local text matches with source provenance; no causal ranking.",
+    description: "Canonical deterministic count/distinct/group over caller-selected local text matches with source provenance; aggregate derives values but does not expand raw source-evidence coverage. Host feedback may require investigation_goal after a convergence checkpoint.",
     parameters: Type.Object({
       file: Type.String(), query: Type.String(), regex: Type.Optional(Type.Boolean()),
       operation: Type.Optional(Type.Union([Type.Literal("count"), Type.Literal("distinct"), Type.Literal("group")])),
-      group_regex: Type.Optional(Type.String()), max_groups: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+      group_regex: Type.Optional(Type.String()), max_groups: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })), investigation_goal: investigationGoal,
     }),
     async execute(_id, p, signal, _update, ctx) {
+      const blocked = checkpointGate("aggregate", p.investigation_goal);
+      if (blocked) return blocked;
       const args = ["aggregate", p.file, p.query, "--operation", p.operation ?? "count", "--max-groups", String(p.max_groups ?? 100)];
       if (p.regex) args.push("--regex");
       if (p.group_regex) args.push("--group-regex", p.group_regex);
@@ -279,7 +353,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "tracecite_traverse", label: "TraceCite Traverse",
-    description: "Canonical bounded provider traversal over caller-selected evidence IDs/entities. The Agent owns seeds, limits, hypotheses and interpretation.",
+    description: "Canonical bounded provider traversal over caller-selected evidence IDs/entities. The Agent owns seeds, limits, hypotheses and interpretation. Host feedback may require investigation_goal after a convergence checkpoint.",
     parameters: Type.Object({
       provider_file: Type.String(), seed_evidence_ids: Type.Optional(Type.Array(Type.String(), { maxItems: 50 })),
       seed_entities: Type.Optional(Type.Array(Type.Object({ kind: Type.String(), value: Type.String(), namespace: Type.Optional(Type.String()) }), { maxItems: 50 })),
@@ -287,9 +361,11 @@ export default function traceciteTools(pi: ExtensionAPI) {
       max_retrievals: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
       max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000 })),
       max_wall_seconds: Type.Optional(Type.Number({ minimum: 0.1, maximum: 30 })),
-      per_request_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+      per_request_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })), investigation_goal: investigationGoal,
     }),
     async execute(_id, p, signal, _update, ctx) {
+      const blocked = checkpointGate("traverse", p.investigation_goal);
+      if (blocked) return blocked;
       const args = ["traverse", p.provider_file, "--max-depth", String(p.max_depth ?? 3), "--max-retrievals", String(p.max_retrievals ?? 12), "--max-evidence", String(p.max_evidence ?? 500), "--max-wall-seconds", String(p.max_wall_seconds ?? 5), "--per-request-limit", String(p.per_request_limit ?? 100)];
       for (const id of p.seed_evidence_ids ?? []) args.push("--seed-evidence-id", id);
       for (const entity of p.seed_entities ?? []) args.push("--seed-entity", JSON.stringify(entity));
@@ -299,9 +375,11 @@ export default function traceciteTools(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "tracecite_verify", label: "TraceCite Verify",
-    description: "Canonical mechanical evidence-manifest integrity verification; does not validate the Agent's causal conclusion.",
-    parameters: Type.Object({ manifest: Type.String() }),
+    description: "Canonical mechanical evidence-manifest integrity verification; does not validate the Agent's causal conclusion and does not expand raw source-evidence coverage.",
+    parameters: Type.Object({ manifest: Type.String(), investigation_goal: investigationGoal }),
     async execute(_id, p, signal, _update, ctx) {
+      const blocked = checkpointGate("verify", p.investigation_goal);
+      if (blocked) return blocked;
       return output(compact(await bridge(["verify", p.manifest], ctx.cwd, signal)), { operation: "verify", canonical_operation: true });
     },
   });
@@ -309,8 +387,10 @@ export default function traceciteTools(pi: ExtensionAPI) {
   // Compatibility aliases. The canonical A/B workflow does not expose them.
   pi.registerTool({
     name: "tracecite_search", label: "TraceCite Search (compat)", description: "Compatibility alias for tracecite_retrieve.",
-    parameters: Type.Object({ file: Type.String(), query: Type.String(), regex: Type.Optional(Type.Boolean()), max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })) }),
+    parameters: Type.Object({ file: Type.String(), query: Type.String(), regex: Type.Optional(Type.Boolean()), max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })), investigation_goal: investigationGoal }),
     async execute(_id, p, signal, _update, ctx) {
+      const blocked = checkpointGate("retrieve", p.investigation_goal);
+      if (blocked) return blocked;
       const args = ["retrieve", p.file, "--query", p.query, "--max-evidence", String(p.max_evidence ?? 20)];
       if (p.regex) args.push("--regex");
       return output(compact(await bridge(args, ctx.cwd, signal)), { operation: "retrieve", compatibility_alias: "tracecite_search" });
@@ -318,9 +398,11 @@ export default function traceciteTools(pi: ExtensionAPI) {
   });
   pi.registerTool({
     name: "tracecite_expand", label: "TraceCite Expand (compat)", description: "Compatibility alias for tracecite_materialize/replay.",
-    parameters: Type.Object({ file: Type.String(), line: Type.Integer({ minimum: 1 }), radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.Optional(Type.String()), replay: Type.Optional(Type.Boolean()) }),
+    parameters: Type.Object({ file: Type.String(), line: Type.Integer({ minimum: 1 }), radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.Optional(Type.String()), replay: Type.Optional(Type.Boolean()), investigation_goal: investigationGoal }),
     async execute(_id, p, signal, _update, ctx) {
       const op = p.replay ? "replay" : "materialize";
+      const blocked = checkpointGate(op, p.investigation_goal);
+      if (blocked) return blocked;
       return output(compact(await bridge(rangeArgs(op, p), ctx.cwd, signal)), { operation: op, compatibility_alias: "tracecite_expand" });
     },
   });
