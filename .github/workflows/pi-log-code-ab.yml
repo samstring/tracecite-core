@@ -1,5 +1,6 @@
 name: Pi Log + Full Code A/B
 
+# The workflow is manual after this first branch-scoped push trigger.
 on:
   workflow_dispatch:
   push:
