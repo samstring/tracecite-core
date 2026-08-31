@@ -76,13 +76,13 @@ def write_codex_config(
     provider: str,
     base_url: str,
     env_key: str,
+    include_mcp: bool = True,
 ) -> None:
     codex_home = codex_home.resolve()
     workspace = workspace.resolve()
     state_dir = state_dir.resolve()
     codex_home.mkdir(parents=True, exist_ok=True)
 
-    tool_list = ", ".join(_json_string(name) for name in CANONICAL_TRACECITE_TOOLS)
     config = f"""model = {_json_string(model)}
 model_provider = {_json_string(provider)}
 approval_policy = "never"
@@ -93,7 +93,10 @@ base_url = {_json_string(base_url)}
 env_key = {_json_string(env_key)}
 wire_api = "responses"
 requires_openai_auth = false
-
+"""
+    if include_mcp:
+        tool_list = ", ".join(_json_string(name) for name in CANONICAL_TRACECITE_TOOLS)
+        config += f"""
 [mcp_servers.tracecite]
 command = {_json_string(python_executable)}
 args = ["-m", "tracecite_mcp.server"]
@@ -174,6 +177,7 @@ def _parser() -> argparse.ArgumentParser:
     codex.add_argument("--provider", default="benchmark")
     codex.add_argument("--base-url", required=True)
     codex.add_argument("--env-key", default="OPENAI_API_KEY")
+    codex.add_argument("--no-mcp", action="store_true")
 
     validate = sub.add_parser("validate-transcript")
     validate.add_argument("--transcript", type=Path, required=True)
@@ -197,6 +201,7 @@ def main() -> int:
             provider=args.provider,
             base_url=args.base_url,
             env_key=args.env_key,
+            include_mcp=not args.no_mcp,
         )
         return 0
     if args.command == "validate-transcript":
