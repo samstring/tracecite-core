@@ -17,6 +17,8 @@ on:
       - experiment/evidence-intelligence
     paths:
       - .github/workflows/pi-dual-gmi-parallel-ab.yml
+      - benchmarks/agent-investigation/agent_flow_runner.py
+      - benchmarks/agent-investigation/pi_log_code_benchmark_host.ts
 
 permissions:
   contents: read
