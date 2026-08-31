@@ -17,11 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      TRACECITE_BENCH_PROVIDER: ${{ vars.TRACECITE_BENCH_PROVIDER || 'auto' }}
       GMI_API_KEY: ${{ secrets.GMI_API_KEY || secrets.OPENAI_API_KEY }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GMI_MODEL: ${{ vars.GMI_MODEL || vars.TRACECITE_BENCH_MODEL }}
-      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
       PI_CODING_AGENT_DIR: /tmp/pi-agent-config
       PI_SKIP_VERSION_CHECK: "1"
       PI_TELEMETRY: "0"
@@ -96,43 +93,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          provider="${TRACECITE_BENCH_PROVIDER:-auto}"
-          if [[ "$provider" == auto ]]; then
-            if [[ -n "${GEMINI_API_KEY:-}" && -n "${GEMINI_MODEL:-}" ]]; then
-              provider=gemini
-            else
-              provider=gmi
-            fi
-          fi
-          case "$provider" in
-            gemini)
-              test -n "${GEMINI_API_KEY:-}" || { echo 'GEMINI_API_KEY is empty' >&2; exit 2; }
-              test -n "${GEMINI_MODEL:-}" || { echo 'GEMINI_MODEL is empty' >&2; exit 2; }
-              echo 'PI_PROVIDER=google' >> "$GITHUB_ENV"
-              echo 'PI_PROVIDER_NAME=Google Gemini' >> "$GITHUB_ENV"
-              echo 'BENCH_API=google-generative-ai' >> "$GITHUB_ENV"
-              echo 'BENCH_BASE_URL=https://generativelanguage.googleapis.com/v1beta' >> "$GITHUB_ENV"
-              echo "BENCH_MODEL=$GEMINI_MODEL" >> "$GITHUB_ENV"
-              echo 'PI_THINKING=medium' >> "$GITHUB_ENV"
-              echo 'SELECTED_PROVIDER=gemini' >> "$GITHUB_ENV"
-              ;;
-            minimax|gmi)
-              test -n "${GMI_API_KEY:-}" || { echo 'GMI_API_KEY/OPENAI_API_KEY is empty' >&2; exit 2; }
-              test -n "${GMI_MODEL:-}" || { echo 'GMI_MODEL/TRACECITE_BENCH_MODEL is empty' >&2; exit 2; }
-              echo 'PI_PROVIDER=gmi' >> "$GITHUB_ENV"
-              echo 'PI_PROVIDER_NAME=GMI OpenAI-compatible' >> "$GITHUB_ENV"
-              echo 'BENCH_API=openai-completions' >> "$GITHUB_ENV"
-              echo 'BENCH_BASE_URL=https://api.gmi-serving.com/v1' >> "$GITHUB_ENV"
-              echo "BENCH_MODEL=$GMI_MODEL" >> "$GITHUB_ENV"
-              echo 'PI_THINKING=off' >> "$GITHUB_ENV"
-              echo 'SELECTED_PROVIDER=gmi' >> "$GITHUB_ENV"
-              ;;
-            *)
-              echo "Unsupported TRACECITE_BENCH_PROVIDER: $provider" >&2
-              exit 2
-              ;;
-          esac
-          echo "Selected provider: $provider"
+          test -n "${GMI_API_KEY:-}" || { echo 'GMI_API_KEY/OPENAI_API_KEY is empty' >&2; exit 2; }
+          test -n "${GMI_MODEL:-}" || { echo 'GMI_MODEL/TRACECITE_BENCH_MODEL is empty' >&2; exit 2; }
+          echo 'PI_PROVIDER=gmi' >> "$GITHUB_ENV"
+          echo 'PI_PROVIDER_NAME=GMI OpenAI-compatible' >> "$GITHUB_ENV"
+          echo 'BENCH_API=openai-completions' >> "$GITHUB_ENV"
+          echo 'BENCH_BASE_URL=https://api.gmi-serving.com/v1' >> "$GITHUB_ENV"
+          echo "BENCH_MODEL=$GMI_MODEL" >> "$GITHUB_ENV"
+          echo 'PI_THINKING=off' >> "$GITHUB_ENV"
+          echo 'SELECTED_PROVIDER=gmi' >> "$GITHUB_ENV"
+          echo 'Selected provider: gmi'
 
       - name: Configure model
         shell: bash
@@ -143,21 +113,19 @@ jobs:
           import json, os
           from pathlib import Path
           provider = os.environ['PI_PROVIDER']
-          is_google = provider == 'google'
           model = {
               'id': os.environ['BENCH_MODEL'],
               'name': os.environ['BENCH_MODEL'],
-              'reasoning': is_google,
+              'reasoning': False,
               'input': ['text'],
               'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
-              'contextWindow': 1_048_576 if is_google else 1_000_000,
-              'maxTokens': 65_536 if is_google else 4_096,
-          }
-          if not is_google:
-              model['compat'] = {
+              'contextWindow': 1_000_000,
+              'maxTokens': 4_096,
+              'compat': {
                   'supportsDeveloperRole': False,
                   'supportsReasoningEffort': False,
-              }
+              },
+          }
           payload = {'providers': {provider: {
               'name': os.environ['PI_PROVIDER_NAME'],
               'baseUrl': os.environ['BENCH_BASE_URL'],
@@ -250,11 +218,7 @@ jobs:
           SKILL_DIR="$GITHUB_WORKSPACE/tracecite-mcp/skills/tracecite"
           TASK="/skill:tracecite $QUESTION"
           PROMPT="You are a real coding agent debugging a failure with a complete bug-producing pre-fix source repository as your current working directory. Do not use the web, issue/PR content, remote git operations, or post-fix knowledge. A failing runtime log is available at $RUNTIME_LOG. The user explicitly selected TraceCite for this investigation: every operation that inspects or derives from runtime-log content must go through the standard TraceCite MCP tools; native tools remain available for source-code exploration. The TraceCite Skill owns the Agent evidence-use procedure; you own hypotheses, causal reasoning, evidence sufficiency, final conclusions, and stopping. Cite exact runtime-log or source path:L<line> references actually observed, and distinguish observation from inference."
-          case "$PI_PROVIDER" in
-            google) API_KEY="$GEMINI_API_KEY" ;;
-            gmi) API_KEY="$GMI_API_KEY" ;;
-            *) echo "Unexpected PI_PROVIDER: $PI_PROVIDER" >&2; exit 2 ;;
-          esac
+          API_KEY="$GMI_API_KEY"
           mkdir -p "$RESULT_ROOT/pi-tracecite-session"
           cd "$SOURCE_ROOT"
           set +e
