@@ -15,9 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
-      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      TRACECITE_BENCH_PROVIDER: ${{ vars.TRACECITE_BENCH_PROVIDER || 'gemini' }}
+      GMI_API_KEY: ${{ secrets.GMI_API_KEY || secrets.OPENAI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GMI_MODEL: ${{ vars.GMI_MODEL || vars.TRACECITE_BENCH_MODEL }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
       PI_CODING_AGENT_DIR: /tmp/pi-agent-config
       PI_SKIP_VERSION_CHECK: "1"
       PI_TELEMETRY: "0"
@@ -87,19 +89,50 @@ jobs:
           python scripts/check_architecture.py
           python -m tracecite.root_cause_benchmarking validate "$CASE_DIR"
 
+      - name: Select benchmark provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          provider="${TRACECITE_BENCH_PROVIDER:-gemini}"
+          case "$provider" in
+            gemini)
+              test -n "${GEMINI_API_KEY:-}" || { echo 'GEMINI_API_KEY is empty' >&2; exit 2; }
+              test -n "${GEMINI_MODEL:-}" || { echo 'GEMINI_MODEL is empty' >&2; exit 2; }
+              echo 'PI_PROVIDER=gemini' >> "$GITHUB_ENV"
+              echo 'PI_PROVIDER_NAME=Gemini OpenAI-compatible' >> "$GITHUB_ENV"
+              echo 'BENCH_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai' >> "$GITHUB_ENV"
+              echo "BENCH_MODEL=$GEMINI_MODEL" >> "$GITHUB_ENV"
+              ;;
+            minimax|gmi)
+              test -n "${GMI_API_KEY:-}" || { echo 'GMI_API_KEY/OPENAI_API_KEY is empty' >&2; exit 2; }
+              test -n "${GMI_MODEL:-}" || { echo 'GMI_MODEL/TRACECITE_BENCH_MODEL is empty' >&2; exit 2; }
+              echo 'PI_PROVIDER=gmi' >> "$GITHUB_ENV"
+              echo 'PI_PROVIDER_NAME=GMI OpenAI-compatible' >> "$GITHUB_ENV"
+              echo 'BENCH_BASE_URL=https://api.gmi-serving.com/v1' >> "$GITHUB_ENV"
+              echo "BENCH_MODEL=$GMI_MODEL" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "Unsupported TRACECITE_BENCH_PROVIDER: $provider (expected gemini|minimax|gmi)" >&2
+              exit 2
+              ;;
+          esac
+          echo "Selected benchmark provider: $provider"
+
       - name: Configure model
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${OPENAI_API_KEY:-}" || { echo 'OPENAI_API_KEY is empty' >&2; exit 2; }
+          test -n "${PI_PROVIDER:-}" || { echo 'PI_PROVIDER is empty' >&2; exit 2; }
+          test -n "${BENCH_BASE_URL:-}" || { echo 'BENCH_BASE_URL is empty' >&2; exit 2; }
           test -n "${BENCH_MODEL:-}" || { echo 'BENCH_MODEL is empty' >&2; exit 2; }
           mkdir -p "$PI_CODING_AGENT_DIR"
           python - <<'PY'
           import json, os
           from pathlib import Path
-          payload = {'providers': {'gmi': {
-              'name': 'GMI OpenAI-compatible',
-              'baseUrl': os.environ['OPENAI_BASE_URL'],
+          provider = os.environ['PI_PROVIDER']
+          payload = {'providers': {provider: {
+              'name': os.environ['PI_PROVIDER_NAME'],
+              'baseUrl': os.environ['BENCH_BASE_URL'],
               'api': 'openai-completions',
               'models': [{
                   'id': os.environ['BENCH_MODEL'], 'name': os.environ['BENCH_MODEL'],
@@ -187,6 +220,11 @@ jobs:
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
           PROMPT="You are a real coding agent debugging a failure with a complete pre-fix source repository as your current working directory. The source tree is fixed to the bug-producing pre-fix commit; do not use the web, issue/PR content, remote git operations, or post-fix knowledge. A failing runtime log is available at $RUNTIME_LOG. EVERY operation that inspects or derives from runtime-log content MUST use the standard TraceCite MCP tools. Native read/grep/bash/find/ls are only for source-code exploration. Follow the TraceCite Agent Skill closely, including its canonical call shapes and result semantics. You own hypotheses, causal reasoning, source exploration, evidence sufficiency, final conclusions, and when to stop. Cite important claims using exact runtime-log or source path:L<line> references you actually observed, and distinguish observation from inference."
+          case "$PI_PROVIDER" in
+            gemini) API_KEY="$GEMINI_API_KEY" ;;
+            gmi) API_KEY="$GMI_API_KEY" ;;
+            *) echo "Unexpected PI_PROVIDER: $PI_PROVIDER" >&2; exit 2 ;;
+          esac
           mkdir -p "$RESULT_ROOT/pi-tracecite-session"
           cd "$SOURCE_ROOT"
           set +e
@@ -196,7 +234,7 @@ jobs:
           TRACECITE_CODE_ROOT="$SOURCE_ROOT" \
           TRACECITE_RUNTIME_LOG="$RUNTIME_LOG" \
           timeout -k 30s 1200s pi \
-            --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+            --provider "$PI_PROVIDER" --model "$BENCH_MODEL" --api-key "$API_KEY" \
             --thinking off --mode text --print \
             --session-dir "$RESULT_ROOT/pi-tracecite-session" \
             --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_log_code_benchmark_host.ts" \
@@ -231,6 +269,8 @@ jobs:
               'schema_version': 1,
               'case_id': os.environ['CASE_ID'],
               'integration': 'agent-skill-standard-mcp-core',
+              'provider': os.environ.get('PI_PROVIDER'),
+              'model': os.environ.get('BENCH_MODEL'),
               'core_sha': os.environ.get('GITHUB_SHA'),
               'mcp_sha': os.environ['TRACECITE_MCP_REF'],
               'runtime_log_bytes': int(os.environ.get('RUNTIME_LOG_BYTES', '0') or 0),
