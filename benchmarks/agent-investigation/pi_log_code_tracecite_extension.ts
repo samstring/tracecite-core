@@ -6,6 +6,17 @@ import traceciteTools from "./pi_tracecite_extension_impl.ts";
 const CODE_ROOT = resolve(process.env.TRACECITE_CODE_ROOT || process.cwd());
 const RUNTIME_LOG = resolve(process.env.TRACECITE_RUNTIME_LOG || "");
 const GUARD_PATH = process.env.TRACECITE_LOG_GUARD_ACTIVITY || "";
+const ACCESS_PATH = process.env.TRACECITE_LOG_ACCESS_ACTIVITY || "";
+const TRACE_LOG_TOOLS = new Set([
+  "tracecite_retrieve",
+  "tracecite_materialize",
+  "tracecite_replay",
+  "tracecite_aggregate",
+  "tracecite_traverse",
+  "tracecite_verify",
+  "tracecite_search",
+  "tracecite_expand",
+]);
 
 function within(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
@@ -18,14 +29,26 @@ function resolveInputPath(raw: unknown, cwd: string): string | null {
   return resolve(cwd, value);
 }
 
+async function appendJsonl(path: string, payload: unknown) {
+  if (!path) return;
+  await mkdir(dirname(path), { recursive: true });
+  await appendFile(path, JSON.stringify(payload) + "\n", "utf8");
+}
+
 async function recordBlocked(tool: string, reason: string, input: unknown) {
-  if (!GUARD_PATH) return;
-  await mkdir(dirname(GUARD_PATH), { recursive: true });
-  await appendFile(
-    GUARD_PATH,
-    JSON.stringify({ tool, reason, input }) + "\n",
-    "utf8",
-  );
+  await appendJsonl(GUARD_PATH, { tool, reason, input });
+}
+
+async function recordRuntimeLogAccess(event: any, cwd: string) {
+  if (!ACCESS_PATH || !TRACE_LOG_TOOLS.has(String(event?.toolName || ""))) return;
+  const input = event?.input && typeof event.input === "object" ? event.input : {};
+  const file = resolveInputPath((input as any).file, cwd);
+  if (file !== RUNTIME_LOG) return;
+  await appendJsonl(ACCESS_PATH, {
+    tool: event.toolName,
+    file,
+    input,
+  });
 }
 
 function bashTouchesRuntimeLog(command: string): boolean {
@@ -71,6 +94,7 @@ function guardReason(event: any, cwd: string): string | null {
 export default function logCodeTraceCite(pi: ExtensionAPI) {
   traceciteTools(pi);
   pi.on("tool_call", async (event, ctx) => {
+    await recordRuntimeLogAccess(event, ctx.cwd);
     const reason = guardReason(event, ctx.cwd);
     if (!reason) return undefined;
     await recordBlocked(event.toolName, reason, event.input);
