@@ -22,8 +22,19 @@ const TRACE_TOOLS = new Set([
 
 type Category = "tracecite_evidence" | "native_search" | "native_read" | "opaque_shell" | "native_other" | "other";
 type Activity = { tool: string; category: Category; duration_ms: number; status: string; metadata?: Record<string, unknown> };
+type EvidenceProgressEvent = {
+  operation: "retrieve" | "materialize";
+  status: string;
+  new_evidence: number | null;
+  repeated_evidence: number | null;
+  unseen_range_count: number;
+  added_evidence: boolean;
+  low_novelty: boolean;
+};
+
 const starts = new Map<string, number>();
 const events: Activity[] = [];
+const recentEvidenceProgress: EvidenceProgressEvent[] = [];
 let activityWrite: Promise<void> = Promise.resolve();
 
 function category(tool: string): Category {
@@ -120,8 +131,68 @@ function compact(text: string): string {
   return text;
 }
 
+function addAgentFeedback(text: string): string {
+  let payload: any;
+  try { payload = JSON.parse(text); } catch { return text; }
+  if (!payload || typeof payload !== "object") return text;
+
+  const operation = String(payload.operation || "");
+  if (operation === "retrieve" || operation === "materialize") {
+    const coverage = payload.coverage && typeof payload.coverage === "object" ? payload.coverage : {};
+    const newEvidence = Number.isInteger(coverage.new_evidence) ? Number(coverage.new_evidence) : null;
+    const repeatedEvidence = Number.isInteger(coverage.repeated_evidence) ? Number(coverage.repeated_evidence) : null;
+    const unseenRangeCount = Array.isArray(payload.unseen_ranges) ? payload.unseen_ranges.length : 0;
+    const hasEvidence = Array.isArray(payload.evidence) && payload.evidence.length > 0;
+    const hasText = typeof payload.text === "string" && payload.text.trim().length > 0;
+    const addedEvidence = hasEvidence || hasText || unseenRangeCount > 0 || (newEvidence !== null && newEvidence > 0);
+    const status = String(payload.status || "");
+    const lowNovelty = status === "no_match" || status === "no_new_evidence" || (
+      !addedEvidence && newEvidence === 0 && (repeatedEvidence ?? 0) > 0
+    );
+    recentEvidenceProgress.push({
+      operation,
+      status,
+      new_evidence: newEvidence,
+      repeated_evidence: repeatedEvidence,
+      unseen_range_count: unseenRangeCount,
+      added_evidence: addedEvidence,
+      low_novelty: lowNovelty,
+    });
+    if (recentEvidenceProgress.length > 12) recentEvidenceProgress.splice(0, recentEvidenceProgress.length - 12);
+  }
+
+  const recent = recentEvidenceProgress.slice(-4);
+  let lowNoveltyStreak = 0;
+  for (let index = recentEvidenceProgress.length - 1; index >= 0; index -= 1) {
+    if (!recentEvidenceProgress[index].low_novelty) break;
+    lowNoveltyStreak += 1;
+  }
+  const lowNoveltyInRecentWindow = recent.filter((item) => item.low_novelty).length;
+  const checkpointTriggered = lowNoveltyStreak >= 3 || (recent.length === 4 && lowNoveltyInRecentWindow >= 3);
+
+  payload.agent_feedback = {
+    evidence_progress: {
+      recent_frontier_operations: recent.length,
+      low_novelty_streak: lowNoveltyStreak,
+      low_novelty_in_recent_window: lowNoveltyInRecentWindow,
+      recent,
+    },
+    convergence_checkpoint: checkpointTriggered ? {
+      triggered: true,
+      reason: "Recent retrieve/materialize operations are mostly repeating covered evidence or returning no new evidence.",
+      reassess_before_next_evidence_call: [
+        "What exact unresolved question still matters to the task?",
+        "What materially different evidence should the next call add?",
+        "Does the supplied evidence actually contain the source/component/time range needed to resolve that question?",
+        "If not, state the evidence boundary instead of paraphrasing the same search again.",
+      ],
+    } : { triggered: false },
+  };
+  return JSON.stringify(payload);
+}
+
 function output(text: string, details: Record<string, unknown>) {
-  return { content: [{ type: "text" as const, text }], details: { ...details, persistent_retrieval_session: true, evidence_only: true } };
+  return { content: [{ type: "text" as const, text: addAgentFeedback(text) }], details: { ...details, persistent_retrieval_session: true, evidence_only: true } };
 }
 
 function rangeArgs(command: string, params: any): string[] {
@@ -150,7 +221,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "tracecite_retrieve", label: "TraceCite Retrieve",
-    description: "Canonical retrieve for caller-selected local evidence. Preserves provenance, coverage, identity safety and RetrievalSession novelty; never chooses hypotheses or stopping.",
+    description: "Canonical retrieve for caller-selected local evidence. Preserves provenance, coverage, identity safety and RetrievalSession novelty; returns Agent-facing mechanical convergence feedback but never chooses hypotheses or stopping.",
     parameters: Type.Object({
       file: Type.String(), query: Type.Optional(Type.String()), regex: Type.Optional(Type.Boolean()),
       max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
@@ -168,7 +239,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "tracecite_materialize", label: "TraceCite Materialize",
-    description: "Canonical materialize of exact bounded caller-selected source context with immutable identity and session coverage.",
+    description: "Canonical materialize of exact bounded caller-selected source context with immutable identity and session coverage. Radius is 0..30; use deliberate adjacent ranges instead of invalid larger radii.",
     parameters: Type.Object({
       file: Type.String(), line: Type.Integer({ minimum: 1 }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.Optional(Type.String()),
@@ -180,7 +251,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "tracecite_replay", label: "TraceCite Replay",
-    description: "Canonical replay of previously materialized immutable context without counting it as new evidence.",
+    description: "Canonical replay of previously materialized immutable context without counting it as new evidence. Radius is 0..30.",
     parameters: Type.Object({
       file: Type.String(), line: Type.Integer({ minimum: 1 }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.String(),
