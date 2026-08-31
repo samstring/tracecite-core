@@ -29,14 +29,14 @@ class AppServer:
         self.stdin.write(json.dumps(dict(payload), ensure_ascii=False) + "\n")
         self.stdin.flush()
 
-    def request(self, method: str, params: Mapping[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+    def request(self, method: str, params: Mapping[str, Any] | None = None) -> int:
         request_id = self.next_id
         self.next_id += 1
         payload: dict[str, Any] = {"id": request_id, "method": method}
         if params is not None:
             payload["params"] = dict(params)
         self.write(payload)
-        return request_id, payload
+        return request_id
 
     def read(self) -> dict[str, Any]:
         line = self.stdout.readline()
@@ -59,25 +59,7 @@ class AppServer:
                 self.proc.wait(timeout=5)
 
 
-def _wait_response(
-    server: AppServer,
-    request_id: int,
-    *,
-    raw: TextIO,
-) -> dict[str, Any]:
-    while True:
-        message = server.read()
-        raw.write(json.dumps(message, ensure_ascii=False, sort_keys=True) + "\n")
-        raw.flush()
-        if message.get("id") == request_id:
-            if message.get("error") is not None:
-                raise RuntimeError(f"Codex request failed: {message['error']!r}")
-            result = message.get("result")
-            return dict(result) if isinstance(result, Mapping) else {}
-        _reject_unexpected_server_request(server, message)
-
-
-def _reject_unexpected_server_request(server: AppServer, message: Mapping[str, Any]) -> None:
+def _reject_interactive_request(server: AppServer, message: Mapping[str, Any]) -> None:
     request_id = message.get("id")
     method = message.get("method")
     if request_id is None or not isinstance(method, str):
@@ -93,6 +75,19 @@ def _reject_unexpected_server_request(server: AppServer, message: Mapping[str, A
     )
 
 
+def _wait_response(server: AppServer, request_id: int, raw: TextIO) -> dict[str, Any]:
+    while True:
+        message = server.read()
+        raw.write(json.dumps(message, ensure_ascii=False, sort_keys=True) + "\n")
+        raw.flush()
+        if message.get("id") == request_id:
+            if message.get("error") is not None:
+                raise RuntimeError(f"Codex request failed: {message['error']!r}")
+            result = message.get("result")
+            return dict(result) if isinstance(result, Mapping) else {}
+        _reject_interactive_request(server, message)
+
+
 def _mcp_output(item: Mapping[str, Any]) -> str:
     result = item.get("result")
     if not isinstance(result, Mapping):
@@ -103,12 +98,13 @@ def _mcp_output(item: Mapping[str, Any]) -> str:
         return json.dumps(structured, ensure_ascii=False, sort_keys=True)
     content = result.get("content")
     if isinstance(content, list):
-        texts: list[str] = []
-        for value in content:
-            if isinstance(value, Mapping) and value.get("type") == "text":
-                text = value.get("text")
-                if isinstance(text, str):
-                    texts.append(text)
+        texts = [
+            str(value.get("text"))
+            for value in content
+            if isinstance(value, Mapping)
+            and value.get("type") == "text"
+            and isinstance(value.get("text"), str)
+        ]
         if texts:
             return "\n".join(texts)
     return json.dumps(dict(result), ensure_ascii=False, sort_keys=True)
@@ -131,15 +127,19 @@ def _usage_event(token_usage: Mapping[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _default_mode(output_dir: Path) -> str:
+    return "codex-native" if output_dir.name == "native" else "codex-standard-mcp"
+
+
 def run(
     *,
     workspace: Path,
     question: str,
     output_dir: Path,
-    mode: str,
     model: str,
     provider: str,
     developer_instructions: str,
+    mode: str | None = None,
 ) -> None:
     workspace = workspace.resolve()
     output_dir = output_dir.resolve()
@@ -150,7 +150,7 @@ def run(
     stderr_path = output_dir / "codex-stderr.log"
 
     transcript: list[dict[str, Any]] = [
-        {"type": "session", "mode": mode, "model": model}
+        {"type": "session", "mode": mode or _default_mode(output_dir), "model": model}
     ]
     final_answer = ""
     latest_usage: Mapping[str, Any] | None = None
@@ -160,7 +160,7 @@ def run(
     ) as raw:
         server = AppServer(stderr=stderr)
         try:
-            initialize_id, _ = server.request(
+            request_id = server.request(
                 "initialize",
                 {
                     "clientInfo": {
@@ -171,10 +171,10 @@ def run(
                     "capabilities": {"experimentalApi": True},
                 },
             )
-            _wait_response(server, initialize_id, raw=raw)
+            _wait_response(server, request_id, raw)
             server.write({"method": "initialized"})
 
-            thread_id_req, _ = server.request(
+            request_id = server.request(
                 "thread/start",
                 {
                     "model": model,
@@ -186,37 +186,29 @@ def run(
                     "developerInstructions": developer_instructions,
                 },
             )
-            thread_result = _wait_response(server, thread_id_req, raw=raw)
+            thread_result = _wait_response(server, request_id, raw)
             thread_id = str(((thread_result.get("thread") or {}).get("id")) or "")
             if not thread_id:
                 raise RuntimeError(f"thread/start returned no thread id: {thread_result!r}")
 
-            turn_req, _ = server.request(
+            request_id = server.request(
                 "turn/start",
                 {
                     "threadId": thread_id,
-                    "input": [
-                        {
-                            "type": "text",
-                            "text": question,
-                            "textElements": [],
-                        }
-                    ],
+                    "input": [{"type": "text", "text": question, "textElements": []}],
                     "model": model,
                 },
             )
-            turn_result = _wait_response(server, turn_req, raw=raw)
+            turn_result = _wait_response(server, request_id, raw)
             turn_id = str(((turn_result.get("turn") or {}).get("id")) or "")
             if not turn_id:
                 raise RuntimeError(f"turn/start returned no turn id: {turn_result!r}")
 
-            completed = False
-            while not completed:
+            while True:
                 message = server.read()
                 raw.write(json.dumps(message, ensure_ascii=False, sort_keys=True) + "\n")
                 raw.flush()
-                _reject_unexpected_server_request(server, message)
-
+                _reject_interactive_request(server, message)
                 method = message.get("method")
                 params = message.get("params")
                 if not isinstance(params, Mapping):
@@ -272,8 +264,7 @@ def run(
                     status = str(turn.get("status") or "")
                     if status != "completed":
                         raise RuntimeError(f"Codex turn ended with status {status}: {turn!r}")
-                    completed = True
-
+                    break
         finally:
             server.close()
 
@@ -290,12 +281,12 @@ def run(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run one Codex app-server turn and normalize MCP activity for TraceCite benchmarks."
+        description="Run one Codex app-server turn and normalize activity for TraceCite benchmarks."
     )
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--question-file", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--mode", required=True)
+    parser.add_argument("--mode")
     parser.add_argument("--model", required=True)
     parser.add_argument("--provider", default="benchmark")
     parser.add_argument("--developer-instructions-file", type=Path, required=True)
