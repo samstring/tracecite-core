@@ -1,37 +1,52 @@
 # TraceCite Agent / MCP 工作进度与交接
 
-> 本文档是当前 `feature_for_agent` 工作的权威交接记录。新对话应优先读取本文档、当前 branch HEAD 和最新 CI；旧聊天、旧 handoff、旧 benchmark 结论只作为历史。
+> 本文档是当前 `feature_for_agent` 工作的权威交接记录。新对话应优先读取本文档、两个仓库当前 branch HEAD 和最新 CI；旧聊天、旧 handoff、旧 benchmark 结论只作为历史。
 
 更新时间：2026-08-31
 
-## 1. 当前仓库与分支状态
+## 1. 当前一句话状态
+
+> **Core 的 Agent/Evidence 边界与六个 canonical Evidence primitives 已稳定；`tracecite-mcp@feature_for_agent` 已完成六原语薄适配、RetrievalSession 映射、真实 stdio MCP 验证，并已通过 Codex CLI 与 Pi Agent 两条真实 Host → MCP → Core 端到端 smoke。下一阶段不再继续扩 Core/MCP 语义面，而是把现有 Pi benchmark 的 TraceCite arm 平行迁移到标准 MCP Host 路径并重新做受控 A/B。**
+
+---
+
+## 2. 仓库与分支基线
 
 ### TraceCite Core
 
-仓库：`samstring/tracecite-core`
+仓库：
 
-当前正式 Agent 基线分支：
+```text
+samstring/tracecite-core
+```
+
+正式 Agent 基线：
 
 ```text
 feature_for_agent
 ```
 
-Evidence Runtime 实现/实验分支：
+Evidence Runtime 实验/实现分支：
 
 ```text
 experiment/evidence-intelligence
 ```
 
-2026-08-31 已将稳定的 Evidence Runtime 架构同步到 `feature_for_agent`。同步时两条分支共同代码 HEAD 为：
+稳定产品代码基线：
 
 ```text
 127b43c402d29655c86230608eded3fcf2e8b40e
 bench: exclude unavailable log case from log-code A/B
 ```
 
-`feature_for_agent` 原先唯一独立的旧 handoff commit 已按用户要求丢弃，不作为后续架构基线。
+`feature_for_agent` 在该产品代码之上曾有纯文档 handoff commit：
 
-本次文档更新会让 `feature_for_agent` 在上述代码基线之上多一个纯文档提交；Core 产品代码仍以 `127b43c...` 对齐后的实现为基础。
+```text
+3d1f4b727a7bd74b3a3230e885d70ecb9a8c0310
+docs: refresh agent and MCP handoff
+```
+
+本次更新会再增加一个纯文档提交。不要把文档 commit 误认为 Core Evidence Runtime 产品逻辑变化。
 
 ### TraceCite MCP
 
@@ -47,20 +62,29 @@ samstring/tracecite-mcp
 feature_for_agent
 ```
 
-开始本轮 MCP 设计检查时 HEAD：
+六原语改造、Host 验收已经完成。关键提交链：
 
 ```text
-f6fed44cd2f500cb0bcc604295c43426162a4409
-test(agent): match canonical routing projection
+a6a9537d4b99940603b3d6055a98037d7e32cf2f
+ci(mcp): test redesigned feature branch directly
+
+ e19e8364000c16888933094fc5e3856b99d1762a
+ test(mcp): add real stdio protocol smoke
+
+ a08efd6fcc89496dd68766795442d3c145ff79d5
+ test(host): use Pi adapter namespaced MCP tool
+
+ 01575e24b15df6f90f9b55770645ad28eff62195
+ docs(mcp): record Codex and Pi host validation
 ```
 
-**重要：目前只完成了 MCP 现状检查和目标架构确认，新的六原语 MCP 改造尚未提交。** 新对话不要误认为 MCP 已经完成迁移。
+其中 `a08efd6...` 是 Codex/Pi Host smoke 双绿时的功能验证代码基线；`01575e2...` 只在其上补充 README 文档。
 
 ---
 
-## 2. 已稳定的最高级架构边界
+## 3. 已稳定的最高级架构边界
 
-核心原则已经稳定，可作为 MCP v1 的设计前提：
+核心原则保持不变：
 
 > **Agent 负责想和决定；TraceCite 负责证据。**
 
@@ -94,7 +118,7 @@ integrity / mechanical verification
 identity / correlation safety facts
 ```
 
-### Core 不得输出或拥有
+### Core / MCP 不得输出或拥有
 
 ```text
 root_cause_confidence
@@ -113,24 +137,16 @@ new_evidence = 0          != investigation complete
 no_match                  != event impossible
 frontier exhausted        != root cause proven
 identifier unsafe         != incident cause
+integrity verified        != causal conclusion verified
 ```
 
-这条边界已经写入：
-
-```text
-docs/PROJECT_GUARDRAILS.md
-docs/adr-agent-runtime-semantic-boundary.zh-CN.md
-docs/evidence-runtime-architecture.zh-CN.md
-docs/agent-integration.md
-```
-
-除非发现真正的 Core contract 缺陷，否则后续 MCP / Pi / Codex / Claude 等集成不应为了单个 benchmark case 重新改变这条边界。
+除非发现真正的 Core contract 缺陷，后续 MCP / Pi / Codex / Claude 集成不得为了单个 benchmark case 重新改变这条边界。
 
 ---
 
-## 3. Canonical Agent-facing Evidence API 已稳定
+## 4. Canonical Agent-facing Evidence API
 
-MCP 和其他 Agent Host 应只依赖以下六个 canonical primitive：
+正式 Agent/MCP surface 只有六个 primitive：
 
 ```text
 retrieve
@@ -141,44 +157,39 @@ traverse
 verify
 ```
 
+对应 MCP 工具：
+
+```text
+tracecite_retrieve
+tracecite_materialize
+tracecite_replay
+tracecite_aggregate
+tracecite_traverse
+tracecite_verify
+```
+
 语义：
 
 | Primitive | Core 机械职责 | 不负责 |
 |---|---|---|
 | `retrieve` | Caller 指定 target/query/scope，返回 Evidence、coverage、provenance、novelty | 选择调查方向 |
 | `materialize` | 精确展开 caller 指定 range/ref | 判断是否证明假设 |
-| `replay` | 精确重读已经交付的 immutable Evidence，不计新 Evidence | 把旧证据变成新支持 |
+| `replay` | 精确重读已交付 immutable Evidence，不计新 Evidence | 把旧证据变成新支持 |
 | `aggregate` | count/distinct/group 等确定性聚合 | causal ranking |
 | `traverse` | caller 指定 seed/scope/limits 后做 bounded mechanical traversal | planner / next-best target |
-| `verify` | integrity / manifest / source-version / mechanical predicate 验证 | 验证自然语言根因 |
+| `verify` | integrity / manifest / source-version 等机械验证 | 验证自然语言根因 |
 
-核心实现入口：
-
-```text
-src/tracecite/runtime/evidence_api.py
-src/tracecite/runtime/agent_api.py
-src/tracecite/runtime/__init__.py
-src/tracecite/__init__.py
-```
-
-`probe/search/expand/sample/survey/...` 如果仍存在，只视为历史/兼容 convenience surface；**新的 MCP v1 不应把它们作为正式 Agent tool surface。**
+`probe/search/expand/sample/survey/...` 即使仍作为 Core compatibility surface 存在，也不是新的 MCP v1 正式 Agent surface。
 
 ---
 
-## 4. RetrievalSession 已稳定为唯一 Evidence session memory owner
+## 5. RetrievalSession 是唯一 Evidence session memory owner
 
 Canonical owner：
 
 ```text
 RetrievalSessionState
 RetrievalSessionStore
-```
-
-位置：
-
-```text
-src/tracecite/runtime/retrieval_session.py
-src/tracecite/runtime/session_retrieval.py
 ```
 
 它拥有机械 retrieval memory：
@@ -196,7 +207,7 @@ recent retrieval operations
 replay state
 ```
 
-它明确不拥有：
+它不拥有：
 
 ```text
 hypotheses
@@ -206,7 +217,7 @@ evidence sufficiency
 stopping decisions
 ```
 
-MCP 应采用：
+MCP 当前已经按以下方式实现：
 
 ```text
 MCP/Agent session_id
@@ -214,133 +225,200 @@ MCP/Agent session_id
 RetrievalSessionStore
 ```
 
-而不是在 MCP 再实现一套 novelty / coverage / dedup state。
+没有在 MCP 再实现 novelty / coverage / dedup 数据库。
+
+默认 MCP state root：
+
+```text
+~/.tracecite/mcp/_retrieval_sessions/
+```
+
+可通过：
+
+```text
+TRACECITE_MCP_STATE_DIR
+```
+
+覆盖。
 
 ---
 
-## 5. MCP 当前代码与目标改造
+## 6. MCP v1 当前已完成
 
-### 5.1 当前 MCP 仍是旧的宽工具面
+`tracecite-mcp@feature_for_agent` 当前已经不是旧的宽工具面。
 
-当前主要文件：
-
-```text
-samstring/tracecite-mcp
-├─ src/tracecite_mcp/server.py
-├─ tests/test_server.py
-├─ README.md
-├─ pyproject.toml
-└─ .github/workflows/ci.yml
-```
-
-当前 `server.py` 仍暴露：
+主要实现文件：
 
 ```text
-tracecite_retrieve
-tracecite_probe
-tracecite_sample
-tracecite_survey
-tracecite_search
-tracecite_expand
-tracecite_verify
-tracecite_investigation_create
-tracecite_validate_finding
-tracecite_list_extensions
-tracecite_list_capabilities
-tracecite_execute_capability
+src/tracecite_mcp/server.py
+src/tracecite_mcp/session.py
+src/tracecite_mcp/providers.py
+src/tracecite_mcp/source_policy.py
+skills/tracecite/SKILL.md
+tests/test_server.py
+tests/test_stdio_integration.py
+.github/workflows/ci.yml
+.github/workflows/agent-host-smoke.yml
+scripts/codex_app_server_smoke.py
+scripts/pi_fake_openai_server.py
 ```
 
-并且当前 `tracecite_retrieve` 没有把一个明确的 MCP `session_id` 映射到持久 `RetrievalSessionStore`。
+当前完成项：
 
-因此当前 MCP 还没有真正对齐最新 Core contract。
-
-### 5.2 已确认的 MCP v1 目标
-
-MCP 应变成 Agent-neutral thin adapter：
-
-```text
-Agent / Claude / Codex / Cursor / Other Host
-                     │
-                     │ MCP
-                     ▼
-             TraceCite MCP Server
-                     │
-          ┌──────────┼──────────┐
-          │ six canonical tools │
-          │ session mapping      │
-          │ serialization        │
-          │ transport            │
-          └──────────┬──────────┘
-                     │
-                     ▼
-              TraceCite Core
-```
-
-MCP v1 正式工具面：
-
-```text
-tracecite_retrieve
-tracecite_materialize
-tracecite_replay
-tracecite_aggregate
-tracecite_traverse
-tracecite_verify
-```
-
-MCP v1 不应拥有：
-
-```text
-planner
-hypothesis generation
-root-cause reasoning
-next_best_query
-evidence_sufficient
-stop_recommended
-Pi-specific convergence checkpoint
-```
-
-第一版也不应把以下旧 surface 暴露成正式 MCP tools：
-
-```text
-probe/sample/survey/search/expand compatibility wrappers
-Investigation/Finding tools
-Capability Registry management tools
-```
-
-如果以后 Domain Extension / server-side Provider 需要经 MCP 使用，应另外定义清楚 server-owned provider/capability registry 与安全边界，不要为了兼容旧 MCP 把它混进六原语 contract。
-
-### 5.3 MCP 下一步工作（尚未提交）
-
-按以下顺序执行：
-
-1. 修改 `src/tracecite_mcp/server.py`
-   - 收敛为六个 canonical tools；
-   - 增加 `session_id` → `RetrievalSessionStore` 映射；
-   - 不复制 Pi checkpoint / convergence 策略；
-   - 不重新实现 Core novelty/coverage/dedup。
-2. 更新 `tests/test_server.py`
-   - 断言只有目标 canonical tool surface；
-   - 测试同一 session 的 new/repeated/replay 语义；
-   - 测试不同 session 隔离；
-   - 测试 materialize/replay immutable SHA 约束；
-   - 测试 aggregate；
-   - 对 traverse 的 provider transport 只实现 Core 已能稳定表达的部分，不发明 provider semantics。
-3. 更新 `README.md`
-   - 架构改为 Agent → MCP → six primitives → Core；
-   - 删除“Investigation Runtime / Capability Registry 是 MCP 主架构”的旧描述。
-4. 必要时更新 `pyproject.toml` 的 Core compatibility 说明。
-5. 用 Core `feature_for_agent` 跑 MCP CI。
-6. 再做真实 MCP Host / Inspector / Agent smoke test。
+1. `server.py` 只暴露六个 canonical MCP tools；
+2. `retrieve/materialize/replay` 明确要求 `session_id` 并映射到 Core `RetrievalSessionStore`；
+3. MCP 没有复制 Pi checkpoint / convergence / stop 策略；
+4. 本地 source access 使用 Host-owned allowlist：
+   `TRACECITE_MCP_ALLOWED_ROOTS`；
+5. Provider 通过 Host process-local registry 注册，模型不能发送 Python provider 对象或可执行 provider snapshot；
+6. Generic Skill 已是 Agent-neutral，不含 benchmark 特定根因路径或 stopping 建议；
+7. 普通 unit/stdio/build CI 已覆盖 Ubuntu Python 3.10–3.14 与 macOS Python 3.14；
+8. 已增加真实 MCP stdio SDK round-trip；
+9. 已增加 Codex CLI 与 Pi Agent 两条真实 Host smoke。
 
 ---
 
-## 6. Core 中 Pi 相关位置：当前仍保留，MCP 迁移尚未修改
+## 7. MCP transport 与 Host 验收结果
 
-以下内容是 **Pi benchmark / Pi adapter 层**。它们当前仍在 Core 仓库里，新的 MCP 工作尚未迁移、删除或替换这些文件。
+### 7.1 真实 stdio MCP
 
-它们可以继续作为历史 benchmark 和 Pi A/B harness，但 **MCP 不应依赖这些文件作为产品 contract**。
+提交：
 
-### 6.1 Pi Adapter / Bridge / Transcript 文件
+```text
+e19e8364000c16888933094fc5e3856b99d1762a
+test(mcp): add real stdio protocol smoke
+```
+
+`tests/test_stdio_integration.py` 不直接调用 Python server 函数，而是：
+
+```text
+spawn tracecite-mcp stdio server
+        ↓
+MCP ClientSession.initialize
+        ↓
+list_tools
+        ↓
+call tracecite_retrieve
+        ↓
+repeat same session call
+        ↓
+verify repeated-evidence semantics
+        ↓
+call aggregate
+```
+
+对应 MCP CI Run：
+
+```text
+33377768857
+```
+
+结果：全绿。
+
+### 7.2 Codex CLI Host
+
+Host workflow：
+
+```text
+.github/workflows/agent-host-smoke.yml
+```
+
+Codex smoke 路径：
+
+```text
+Codex CLI / app-server
+        ↓ MCP
+tracecite-mcp
+        ↓ public TraceCite API
+tracecite-core
+```
+
+验证内容：
+
+- 安装官方 `@openai/codex`；
+- 通过 Codex MCP config 注册 stdio TraceCite server；
+- Codex inventory 看到且只看到六个 canonical TraceCite tools；
+- 通过 Codex app-server 的 MCP tool-call API 真正调用 `tracecite_retrieve`；
+- 第一次返回新 Evidence；
+- 同一 session 第二次调用返回 `new_evidence=0` 且有 repeated evidence；
+- 不依赖真实模型推理/API key 完成 MCP transport 验证。
+
+### 7.3 Pi Agent Host
+
+Pi 本身没有与 Codex 相同的原生 MCP client surface，因此通过：
+
+```text
+pi-mcp-adapter
++ standard project .mcp.json
+```
+
+真实路径：
+
+```text
+Pi Agent
+   ↓ Pi tool call
+pi-mcp-adapter
+   ↓ standard MCP config / stdio
+tracecite-mcp
+   ↓ public TraceCite API
+tracecite-core
+```
+
+测试使用本地 deterministic OpenAI-compatible fake model 驱动一个真实 Pi Agent tool-call loop：
+
+1. Pi 向模型暴露 adapter 的 `mcp` tool；
+2. fake model 请求调用 TraceCite MCP retrieve；
+3. adapter 通过 `.mcp.json` 启动/调用 `tracecite-mcp`；
+4. Core 返回包含 `target event` 的 Evidence；
+5. adapter 将真实 tool result 作为 `role=tool` 回送模型；
+6. fake model 完成 Agent turn。
+
+这里发现并确认了一个 **Pi adapter 特有命名行为**：
+
+```text
+MCP server name: tracecite
+canonical MCP tool: tracecite_retrieve
+
+pi-mcp-adapter internal route:
+tracecite_tracecite_retrieve
+```
+
+这是 `pi-mcp-adapter` 的 `<server>_<tool>` namespace，不是 TraceCite 产品 API。**不要因此把 TraceCite 的 canonical MCP tool 改成双前缀。**
+
+### 7.4 双 Host 绿灯
+
+最终双绿 Host run：
+
+```text
+Agent Host MCP Smoke
+Run 33379555848
+```
+
+结果：
+
+```text
+codex-host  success
+pi-host     success
+```
+
+同一功能 HEAD 的普通 MCP CI：
+
+```text
+MCP CI
+Run 33379555845
+```
+
+结果：Ubuntu 3.10–3.14、macOS 3.14 与 package build 全部 success。
+
+因此目前可以认为：
+
+> **TraceCite MCP v1 的 six-tool contract、stdio transport、session mapping，以及至少 Codex CLI / Pi 两种不同 Agent Host 的标准 MCP 接入路径已经得到实际端到端验证。**
+
+---
+
+## 8. Pi benchmark 层仍然与 MCP 产品层隔离
+
+Core 仍保留 Pi-specific benchmark/adapter 文件，例如：
 
 ```text
 benchmarks/agent-investigation/pi_ab_runtime.py
@@ -349,153 +427,55 @@ benchmarks/agent-investigation/pi_session_to_transcript.py
 benchmarks/agent-investigation/pi_tracecite_bridge.py
 benchmarks/agent-investigation/pi_tracecite_extension.ts
 benchmarks/agent-investigation/pi_tracecite_extension_impl.ts
-```
-
-状态：
-
-```text
-保留
-Pi-specific
-未迁移到 MCP
-未因本轮 MCP 设计而修改
-```
-
-其中：
-
-- `pi_tracecite_bridge.py`：Pi tool → Python/Core bridge；
-- `pi_tracecite_extension_impl.ts`：Pi tool registration、compact projection、Host activity、checkpoint 等；
-- `pi_log_code_tracecite_extension.ts`：log+code A/B 的 runtime-log access guard；
-- `pi_session_to_transcript.py`：Pi session → benchmark transcript；
-- `pi_ab_runtime.py`：A/B runtime 辅助逻辑。
-
-这些能力中只有“调用六个 Core primitives”的思想可复用；Pi tool registration、checkpoint、A/B guard、Pi transcript 都不属于 MCP Core contract。
-
-### 6.2 Pi Skill
-
-```text
 .pi/skills/tracecite/SKILL.md
 ```
 
-状态：
+以及多条 `.github/workflows/pi-*.yml` benchmark/probe workflow。
+
+这些目前仍有历史 benchmark/provenance 价值，不要一次性删除。
+
+但它们属于：
 
 ```text
-保留
-Pi-specific
-当前仍依赖 Pi extension/tool naming
-尚未改成通用 MCP/Agent Skill
+Pi Host / benchmark harness
 ```
 
-不要直接把它当作 MCP Skill 原样复制。
-
-### 6.3 通用 Agent Skill 候选
+而不是：
 
 ```text
-.agents/skills/tracecite-investigate/SKILL.md
+TraceCite MCP product contract
 ```
 
-状态：
+特别是：
 
-```text
-保留
-比 .pi Skill 更接近通用版本
-尚未针对新的 MCP 六工具面完成最终 review / rewrite
-```
-
-后续应把“TraceCite API 正确使用语义”抽成 Agent-neutral skill：
-
-```text
-Core/MCP tool semantics
-+ no_match / no_new_evidence / replay / provenance rules
-+ Evidence boundary rules
-```
-
-但不能加入：
-
-```text
-preferred hypothesis
-benchmark-specific search path
-causal recommendation
-stop recommendation
-```
-
-### 6.4 Pi-specific tests
-
-当前明确的 Pi 测试：
-
-```text
-tests/test_pi_ab_benchmark_policy.py
-tests/test_pi_ab_runtime.py
-tests/test_pi_host_tool_activity.py
-tests/test_pi_session_to_transcript.py
-tests/test_pi_tracecite_bridge.py
-```
-
-状态：
-
-```text
-继续用于 Pi benchmark/harness
-本轮 MCP 尚未修改
-MCP 应在 tracecite-mcp 仓库维护自己的 contract/integration tests
-```
-
-### 6.5 Pi workflows
-
-当前 Core 中仍保留：
-
-```text
-.github/workflows/pi-agent-139417-ab-validation.yml
-.github/workflows/pi-agent-few-mb-forced-ab.yml
-.github/workflows/pi-agent-k8s-focused.yml
-.github/workflows/pi-agent-moderate-suite-preflight.yml
-.github/workflows/pi-agent-moderate-suite.yml
-.github/workflows/pi-agent-runnable-16-forced-tracecite.yml
-.github/workflows/pi-agent-scale-priority-forced-tracecite.yml
-.github/workflows/pi-evidence-runtime-ab.yml
-.github/workflows/pi-log-code-ab.yml
-.github/workflows/pi-scale-5case-repeat-ab.yml
-.github/workflows/pi-tracecite-convergence-probe.yml
-.github/workflows/pi-tracecite-skill-140268-retry.yml
-.github/workflows/pi-tracecite-skill-scale-gate.yml
-.github/workflows/pi-tracecite-skill-two-scale.yml
-.github/workflows/pi-under20mb-forced-tracecite-ab.yml
-```
-
-状态：
-
-```text
-全部仍属于 Pi benchmark/probe 层
-本轮 MCP 尚未迁移/修改
-不要让 MCP 产品架构依赖这些 workflow
-```
-
-后续可以逐步清理过时 workflow，但在 benchmark 结果仍需要追溯时不要一次性删除历史 harness。
+- Pi checkpoint/convergence logic 不进入 MCP；
+- A/B 中禁止 Native evidence-content tools 的 guard 不进入 MCP；
+- benchmark hidden gold/scorer 不进入 MCP；
+- Pi transcript conversion 不进入 MCP；
+- case-specific preferred investigation path 不进入 Skill/MCP。
 
 ---
 
-## 7. Pi A/B 当前已知结果与解释边界
+## 9. 当前 benchmark 结论仍保持克制
 
-TraceCite 当前最稳定的优势是：
+历史 Pi A/B 目前较强证明的是：
 
-> **降低 Evidence/context 的重复传输和模型处理负担，尤其在大日志场景。**
+> **TraceCite 能降低 Evidence/context 的重复传输和模型处理负担，尤其在大日志场景。**
 
-已有多轮实验常见到 processed context / cache-read 下降约 40%–70%，但不能宣传成所有 case 固定节省比例。
+不能据此宣称所有 case 都固定节省某个比例，也不能把 `input + cacheRead` 称为 billable tokens；应称 processed context/workload。
 
-### Run #5
+已知代表性结果：
 
-Run：
+### 140039
 
-```text
-33367498319
-```
-
-已确认的 `140039`：
+历史 Run #5 中曾出现：
 
 ```text
 Native:    timeout
-TraceCite: completed, 找到核心 runc/seccomp/EINVAL 根因链
+TraceCite: completed，找到 runc/seccomp/EINVAL 根因链
 ```
 
-Stop total tokens（按本项目约定的 stop-time usage 口径）：
+stop-time processed context 口径约：
 
 ```text
 Native     ≈ 2.332M
@@ -503,140 +483,153 @@ TraceCite  ≈ 1.325M
 observed delta ≈ -43.2%
 ```
 
-但双方都有 provider rate-limit contamination，因此这一 pair 不能作为正式公平 A/B 因果结论。
+但双方存在 provider rate-limit contamination，因此这对不能作为正式公平 A/B 因果结论。
 
-`139417`：历史 runtime log 当前远端 404，已从 runnable log+code matrix 剔除；保留历史 case 文件只作 provenance。
+### 139417
 
-`140268`：仍是 discovery-hard case；Native / TraceCite 都曾无法稳定找到隐藏 mechanism，说明 TraceCite 目前没有证明会普遍提升根因发现能力。
+历史 runtime log 远端 404，已从 runnable log+code matrix 排除；保留历史 case 仅作 provenance。
 
-`140848`：历史结果显示双方都能找到 decisive panic/source mechanism，但 Agent 可能继续搜索到 timeout；TraceCite 能显著减少上下文膨胀，但 convergence 仍是 Host/Agent 问题。
+### 140268
 
-因此当前产品结论应保持：
+仍是 discovery-hard case；Native / TraceCite 都曾无法稳定找到隐藏 mechanism。不能说 TraceCite 已证明普遍提升 root-cause discovery/correctness。
+
+### 140848
+
+双方都曾找到 decisive panic/source mechanism，但 Agent 可能继续搜索到 timeout。TraceCite 能减少上下文膨胀，convergence 仍主要属于 Agent/Host 问题。
+
+当前产品结论保持：
 
 ```text
 已较强证明：bounded/provenance-aware Evidence flow 与 context efficiency
 尚未证明：普遍提高 Agent root-cause correctness
+仍需验证：标准 MCP Host 路径下的真实 A/B 是否保持同样优势
 仍需改进：hard discovery + Agent convergence
 ```
 
 ---
 
-## 8. Benchmark 与 MCP 必须继续隔离
+## 10. 下一阶段：把 Pi benchmark 平行迁到标准 MCP
 
-Benchmark 的 Pi guard / scorer / hidden gold 不得进入 MCP 产品逻辑。
+这是现在最重要的下一步。
 
-保持：
+不要立即删除旧 `pi_tracecite_bridge.py` / Pi extension。先做 **parallel standard-MCP benchmark arm**，确保可以和历史 bridge 结果比较与回归。
 
-```text
-Agent-visible input
-        !=
-evaluator-only gold
-```
+建议顺序：
 
-MCP 不应包含：
+1. 在 Core benchmark harness 新增/改造一条标准 MCP TraceCite arm：
 
 ```text
-case-specific hints
-preferred investigation path
-known fix/root cause
-benchmark stopping rule
+Pi Agent
+  ↓
+pi-mcp-adapter
+  ↓ .mcp.json
+tracecite-mcp@feature_for_agent
+  ↓
+tracecite-core@feature_for_agent
 ```
 
-`pi_log_code_tracecite_extension.ts` 中“TraceCite arm 禁止 native 读取 runtime log”的行为只是 A/B 公平性 guard，不是产品 MCP 必需能力。
+2. 保持 benchmark-only guard 在 Pi harness：
+   - TraceCite arm 的 runtime evidence content 只能经 TraceCite；
+   - `find/ls` 最多做定位，不作为 evidence content bypass；
+   - guard 不进入 MCP 产品逻辑。
+3. 保持同一个 Agent prompt / model / case / timeout / scorer / hidden-gold separation；
+4. 先做 1 个 smoke case，确认：
+   - Pi 真正调用 adapter/MCP；
+   - TraceCite tool result 被 transcript 捕获；
+   - scorer 可继续工作；
+   - token/context accounting 没因 adapter transcript 格式失真；
+5. 再做 4-case 或稳定性重复；
+6. 比较：
+
+```text
+Native
+vs
+旧 Pi bridge TraceCite
+vs
+标准 MCP TraceCite
+```
+
+重点回答：
+
+- 标准 MCP transport 是否保持 Evidence/context efficiency；
+- adapter 是否引入明显额外 token/latency；
+- RetrievalSession repeated-evidence 行为是否在真实 Agent trajectory 中生效；
+- 旧 bridge 是否还包含 MCP 不应拥有的特殊行为；
+- 标准 MCP 是否足以成为后续 Codex/Pi/其他 Host 的统一产品路径。
+
+只有标准 MCP benchmark 路径稳定后，再考虑逐步退休旧 Pi bridge。
 
 ---
 
-## 9. Core 中仍存在但 MCP v1 不应暴露的 secondary surface
+## 11. Generic Skill 后续原则
 
-Core 当前仍有一些 secondary/legacy API，例如：
+`tracecite-mcp/skills/tracecite/SKILL.md` 已经是 Agent-neutral 基线。
 
-```text
-InvestigationState / InvestigationStore
-BudgetPolicy
-Finding validation
-Capability Registry
-older integrations / compatibility wrappers
-```
-
-它们目前不要求从 Core 删除；但 MCP v1 不要因为它们存在就全部暴露给 Agent。
-
-MCP v1 的依赖面应刻意保持：
+不同 Host 可以有薄包装，但共享语义必须保持：
 
 ```text
-six canonical primitives
-+ request/target types
-+ RetrievalSessionStore
-+ 必需的 stable provider/identity types（仅在真正需要时）
+six tool semantics
+no_match boundary
+new_evidence / repeated_evidence boundary
+replay boundary
+provenance/source-version rules
+identity/correlation safety
+Agent owns causal reasoning and stop decision
 ```
 
-这样 Core 内部后续重构不会强迫 MCP 跟着大改。
+不能加入：
+
+```text
+preferred hypothesis
+benchmark-specific search path
+known root cause / fix
+causal recommendation
+stop recommendation
+```
 
 ---
 
-## 10. 分支清理状态
+## 12. 新对话接手顺序
 
-Core 当前计划长期保留：
-
-```text
-main
-feature_for_agent
-experiment/evidence-intelligence
-```
-
-希望删除的旧分支：
-
-```text
-refactor/agent-v2
-refactor/extension-v2-context
-tmp/evidence-relationship-compact
-work/evidence-intelligence-finalize
-```
-
-截至本文档更新时，连接器没有提供 delete-ref 操作，因此这些旧分支尚未由本会话删除。不要误认为已经完成分支清理。
-
----
-
-## 11. 新对话接手顺序
-
-如果下一步是继续 MCP，按这个顺序：
+下一次继续工作时：
 
 1. 读本文件；
-2. 检查 `samstring/tracecite-core@feature_for_agent` 当前 HEAD；
-3. 读：
-   - `docs/PROJECT_GUARDRAILS.md`
-   - `docs/evidence-runtime-architecture.zh-CN.md`
-   - `docs/adr-agent-runtime-semantic-boundary.zh-CN.md`
-   - `docs/agent-integration.md`
-4. 检查 `samstring/tracecite-mcp@feature_for_agent` HEAD；
-5. 读 MCP：
-   - `src/tracecite_mcp/server.py`
-   - `tests/test_server.py`
-   - `README.md`
-   - `.github/workflows/ci.yml`
-6. 直接实施 MCP 六原语 + `RetrievalSessionStore` session mapping；
-7. 更新 MCP tests / README；
-8. 跑 MCP CI；
-9. 再做真实 MCP Host/Agent 验收；
-10. Generic Skill 重构可以随后独立进行，不要阻塞 MCP v1。
+2. 检查 `tracecite-core@feature_for_agent` 当前 HEAD 与 CI；
+3. 检查 `tracecite-mcp@feature_for_agent` 当前 HEAD；
+4. 检查 MCP 两条 workflow：
 
-如果下一步是继续 Pi benchmark，则先检查最新 Actions/artifact，不要用旧聊天中的 run 状态猜测当前结果。
+```text
+.github/workflows/ci.yml
+.github/workflows/agent-host-smoke.yml
+```
+
+5. 不要重新做六原语 MCP 改造；它已经完成；
+6. 不要重新证明基础 stdio transport；它已经完成；
+7. 不要再问 Codex/Pi 能否接 MCP；两条 Host smoke 已经通过；
+8. 直接从 **Pi benchmark 标准 MCP arm** 开始；
+9. 旧 Pi bridge 暂时保留作对照，不立即删除；
+10. 若 benchmark 出现问题，优先判断是：
+
+```text
+Host adapter issue
+benchmark harness issue
+model/provider variance
+Core contract defect
+```
+
+只有最后一种才考虑改 Core public API。
 
 ---
 
-## 12. 不要做的事情
-
-后续开发保持这些红线：
+## 13. 红线
 
 1. 不把 planner / reasoning / root-cause logic 放进 TraceCite Core。
 2. 不让 MCP 发出 `stop_recommended` / `evidence_sufficient`。
-3. 不把 Pi convergence checkpoint 复制成 MCP v1 的 canonical semantics。
+3. 不把 Pi convergence checkpoint 复制成 MCP canonical semantics。
 4. 不在 MCP 重新实现 novelty / coverage / Evidence identity。
 5. 不为了 benchmark 分数给 Skill/MCP 注入隐藏答案或 preferred search path。
-6. 不把 `input + cacheRead` 称为 billable tokens；需要时明确叫 processed context/workload。
-7. 不因为单个 difficult case 表现不好就重新扩大 Core public API。
-
----
-
-## 13. 当前一句话结论
-
-> **TraceCite Core 的 Agent/Evidence 架构边界和六个 canonical Evidence primitives 已稳定，可以把 `feature_for_agent` 作为 MCP 的 Core 基线；下一步工作重点已经从“继续改 Core 架构”切换为“在 `tracecite-mcp@feature_for_agent` 实现六原语薄适配 + RetrievalSession 映射”，Pi 相关代码继续作为 benchmark/Host 专用层保留，不进入 MCP contract。**
+6. 不把 benchmark guard 伪装成产品安全/语义能力。
+7. 不把 processed context 当 billable tokens 宣传。
+8. 不因为单个 difficult case 表现不好就扩大 Core public API。
+9. 不因为 `pi-mcp-adapter` 有双前缀内部路由就改 TraceCite canonical tool 名。
+10. 不在标准 MCP benchmark 稳定前删除旧 Pi bridge/provenance harness。
