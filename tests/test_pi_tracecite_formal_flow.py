@@ -28,7 +28,7 @@ def test_formal_flow_uses_single_runner_and_new_mcp() -> None:
     assert "pi_log_code_tracecite_extension.ts" not in text
 
 
-def test_runner_explicitly_activates_tracecite_without_restricting_agent() -> None:
+def test_runner_explicitly_activates_tracecite_and_only_restricts_runtime_evidence_channel() -> None:
     text = RUNNER.read_text(encoding="utf-8")
 
     assert 'task = f"/skill:tracecite {question}" if args.mode == "tracecite" else question' in text
@@ -36,7 +36,9 @@ def test_runner_explicitly_activates_tracecite_without_restricting_agent() -> No
     assert "Deliberately no --tools allowlist" in text
     assert '"--tools"' not in text
     assert '"--no-skills"' not in text
-    assert '"native_tools_policy": "agent-default-unrestricted"' in text
+    assert '"agent-default-unrestricted"' in text
+    assert '"native-source-tools-allowed-runtime-evidence-blocked"' in text
+    assert '"tracecite_runtime_evidence_enforcement": "hard-block-before-execution" if args.mode == "tracecite" else None' in text
 
 
 def test_formal_flow_produces_answer_quality_tokens_and_channel_observability() -> None:
@@ -58,13 +60,16 @@ def test_formal_flow_produces_answer_quality_tokens_and_channel_observability() 
     assert "Agent runner exited with" in text
 
 
-def test_host_observes_but_never_blocks_native_evidence_access() -> None:
+def test_host_blocks_native_runtime_evidence_only_for_tracecite_benchmark_mode() -> None:
     text = HOST.read_text(encoding="utf-8")
 
     assert "recordTraceCiteRuntimeAccess" in text
-    assert "recordNativeRuntimeAccess" in text
-    assert "Observability only" in text
-    assert "return undefined" in text
+    assert "detectNativeRuntimeAccess" in text
+    assert 'BENCHMARK_MODE === "tracecite"' in text
+    assert "BLOCKED_NATIVE_EVIDENCE_PATH" in text
+    assert "blocked_before_execution" in text
+    assert "block: true" in text
+    assert "Native tools remain available for source-code exploration" in text
 
     forbidden = (
         "TRACECITE_AGENT_RESOURCE_ROOTS",
