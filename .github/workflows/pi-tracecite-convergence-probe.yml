@@ -1,0 +1,202 @@
+name: Pi TraceCite Convergence Probe
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/pi-tracecite-convergence-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  tracecite-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - case_id: kubernetes-139417-scale
+            case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-139417
+          - case_id: kubernetes-140268
+            case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-140268
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      CASE_ID: ${{ matrix.case_id }}
+      CASE_DIR: ${{ matrix.case_dir }}
+      RESULT_ROOT: /tmp/pi-tracecite-convergence/${{ matrix.case_id }}
+      PREP: /tmp/pi-tracecite-convergence/${{ matrix.case_id }}/prepared
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev]"
+
+      - name: Verify convergence integration gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_session_novelty_regressions.py \
+            tests/test_pi_host_tool_activity.py \
+            tests/test_pi_tracecite_bridge.py \
+            tests/test_pi_session_to_transcript.py \
+            tests/test_benchmark_run_result.py
+          python scripts/check_architecture.py
+
+      - name: Configure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          if not model:
+              raise SystemExit('BENCH_MODEL is empty')
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['OPENAI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Prepare case
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT_ROOT"
+          mkdir -p "$RESULT_ROOT" "$PREP"
+          python -m tracecite.root_cause_benchmarking validate "$CASE_DIR" > "$RESULT_ROOT/validate.json"
+          python -m tracecite.root_cause_benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT_ROOT/prepare.json"
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          python - "$PREPARED" >> "$GITHUB_ENV" <<'PY'
+          import json, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text())
+          inputs = data.get('inputs') or []
+          if len(inputs) != 1:
+              raise SystemExit(f'expected one input, got {len(inputs)}')
+          f = Path(inputs[0]['path']).resolve()
+          print(f'INPUT_ROOT={f.parent}')
+          print(f'INPUT_FILE={f.name}')
+          print(f'INPUT_BYTES={f.stat().st_size}')
+          print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
+          PY
+
+      - name: Run TraceCite convergence probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          BASE_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, investigation order, conclusions, evidence sufficiency, and when to stop. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and explicitly state when the supplied evidence is insufficient.'
+          TRACE_PROMPT="$BASE_PROMPT This is a controlled TraceCite-only convergence probe. Every operation that inspects or derives from evidence content MUST use the TraceCite Evidence Runtime tools exposed by this Host: tracecite_retrieve, tracecite_materialize, tracecite_replay, tracecite_aggregate, tracecite_traverse, and tracecite_verify. Native evidence-content tools are intentionally unavailable. find/ls may only locate files. Follow the TraceCite skill's convergence checkpoint discipline: repeated low-novelty evidence operations require reassessing the unresolved question and evidence boundary before continuing. You still own the hypothesis, query/entity/range/seed, reasoning, sufficiency judgment, conclusion, and stopping point."
+          mkdir -p "$RESULT_ROOT/pi-tracecite-session"
+          cd "$INPUT_ROOT"
+          set +e
+          TRACECITE_PI_SESSION="$RESULT_ROOT/tracecite-retrieval-session.json" \
+          TRACECITE_PI_ACTIVITY="$RESULT_ROOT/tracecite-host-tool-activity.json" \
+          timeout -k 30s 1200s pi \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT_ROOT/pi-tracecite-session" \
+            --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+            --tools find,ls,tracecite_retrieve,tracecite_materialize,tracecite_replay,tracecite_aggregate,tracecite_traverse,tracecite_verify \
+            --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+            --no-prompt-templates --no-context-files \
+            --system-prompt "$TRACE_PROMPT" "$QUESTION" \
+            > "$RESULT_ROOT/pi-tracecite-answer.md" 2> "$RESULT_ROOT/pi-tracecite-stderr.log"
+          code=$?
+          set -e
+          echo "$code" > "$RESULT_ROOT/pi-tracecite-exit.txt"
+
+      - name: Convert and score
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          SESSION="$(find "$RESULT_ROOT/pi-tracecite-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          ANSWER="$RESULT_ROOT/pi-tracecite-answer.md"
+          EXIT="$RESULT_ROOT/pi-tracecite-exit.txt"
+          if [[ -n "$SESSION" && -f "$ANSWER" && -f "$EXIT" ]]; then
+            TRANSCRIPT="$RESULT_ROOT/pi-tracecite-transcript.jsonl"
+            SCORE="$RESULT_ROOT/pi-tracecite-score.json"
+            RUN_RESULT="$RESULT_ROOT/pi-tracecite-run-result.json"
+            python benchmarks/agent-investigation/pi_session_to_transcript.py \
+              "$SESSION" "$ANSWER" "$TRANSCRIPT" \
+              --mode "pi-tracecite-convergence" --model "$BENCH_MODEL"
+            python -m tracecite.root_cause_benchmarking score \
+              "$CASE_DIR" "$TRANSCRIPT" > "$SCORE" || true
+            if [[ -f "$SCORE" ]]; then
+              python benchmarks/agent-investigation/run_result.py \
+                --score "$SCORE" \
+                --exit-code-file "$EXIT" \
+                --stderr "$RESULT_ROOT/pi-tracecite-stderr.log" \
+                --session "$SESSION" \
+                --transcript "$TRANSCRIPT" \
+                --output "$RUN_RESULT" || true
+            fi
+          fi
+
+      - name: Print probe summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RESULT_ROOT'])
+          rr = root / 'pi-tracecite-run-result.json'
+          if rr.is_file():
+              data = json.loads(rr.read_text())
+              print(json.dumps({
+                  'case_id': os.environ['CASE_ID'],
+                  'run_validity': data.get('run_validity'),
+                  'task_result': data.get('task_result'),
+                  'trajectory': data.get('trajectory'),
+              }, indent=2, sort_keys=True))
+          else:
+              print(json.dumps({'case_id': os.environ['CASE_ID'], 'run_result': None}, indent=2))
+          PY
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-tracecite-convergence-${{ matrix.case_id }}
+          path: ${{ env.RESULT_ROOT }}
+          if-no-files-found: warn
