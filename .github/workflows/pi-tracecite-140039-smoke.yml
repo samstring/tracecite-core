@@ -98,18 +98,22 @@ jobs:
             gemini)
               test -n "${GEMINI_API_KEY:-}" || { echo 'GEMINI_API_KEY is empty' >&2; exit 2; }
               test -n "${GEMINI_MODEL:-}" || { echo 'GEMINI_MODEL is empty' >&2; exit 2; }
-              echo 'PI_PROVIDER=gemini' >> "$GITHUB_ENV"
-              echo 'PI_PROVIDER_NAME=Gemini OpenAI-compatible' >> "$GITHUB_ENV"
-              echo 'BENCH_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai' >> "$GITHUB_ENV"
+              echo 'PI_PROVIDER=google' >> "$GITHUB_ENV"
+              echo 'PI_PROVIDER_NAME=Google Gemini' >> "$GITHUB_ENV"
+              echo 'BENCH_API=google-generative-ai' >> "$GITHUB_ENV"
+              echo 'BENCH_BASE_URL=https://generativelanguage.googleapis.com/v1beta' >> "$GITHUB_ENV"
               echo "BENCH_MODEL=$GEMINI_MODEL" >> "$GITHUB_ENV"
+              echo 'PI_THINKING=medium' >> "$GITHUB_ENV"
               ;;
             minimax|gmi)
               test -n "${GMI_API_KEY:-}" || { echo 'GMI_API_KEY/OPENAI_API_KEY is empty' >&2; exit 2; }
               test -n "${GMI_MODEL:-}" || { echo 'GMI_MODEL/TRACECITE_BENCH_MODEL is empty' >&2; exit 2; }
               echo 'PI_PROVIDER=gmi' >> "$GITHUB_ENV"
               echo 'PI_PROVIDER_NAME=GMI OpenAI-compatible' >> "$GITHUB_ENV"
+              echo 'BENCH_API=openai-completions' >> "$GITHUB_ENV"
               echo 'BENCH_BASE_URL=https://api.gmi-serving.com/v1' >> "$GITHUB_ENV"
               echo "BENCH_MODEL=$GMI_MODEL" >> "$GITHUB_ENV"
+              echo 'PI_THINKING=off' >> "$GITHUB_ENV"
               ;;
             *)
               echo "Unsupported TRACECITE_BENCH_PROVIDER: $provider (expected gemini|minimax|gmi)" >&2
@@ -123,6 +127,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${PI_PROVIDER:-}" || { echo 'PI_PROVIDER is empty' >&2; exit 2; }
+          test -n "${BENCH_API:-}" || { echo 'BENCH_API is empty' >&2; exit 2; }
           test -n "${BENCH_BASE_URL:-}" || { echo 'BENCH_BASE_URL is empty' >&2; exit 2; }
           test -n "${BENCH_MODEL:-}" || { echo 'BENCH_MODEL is empty' >&2; exit 2; }
           mkdir -p "$PI_CODING_AGENT_DIR"
@@ -130,19 +135,30 @@ jobs:
           import json, os
           from pathlib import Path
           provider = os.environ['PI_PROVIDER']
+          is_google = provider == 'google'
+          model = {
+              'id': os.environ['BENCH_MODEL'],
+              'name': os.environ['BENCH_MODEL'],
+              'reasoning': is_google,
+              'input': ['text'],
+              'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+              'contextWindow': 1_048_576 if is_google else 1_000_000,
+              'maxTokens': 65_536 if is_google else 4_096,
+          }
+          if not is_google:
+              model['compat'] = {
+                  'supportsDeveloperRole': False,
+                  'supportsReasoningEffort': False,
+              }
           payload = {'providers': {provider: {
               'name': os.environ['PI_PROVIDER_NAME'],
               'baseUrl': os.environ['BENCH_BASE_URL'],
-              'api': 'openai-completions',
-              'models': [{
-                  'id': os.environ['BENCH_MODEL'], 'name': os.environ['BENCH_MODEL'],
-                  'reasoning': False, 'input': ['text'],
-                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
-                  'contextWindow': 1_000_000, 'maxTokens': 4_096,
-                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
-              }],
+              'api': os.environ['BENCH_API'],
+              'models': [model],
           }}}
-          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          path = Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json'
+          path.write_text(json.dumps(payload, indent=2) + '\n')
+          print(f'configured {provider}/{os.environ["BENCH_MODEL"]} via {os.environ["BENCH_API"]}')
           PY
 
       - name: Prepare runtime log
@@ -221,7 +237,7 @@ jobs:
           QUESTION="$(cat "$QUESTION_FILE")"
           PROMPT="You are a real coding agent debugging a failure with a complete pre-fix source repository as your current working directory. The source tree is fixed to the bug-producing pre-fix commit; do not use the web, issue/PR content, remote git operations, or post-fix knowledge. A failing runtime log is available at $RUNTIME_LOG. EVERY operation that inspects or derives from runtime-log content MUST use the standard TraceCite MCP tools. Native read/grep/bash/find/ls are only for source-code exploration. Follow the TraceCite Agent Skill closely, including its canonical call shapes and result semantics. You own hypotheses, causal reasoning, source exploration, evidence sufficiency, final conclusions, and when to stop. Cite important claims using exact runtime-log or source path:L<line> references you actually observed, and distinguish observation from inference."
           case "$PI_PROVIDER" in
-            gemini) API_KEY="$GEMINI_API_KEY" ;;
+            google) API_KEY="$GEMINI_API_KEY" ;;
             gmi) API_KEY="$GMI_API_KEY" ;;
             *) echo "Unexpected PI_PROVIDER: $PI_PROVIDER" >&2; exit 2 ;;
           esac
@@ -235,7 +251,7 @@ jobs:
           TRACECITE_RUNTIME_LOG="$RUNTIME_LOG" \
           timeout -k 30s 1200s pi \
             --provider "$PI_PROVIDER" --model "$BENCH_MODEL" --api-key "$API_KEY" \
-            --thinking off --mode text --print \
+            --thinking "$PI_THINKING" --mode text --print \
             --session-dir "$RESULT_ROOT/pi-tracecite-session" \
             --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_log_code_benchmark_host.ts" \
             --tools read,bash,grep,find,ls,tracecite_retrieve,tracecite_materialize,tracecite_replay,tracecite_aggregate,tracecite_traverse,tracecite_verify \
@@ -247,7 +263,7 @@ jobs:
           set -e
           echo "$code" > "$RESULT_ROOT/pi-tracecite-exit.txt"
 
-      - name: Record smoke summary
+      - name: Record and verify smoke summary
         if: always()
         shell: bash
         run: |
@@ -265,24 +281,34 @@ jobs:
           tool_summary = None
           if activity.exists():
               tool_summary = json.loads(activity.read_text()).get('summary')
+          answer_nonempty = answer.exists() and bool(answer.read_text(errors='replace').strip())
+          runtime_log_mcp_accesses = sum(1 for _ in log_access.open()) if log_access.exists() else 0
           summary = {
               'schema_version': 1,
               'case_id': os.environ['CASE_ID'],
               'integration': 'agent-skill-standard-mcp-core',
-              'provider': os.environ.get('PI_PROVIDER'),
+              'provider': os.environ.get('TRACECITE_BENCH_PROVIDER'),
+              'transport_provider': os.environ.get('PI_PROVIDER'),
+              'api': os.environ.get('BENCH_API'),
               'model': os.environ.get('BENCH_MODEL'),
               'core_sha': os.environ.get('GITHUB_SHA'),
               'mcp_sha': os.environ['TRACECITE_MCP_REF'],
               'runtime_log_bytes': int(os.environ.get('RUNTIME_LOG_BYTES', '0') or 0),
               'exit_code': exit_code,
               'completed_without_timeout': exit_code == 0,
-              'answer_nonempty': answer.exists() and bool(answer.read_text(errors='replace').strip()),
-              'runtime_log_mcp_accesses': sum(1 for _ in log_access.open()) if log_access.exists() else 0,
+              'answer_nonempty': answer_nonempty,
+              'runtime_log_mcp_accesses': runtime_log_mcp_accesses,
               'blocked_native_log_attempts': sum(1 for _ in guard.open()) if guard.exists() else 0,
               'tool_summary': tool_summary,
           }
           (root / 'smoke-summary.json').write_text(json.dumps(summary, indent=2) + '\n')
           print(json.dumps(summary, indent=2))
+          if exit_code != 0:
+              raise SystemExit(f'Pi exited with {exit_code}')
+          if not answer_nonempty:
+              raise SystemExit('TraceCite smoke produced an empty final answer')
+          if runtime_log_mcp_accesses <= 0:
+              raise SystemExit('TraceCite smoke did not access the runtime log through MCP')
           PY
 
       - name: Upload TraceCite smoke artifact
