@@ -1,16 +1,11 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
-import { basename, delimiter, dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const CODE_ROOT = resolve(process.env.TRACECITE_CODE_ROOT || process.cwd());
 const RUNTIME_LOG = resolve(process.env.TRACECITE_RUNTIME_LOG || "");
-const AGENT_RESOURCE_ROOTS = String(process.env.TRACECITE_AGENT_RESOURCE_ROOTS || "")
-  .split(delimiter)
-  .map((value) => value.trim())
-  .filter(Boolean)
-  .map((value) => resolve(value));
-const GUARD_PATH = process.env.TRACECITE_LOG_GUARD_ACTIVITY || "";
+const EVIDENCE_ROOT = resolve(process.env.TRACECITE_RUNTIME_EVIDENCE_ROOT || dirname(RUNTIME_LOG || "."));
 const ACCESS_PATH = process.env.TRACECITE_LOG_ACCESS_ACTIVITY || "";
+const NATIVE_EVIDENCE_PATH = process.env.TRACECITE_NATIVE_EVIDENCE_ACTIVITY || "";
 const ACTIVITY_PATH = process.env.TRACECITE_HOST_ACTIVITY || "";
 
 const TRACE_TOOLS = new Set([
@@ -21,6 +16,8 @@ const TRACE_TOOLS = new Set([
   "tracecite_traverse",
   "tracecite_verify",
 ]);
+
+const NATIVE_PATH_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
 type Category =
   | "tracecite_evidence"
@@ -73,7 +70,7 @@ async function persistActivity() {
   await mkdir(dirname(ACTIVITY_PATH), { recursive: true });
   await writeFile(
     ACTIVITY_PATH,
-    JSON.stringify({ schema_version: 1, summary: activitySummary(), events }, null, 2) + "\n",
+    JSON.stringify({ schema_version: 2, summary: activitySummary(), events }, null, 2) + "\n",
     "utf8",
   );
 }
@@ -81,11 +78,6 @@ async function persistActivity() {
 function within(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-function withinNativeResource(candidate: string): boolean {
-  if (within(CODE_ROOT, candidate)) return true;
-  return AGENT_RESOURCE_ROOTS.some((root) => within(root, candidate));
 }
 
 function resolveInputPath(raw: unknown, cwd: string): string | null {
@@ -98,10 +90,6 @@ async function appendJsonl(path: string, payload: unknown) {
   if (!path) return;
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, JSON.stringify(payload) + "\n", "utf8");
-}
-
-async function recordBlocked(tool: string, reason: string, input: unknown) {
-  await appendJsonl(GUARD_PATH, { tool, reason, input });
 }
 
 function traceSourceCandidates(event: any): unknown[] {
@@ -120,65 +108,76 @@ function traceSourceCandidates(event: any): unknown[] {
   }
 }
 
-async function recordRuntimeLogAccess(event: any, cwd: string) {
+async function recordTraceCiteRuntimeAccess(event: any, cwd: string) {
   if (!ACCESS_PATH || !TRACE_TOOLS.has(String(event?.toolName || ""))) return;
   const resolved = traceSourceCandidates(event)
     .map((value) => resolveInputPath(value, cwd))
     .filter((value): value is string => Boolean(value));
-  if (!resolved.includes(RUNTIME_LOG)) return;
+  if (!resolved.some((value) => value === RUNTIME_LOG || within(EVIDENCE_ROOT, value))) return;
   await appendJsonl(ACCESS_PATH, {
+    channel: "tracecite_mcp",
     tool: event.toolName,
     source: RUNTIME_LOG,
     input: event.input,
   });
 }
 
-function bashTouchesRuntimeLog(command: string): boolean {
-  if (!command.trim()) return false;
+function bashEvidenceReference(command: string): string | null {
+  if (!command.trim()) return null;
   const normalized = command.replaceAll("\\", "/");
   const logPath = RUNTIME_LOG.replaceAll("\\", "/");
-  const logDir = dirname(RUNTIME_LOG).replaceAll("\\", "/");
+  const evidenceRoot = EVIDENCE_ROOT.replaceAll("\\", "/");
   const logName = basename(RUNTIME_LOG);
-  if (logPath && normalized.includes(logPath)) return true;
-  if (logDir && normalized.includes(logDir)) return true;
-  if (logName && normalized.includes(logName)) return true;
-  if (/\bTRACECITE_RUNTIME_LOG\b/.test(command)) return true;
-  if (/(^|[\s"'=;])\.\.(?:\/|$)/.test(command)) return true;
-  return false;
+  if (logPath && normalized.includes(logPath)) return "runtime_log_path";
+  if (evidenceRoot && normalized.includes(evidenceRoot)) return "evidence_root_path";
+  if (logName && normalized.includes(logName)) return "runtime_log_name";
+  if (/\bTRACECITE_RUNTIME_LOG\b/.test(command)) return "runtime_log_env";
+  return null;
 }
 
-function guardReason(event: any, cwd: string): string | null {
+async function recordNativeRuntimeAccess(event: any, cwd: string) {
+  if (!NATIVE_EVIDENCE_PATH) return;
+  const tool = String(event?.toolName || "");
   const input = event?.input && typeof event.input === "object" ? event.input : {};
-  if (event?.toolName === "read") {
-    const path = resolveInputPath((input as any).path, cwd);
-    if (path && !withinNativeResource(path)) {
-      return "Native read is restricted to the pre-fix source tree and explicitly declared Agent resource roots in the TraceCite arm; inspect runtime evidence through TraceCite MCP.";
+
+  if (NATIVE_PATH_TOOLS.has(tool)) {
+    const raw = (input as any).path || (tool === "read" ? undefined : ".");
+    const path = resolveInputPath(raw, cwd);
+    if (path && (path === RUNTIME_LOG || within(EVIDENCE_ROOT, path))) {
+      await appendJsonl(NATIVE_EVIDENCE_PATH, {
+        channel: "native",
+        tool,
+        path,
+        runtime_log: RUNTIME_LOG,
+        input: event.input,
+      });
     }
+    return;
   }
-  if (event?.toolName === "grep") {
-    const path = resolveInputPath((input as any).path || ".", cwd);
-    if (path && !withinNativeResource(path)) {
-      return "Native grep is restricted to the pre-fix source tree and explicitly declared Agent resource roots in the TraceCite arm; search runtime evidence through TraceCite MCP.";
-    }
-  }
-  if (event?.toolName === "bash") {
+
+  if (tool === "bash") {
     const command = String((input as any).command || "");
-    if (bashTouchesRuntimeLog(command)) {
-      return "Native shell access to the runtime-log area is blocked in the TraceCite arm. Shell exploration of the checked-out source tree and declared Agent resources remains available.";
+    const match = bashEvidenceReference(command);
+    if (match) {
+      await appendJsonl(NATIVE_EVIDENCE_PATH, {
+        channel: "native",
+        tool,
+        match,
+        runtime_log: RUNTIME_LOG,
+        input: event.input,
+        heuristic: true,
+      });
     }
   }
-  return null;
 }
 
 export default function benchmarkHost(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     starts.set(event.toolCallId, Date.now());
-    await recordRuntimeLogAccess(event, ctx.cwd);
-    const reason = guardReason(event, ctx.cwd);
-    if (!reason) return undefined;
-    starts.delete(event.toolCallId);
-    await recordBlocked(event.toolName, reason, event.input);
-    return { block: true, reason };
+    await recordTraceCiteRuntimeAccess(event, ctx.cwd);
+    await recordNativeRuntimeAccess(event, ctx.cwd);
+    // Observability only: never block, rewrite, gate, or choose Agent behavior.
+    return undefined;
   });
 
   pi.on("tool_result", async (event) => {
