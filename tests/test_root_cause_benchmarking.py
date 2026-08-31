@@ -102,29 +102,47 @@ def test_root_cause_score_accepts_cat_n_tool_line_as_visible_citation(tmp_path: 
     assert score["quality"]["supported_dimension_recall"] == 1.0
 
 
-def test_root_cause_score_accepts_tracecite_colon_line_as_visible_citation(tmp_path: Path) -> None:
+def test_root_cause_score_accepts_tracecite_json_text_line_as_visible_citation(tmp_path: Path) -> None:
     case_dir = _case(tmp_path)
-    transcript = tmp_path / "tracecite-colon.jsonl"
+    transcript = tmp_path / "tracecite-json-colon.jsonl"
+    tool_output = json.dumps(
+        {
+            "operation": "materialize",
+            "status": "ok",
+            "coverage": {"context_start_line": 12, "context_end_line": 13},
+            "text": (
+                "12: ChecksumException in worker queue from stale cache entry\n"
+                "13: invalidate cache before reuse"
+            ),
+        }
+    )
     events = [
         {"type": "session", "mode": "tracecite", "model": "demo"},
-        {"type": "tool", "tool": "tracecite_materialize", "output": "12: ChecksumException in worker queue from stale cache entry; invalidate cache", "duration_ms": 1},
-        {"type": "final", "answer": "The worker queue hit a checksum mismatch because a stale cache entry was reused; invalidate the cache. Evidence: runtime.log:L12.", "evidence": []},
+        {"type": "tool", "tool": "tracecite_materialize", "output": tool_output, "duration_ms": 1},
+        {"type": "final", "answer": "The worker queue hit a checksum mismatch because a stale cache entry was reused; invalidate the cache. Evidence: runtime.log:L12 and runtime.log:L13.", "evidence": []},
     ]
     transcript.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
 
     score = score_transcript(case_dir, transcript)
     assert score["quality"]["citation"]["accuracy"] == 1.0
-    assert score["quality"]["citation"]["cited_lines"] == [12]
+    assert score["quality"]["citation"]["cited_lines"] == [12, 13]
     assert score["quality"]["citation"]["invalid_lines"] == []
     assert score["quality"]["supported_dimension_recall"] == 1.0
 
 
-def test_tool_timestamp_prefix_is_not_treated_as_visible_citation(tmp_path: Path) -> None:
+def test_json_wrapped_tool_timestamp_is_not_treated_as_visible_citation(tmp_path: Path) -> None:
     case_dir = _case(tmp_path)
     transcript = tmp_path / "timestamp.jsonl"
+    tool_output = json.dumps(
+        {
+            "operation": "materialize",
+            "status": "ok",
+            "text": "12:34:56 ChecksumException in worker queue from stale cache entry; invalidate cache",
+        }
+    )
     events = [
         {"type": "session", "mode": "tracecite", "model": "demo"},
-        {"type": "tool", "tool": "tracecite_materialize", "output": "12:34:56 ChecksumException in worker queue from stale cache entry; invalidate cache", "duration_ms": 1},
+        {"type": "tool", "tool": "tracecite_materialize", "output": tool_output, "duration_ms": 1},
         {"type": "final", "answer": "The worker queue hit a checksum mismatch because a stale cache entry was reused; invalidate the cache. Evidence: L12.", "evidence": []},
     ]
     transcript.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
