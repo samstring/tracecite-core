@@ -1,0 +1,284 @@
+name: Pi Log + Full Code A/B
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/pi-log-code-ab.yml
+
+permissions:
+  contents: read
+
+jobs:
+  compare-140268:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      CASE_DIR: benchmarks/agent-investigation/log-code-cases/kubernetes-140268
+      RESULT_ROOT: /tmp/pi-log-code-ab/kubernetes-140268/r1
+      PREP: /tmp/pi-log-code-ab/kubernetes-140268/r1/prepared
+      WORK_ROOT: /tmp/pi-log-code-ab/kubernetes-140268/r1/workspace
+      SOURCE_ROOT: /tmp/pi-log-code-ab/kubernetes-140268/r1/workspace/source
+      ARM_ORDER: native tracecite
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev]"
+
+      - name: Verify benchmark contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_session_novelty_regressions.py \
+            tests/test_pi_host_tool_activity.py \
+            tests/test_pi_tracecite_bridge.py \
+            tests/test_pi_session_to_transcript.py \
+            tests/test_root_cause_benchmarking.py \
+            tests/test_support_aware_root_cause_benchmarking.py \
+            tests/test_benchmark_run_result.py
+          python scripts/check_architecture.py
+          python -m tracecite.root_cause_benchmarking validate "$CASE_DIR"
+
+      - name: Configure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          if not model:
+              raise SystemExit('BENCH_MODEL is empty')
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['OPENAI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Prepare failing runtime log
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT_ROOT"
+          mkdir -p "$RESULT_ROOT" "$PREP" "$WORK_ROOT/evidence"
+          python -m tracecite.root_cause_benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT_ROOT/prepare.json"
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          python - "$PREPARED" >> "$GITHUB_ENV" <<'PY'
+          import json, os, shutil, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text())
+          inputs = data.get('inputs') or []
+          if len(inputs) != 1:
+              raise SystemExit(f'expected exactly one runtime log input, got {len(inputs)}')
+          source = Path(inputs[0]['path']).resolve()
+          target = Path(os.environ['WORK_ROOT']) / 'evidence' / source.name
+          shutil.copyfile(source, target)
+          print(f'RUNTIME_LOG={target.resolve()}')
+          print(f'RUNTIME_LOG_BYTES={target.stat().st_size}')
+          print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
+          PY
+
+      - name: Checkout complete pre-fix Kubernetes repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_ENV"
+          import json, os
+          from pathlib import Path
+          case = json.loads((Path(os.environ['CASE_DIR']) / 'case.json').read_text())
+          source = case['source_checkout']
+          print('SOURCE_REPOSITORY=' + source['repository'])
+          print('SOURCE_COMMIT=' + source['commit'])
+          PY
+          rm -rf "$SOURCE_ROOT"
+          git init -q "$SOURCE_ROOT"
+          git -C "$SOURCE_ROOT" remote add origin "$SOURCE_REPOSITORY"
+          git -C "$SOURCE_ROOT" fetch --depth=1 origin "$SOURCE_COMMIT"
+          git -C "$SOURCE_ROOT" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_COMMIT"
+          git -C "$SOURCE_ROOT" remote remove origin
+          grep -q 'getPodAndContainerForDevice(deviceID string)' \
+            "$SOURCE_ROOT/pkg/kubelet/cm/devicemanager/pod_devices.go"
+          if grep -q 'getPodAndContainerForDevice(resourceName, deviceID string)' \
+            "$SOURCE_ROOT/pkg/kubelet/cm/devicemanager/pod_devices.go"; then
+            echo 'post-fix source leaked into benchmark' >&2
+            exit 1
+          fi
+          printf '%s\n' "$SOURCE_COMMIT" > "$RESULT_ROOT/source-commit.txt"
+
+      - name: Run one paired log-access A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          BASE_PROMPT="You are a real coding agent debugging a failure with a complete pre-fix Kubernetes source checkout as your current working directory. The source tree is fixed to the bug-producing commit; do not use the web, issue/PR content, remote git operations, or post-fix knowledge. A failing runtime log is available at $RUNTIME_LOG. You own hypotheses, causal reasoning, source-code exploration, investigation order, conclusions, evidence sufficiency, and when to stop. You may freely explore the checked-out source code with read, grep, bash, find, and ls. Cite important claims as exact path:L<line> references you actually observed. Distinguish direct observation from inference."
+
+          run_arm() {
+            arm="$1"
+            mkdir -p "$RESULT_ROOT/pi-${arm}-session"
+            cd "$SOURCE_ROOT"
+            set +e
+            if [[ "$arm" == native ]]; then
+              NATIVE_PROMPT="$BASE_PROMPT This is the native runtime-log arm. You may inspect the runtime log with the same native read/grep/bash tools you use for source code."
+              timeout -k 30s 1200s pi \
+                --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+                --thinking off --mode text --print \
+                --session-dir "$RESULT_ROOT/pi-native-session" \
+                --tools read,bash,grep,find,ls \
+                --no-extensions --no-skills --no-prompt-templates --no-context-files \
+                --system-prompt "$NATIVE_PROMPT" "$QUESTION" \
+                > "$RESULT_ROOT/pi-native-answer.md" 2> "$RESULT_ROOT/pi-native-stderr.log"
+            else
+              TRACE_PROMPT="$BASE_PROMPT This is the controlled TraceCite runtime-log arm. Native read/grep/bash/find/ls remain available for source-code exploration, but EVERY operation that inspects or derives from the runtime log content MUST use TraceCite: tracecite_retrieve, tracecite_materialize, tracecite_replay, tracecite_aggregate, tracecite_traverse, or tracecite_verify. The Host blocks native content access outside the pre-fix source tree. Do not use native tools as substitutes for runtime-log retrieval."
+              TRACECITE_PI_SESSION="$RESULT_ROOT/tracecite-retrieval-session.json" \
+              TRACECITE_PI_ACTIVITY="$RESULT_ROOT/tracecite-host-tool-activity.json" \
+              TRACECITE_LOG_GUARD_ACTIVITY="$RESULT_ROOT/tracecite-log-guard-blocks.jsonl" \
+              TRACECITE_CODE_ROOT="$SOURCE_ROOT" \
+              TRACECITE_RUNTIME_LOG="$RUNTIME_LOG" \
+              timeout -k 30s 1200s pi \
+                --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+                --thinking off --mode text --print \
+                --session-dir "$RESULT_ROOT/pi-tracecite-session" \
+                --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_log_code_tracecite_extension.ts" \
+                --tools read,bash,grep,find,ls,tracecite_retrieve,tracecite_materialize,tracecite_replay,tracecite_aggregate,tracecite_traverse,tracecite_verify \
+                --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+                --no-prompt-templates --no-context-files \
+                --system-prompt "$TRACE_PROMPT" "$QUESTION" \
+                > "$RESULT_ROOT/pi-tracecite-answer.md" 2> "$RESULT_ROOT/pi-tracecite-stderr.log"
+            fi
+            code=$?
+            set -e
+            echo "$code" > "$RESULT_ROOT/pi-${arm}-exit.txt"
+          }
+
+          echo "$ARM_ORDER" > "$RESULT_ROOT/arm-order.txt"
+          first="${ARM_ORDER%% *}"
+          second="${ARM_ORDER##* }"
+          run_arm "$first"
+          sleep 5
+          run_arm "$second"
+
+      - name: Convert and score
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arm in native tracecite; do
+            SESSION="$(find "$RESULT_ROOT/pi-${arm}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+            ANSWER="$RESULT_ROOT/pi-${arm}-answer.md"
+            EXIT="$RESULT_ROOT/pi-${arm}-exit.txt"
+            if [[ -z "$SESSION" || ! -f "$ANSWER" || ! -f "$EXIT" ]]; then
+              continue
+            fi
+            TRANSCRIPT="$RESULT_ROOT/pi-${arm}-transcript.jsonl"
+            SCORE="$RESULT_ROOT/pi-${arm}-score.json"
+            RUN_RESULT="$RESULT_ROOT/pi-${arm}-run-result.json"
+            python benchmarks/agent-investigation/pi_session_to_transcript.py \
+              "$SESSION" "$ANSWER" "$TRANSCRIPT" \
+              --mode "pi-log-code-${arm}" --model "$BENCH_MODEL"
+            python -m tracecite.root_cause_benchmarking score \
+              "$CASE_DIR" "$TRANSCRIPT" > "$SCORE" || true
+            if [[ -f "$SCORE" ]]; then
+              python benchmarks/agent-investigation/run_result.py \
+                --score "$SCORE" \
+                --exit-code-file "$EXIT" \
+                --stderr "$RESULT_ROOT/pi-${arm}-stderr.log" \
+                --session "$SESSION" \
+                --transcript "$TRANSCRIPT" \
+                --output "$RUN_RESULT" || true
+            fi
+          done
+
+      - name: Summarize log-access comparison
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RESULT_ROOT'])
+          def read(name):
+              path = root / name
+              return json.loads(path.read_text()) if path.is_file() else None
+          def valid(value):
+              return bool(value and (value.get('run_validity') or {}).get('valid_for_comparison'))
+          native = read('pi-native-run-result.json')
+          tracecite = read('pi-tracecite-run-result.json')
+          activity = read('tracecite-host-tool-activity.json')
+          blocks_path = root / 'tracecite-log-guard-blocks.jsonl'
+          blocked = []
+          if blocks_path.is_file():
+              for line in blocks_path.read_text().splitlines():
+                  if line.strip():
+                      blocked.append(json.loads(line))
+          trajectory = (tracecite or {}).get('trajectory') or {}
+          tracecite_calls = int(trajectory.get('tracecite_evidence_calls') or 0)
+          report = {
+              'schema_version': 1,
+              'case_id': 'kubernetes-140268-log-code',
+              'repetition': 1,
+              'source_commit': os.environ.get('SOURCE_COMMIT'),
+              'runtime_log_bytes': int(os.environ.get('RUNTIME_LOG_BYTES') or 0),
+              'arm_order': (root / 'arm-order.txt').read_text().strip() if (root / 'arm-order.txt').is_file() else None,
+              'native': native,
+              'tracecite': tracecite,
+              'tracecite_host_activity': activity,
+              'blocked_native_log_attempts': blocked,
+              'tracecite_runtime_log_used': tracecite_calls > 0,
+              'tracecite_log_contract_valid': tracecite_calls > 0,
+              'comparison_valid': valid(native) and valid(tracecite) and tracecite_calls > 0,
+              'experimental_contract': {
+                  'source_code_access': 'native tools unrestricted for both arms inside identical pre-fix checkout',
+                  'native_runtime_log_access': 'native read/grep/bash',
+                  'tracecite_runtime_log_access': 'TraceCite required; native content access outside source root blocked by Host',
+              },
+          }
+          (root / 'comparison.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-log-code-ab-kubernetes-140268-r1
+          path: ${{ env.RESULT_ROOT }}
+          if-no-files-found: warn
