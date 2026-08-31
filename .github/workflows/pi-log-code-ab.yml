@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: "140268 = hard case only; other-three = remaining three cases once each; all-four = all log+code cases once each"
+        description: "standard = runnable regular cases once each; 140268 = hard case only; all = all runnable log+code cases once each"
         required: true
-        default: other-three
+        default: standard
         type: choice
         options:
-          - other-three
+          - standard
           - 140268
-          - all-four
+          - all
   push:
     branches:
       - experiment/evidence-intelligence
@@ -29,7 +29,7 @@ jobs:
     steps:
       - id: matrix
         env:
-          SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.scope || 'other-three' }}
+          SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.scope || 'standard' }}
         shell: bash
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
@@ -39,11 +39,6 @@ jobs:
                   "case_id": "kubernetes-140039-runc-5347-log-code",
                   "case_dir": "benchmarks/agent-investigation/log-code-cases/kubernetes-140039-runc-5347",
                   "arm_order": "native tracecite",
-              },
-              "139417": {
-                  "case_id": "kubernetes-139417-log-code",
-                  "case_dir": "benchmarks/agent-investigation/log-code-cases/kubernetes-139417",
-                  "arm_order": "tracecite native",
               },
               "140848": {
                   "case_id": "kubernetes-140848-log-code",
@@ -57,12 +52,12 @@ jobs:
               },
           }
           scope = os.environ["SCOPE"]
-          if scope == "other-three":
-              selected = [cases["140039"], cases["139417"], cases["140848"]]
+          if scope == "standard":
+              selected = [cases["140039"], cases["140848"]]
           elif scope == "140268":
               selected = [cases["140268"]]
-          elif scope == "all-four":
-              selected = [cases["140039"], cases["139417"], cases["140848"], cases["140268"]]
+          elif scope == "all":
+              selected = [cases["140039"], cases["140848"], cases["140268"]]
           else:
               raise SystemExit(f"unknown scope: {scope}")
           print("value=" + json.dumps({"include": selected}, separators=(",", ":")))
