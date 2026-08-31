@@ -1,0 +1,70 @@
+name: MiniMax Availability Probe
+
+on:
+  push:
+    branches: [experiment/evidence-intelligence]
+    paths:
+      - .tracecite-minimax-probe
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      GMI_API_KEY: ${{ secrets.GMI_API_KEY || secrets.OPENAI_API_KEY }}
+      GMI_MODEL: ${{ vars.GMI_MODEL || vars.TRACECITE_BENCH_MODEL }}
+    steps:
+      - name: Probe MiniMax/GMI API
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GMI_API_KEY:-}" || { echo 'missing_api_key'; exit 2; }
+          test -n "${GMI_MODEL:-}" || { echo 'missing_model'; exit 2; }
+          python - <<'PY'
+          import json, os, urllib.error, urllib.request
+
+          url = 'https://api.gmi-serving.com/v1/chat/completions'
+          body = json.dumps({
+              'model': os.environ['GMI_MODEL'],
+              'messages': [{'role': 'user', 'content': 'Reply with exactly OK.'}],
+              'max_tokens': 8,
+              'temperature': 0,
+          }).encode()
+          req = urllib.request.Request(
+              url,
+              data=body,
+              headers={
+                  'Authorization': 'Bearer ' + os.environ['GMI_API_KEY'],
+                  'Content-Type': 'application/json',
+              },
+              method='POST',
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  raw = resp.read().decode('utf-8', 'replace')
+                  data = json.loads(raw)
+                  content = (((data.get('choices') or [{}])[0].get('message') or {}).get('content'))
+                  print('http_status=', resp.status)
+                  print('model=', data.get('model') or os.environ['GMI_MODEL'])
+                  print('content=', repr(content))
+                  if resp.status != 200:
+                      raise SystemExit(1)
+          except urllib.error.HTTPError as exc:
+              raw = exc.read().decode('utf-8', 'replace')
+              print('http_status=', exc.code)
+              try:
+                  data = json.loads(raw)
+                  err = data.get('error') or data
+                  if isinstance(err, dict):
+                      print('error_type=', err.get('type') or err.get('code'))
+                      print('error_code=', err.get('code'))
+                      print('error_message=', str(err.get('message'))[:500])
+                  else:
+                      print('error=', str(err)[:500])
+              except Exception:
+                  print('body=', raw[:500])
+              raise SystemExit(1)
+          PY
