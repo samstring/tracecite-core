@@ -6,7 +6,9 @@ const RUNTIME_LOG = resolve(process.env.TRACECITE_RUNTIME_LOG || "");
 const EVIDENCE_ROOT = resolve(process.env.TRACECITE_RUNTIME_EVIDENCE_ROOT || dirname(RUNTIME_LOG || "."));
 const ACCESS_PATH = process.env.TRACECITE_LOG_ACCESS_ACTIVITY || "";
 const NATIVE_EVIDENCE_PATH = process.env.TRACECITE_NATIVE_EVIDENCE_ACTIVITY || "";
+const BLOCKED_NATIVE_EVIDENCE_PATH = process.env.TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY || "";
 const ACTIVITY_PATH = process.env.TRACECITE_HOST_ACTIVITY || "";
+const BENCHMARK_MODE = String(process.env.TRACECITE_BENCHMARK_MODE || "").trim();
 
 const TRACE_TOOLS = new Set([
   "tracecite_retrieve",
@@ -33,6 +35,16 @@ type Activity = {
   duration_ms: number;
   status: string;
   metadata?: Record<string, unknown>;
+};
+
+type NativeEvidenceAccess = {
+  channel: "native";
+  tool: string;
+  runtime_log: string;
+  input: unknown;
+  path?: string;
+  match?: string;
+  heuristic?: boolean;
 };
 
 const starts = new Map<string, number>();
@@ -135,8 +147,7 @@ function bashEvidenceReference(command: string): string | null {
   return null;
 }
 
-async function recordNativeRuntimeAccess(event: any, cwd: string) {
-  if (!NATIVE_EVIDENCE_PATH) return;
+function detectNativeRuntimeAccess(event: any, cwd: string): NativeEvidenceAccess | null {
   const tool = String(event?.toolName || "");
   const input = event?.input && typeof event.input === "object" ? event.input : {};
 
@@ -144,39 +155,56 @@ async function recordNativeRuntimeAccess(event: any, cwd: string) {
     const raw = (input as any).path || (tool === "read" ? undefined : ".");
     const path = resolveInputPath(raw, cwd);
     if (path && (path === RUNTIME_LOG || within(EVIDENCE_ROOT, path))) {
-      await appendJsonl(NATIVE_EVIDENCE_PATH, {
+      return {
         channel: "native",
         tool,
         path,
         runtime_log: RUNTIME_LOG,
         input: event.input,
-      });
+      };
     }
-    return;
+    return null;
   }
 
   if (tool === "bash") {
     const command = String((input as any).command || "");
     const match = bashEvidenceReference(command);
     if (match) {
-      await appendJsonl(NATIVE_EVIDENCE_PATH, {
+      return {
         channel: "native",
         tool,
         match,
         runtime_log: RUNTIME_LOG,
         input: event.input,
         heuristic: true,
-      });
+      };
     }
   }
+  return null;
 }
 
 export default function benchmarkHost(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     starts.set(event.toolCallId, Date.now());
     await recordTraceCiteRuntimeAccess(event, ctx.cwd);
-    await recordNativeRuntimeAccess(event, ctx.cwd);
-    // Observability only: never block, rewrite, gate, or choose Agent behavior.
+
+    const nativeAccess = detectNativeRuntimeAccess(event, ctx.cwd);
+    if (!nativeAccess) return undefined;
+
+    if (BENCHMARK_MODE === "tracecite") {
+      await appendJsonl(BLOCKED_NATIVE_EVIDENCE_PATH, {
+        ...nativeAccess,
+        status: "blocked_before_execution",
+      });
+      return {
+        block: true,
+        reason:
+          "TraceCite benchmark rule: direct native access to runtime evidence is blocked. " +
+          "Use TraceCite MCP tools for runtime-log evidence. Native tools remain available for source-code exploration.",
+      } as any;
+    }
+
+    await appendJsonl(NATIVE_EVIDENCE_PATH, nativeAccess);
     return undefined;
   });
 
