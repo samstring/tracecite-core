@@ -7,15 +7,18 @@ RUNNER = ROOT / "benchmarks" / "agent-investigation" / "agent_flow_runner.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "pi-log-code-ab.yml"
 
 
-def test_benchmark_host_is_observability_only() -> None:
+def test_benchmark_host_enforces_tracecite_runtime_evidence_boundary() -> None:
     text = HOST.read_text(encoding="utf-8")
 
     assert 'pi.on("tool_call"' in text
     assert 'pi.on("tool_result"' in text
     assert "recordTraceCiteRuntimeAccess" in text
-    assert "recordNativeRuntimeAccess" in text
-    assert "Observability only" in text
-    assert "return undefined" in text
+    assert "detectNativeRuntimeAccess" in text
+    assert 'BENCHMARK_MODE === "tracecite"' in text
+    assert "BLOCKED_NATIVE_EVIDENCE_PATH" in text
+    assert "blocked_before_execution" in text
+    assert "block: true" in text
+    assert "Use TraceCite MCP tools for runtime-log evidence" in text
 
     forbidden = (
         "registerTool",
@@ -32,7 +35,7 @@ def test_benchmark_host_is_observability_only() -> None:
         assert marker not in text
 
 
-def test_formal_runner_keeps_native_capabilities_and_adds_tracecite_only_in_tracecite_mode() -> None:
+def test_formal_runner_keeps_native_source_capabilities_and_enforces_tracecite_log_channel() -> None:
     text = RUNNER.read_text(encoding="utf-8")
 
     assert 'choices=["native", "tracecite"]' in text
@@ -40,7 +43,9 @@ def test_formal_runner_keeps_native_capabilities_and_adds_tracecite_only_in_trac
     assert 'task = f"/skill:tracecite {question}" if args.mode == "tracecite" else question' in text
     assert 'command += ["--skill", str(skill_dir)]' in text
     assert "Deliberately no --tools allowlist" in text
-    assert '"native_tools_policy": "agent-default-unrestricted"' in text
+    assert '"agent-default-unrestricted"' in text
+    assert '"native-source-tools-allowed-runtime-evidence-blocked"' in text
+    assert '"tracecite_runtime_evidence_enforcement": "hard-block-before-execution" if args.mode == "tracecite" else None' in text
     assert '"tracecite_mcp_configured": args.mode == "tracecite"' in text
     assert "remove_mcp_config(source_root)" in text
 
