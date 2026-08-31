@@ -102,6 +102,39 @@ def test_root_cause_score_accepts_cat_n_tool_line_as_visible_citation(tmp_path: 
     assert score["quality"]["supported_dimension_recall"] == 1.0
 
 
+def test_root_cause_score_accepts_tracecite_colon_line_as_visible_citation(tmp_path: Path) -> None:
+    case_dir = _case(tmp_path)
+    transcript = tmp_path / "tracecite-colon.jsonl"
+    events = [
+        {"type": "session", "mode": "tracecite", "model": "demo"},
+        {"type": "tool", "tool": "tracecite_materialize", "output": "12: ChecksumException in worker queue from stale cache entry; invalidate cache", "duration_ms": 1},
+        {"type": "final", "answer": "The worker queue hit a checksum mismatch because a stale cache entry was reused; invalidate the cache. Evidence: runtime.log:L12.", "evidence": []},
+    ]
+    transcript.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+
+    score = score_transcript(case_dir, transcript)
+    assert score["quality"]["citation"]["accuracy"] == 1.0
+    assert score["quality"]["citation"]["cited_lines"] == [12]
+    assert score["quality"]["citation"]["invalid_lines"] == []
+    assert score["quality"]["supported_dimension_recall"] == 1.0
+
+
+def test_tool_timestamp_prefix_is_not_treated_as_visible_citation(tmp_path: Path) -> None:
+    case_dir = _case(tmp_path)
+    transcript = tmp_path / "timestamp.jsonl"
+    events = [
+        {"type": "session", "mode": "tracecite", "model": "demo"},
+        {"type": "tool", "tool": "tracecite_materialize", "output": "12:34:56 ChecksumException in worker queue from stale cache entry; invalidate cache", "duration_ms": 1},
+        {"type": "final", "answer": "The worker queue hit a checksum mismatch because a stale cache entry was reused; invalidate the cache. Evidence: L12.", "evidence": []},
+    ]
+    transcript.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+
+    score = score_transcript(case_dir, transcript)
+    assert score["quality"]["citation"]["accuracy"] == 0.0
+    assert score["quality"]["citation"]["invalid_lines"] == [12]
+    assert score["quality"]["supported_dimension_recall"] == 0.0
+
+
 def test_numbered_final_answer_is_not_treated_as_shell_visible_citation(tmp_path: Path) -> None:
     case_dir = _case(tmp_path)
     transcript = tmp_path / "numbered-answer.jsonl"
