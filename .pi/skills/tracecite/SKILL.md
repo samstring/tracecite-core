@@ -45,25 +45,35 @@ This makes the benchmark a capability comparison, not a tool-adoption test.
 
 ## Convergence discipline
 
-TraceCite exposes mechanical novelty and coverage so the Agent can avoid wasting investigation steps. These signals do not decide stopping for the Agent.
+TraceCite exposes mechanical novelty, raw-evidence frontier progress, and bounded Host checkpoints so the Agent can avoid wasting investigation steps. These signals do not choose a root cause or decide stopping for the Agent.
 
-Before making a follow-up evidence call, keep one explicit unresolved question in mind and know what materially different evidence the next call is expected to add. Do not continue merely because another synonym or nearby keyword can be tried.
+Before making a follow-up evidence call, keep one explicit unresolved question in mind and know what materially different evidence the next call is expected to add. Do not continue merely because another synonym, nearby keyword, aggregate, or replay can be tried.
 
-Treat these as low-novelty signals:
+Treat these as low-novelty or non-frontier signals:
 
 - `status=no_match`;
 - `status=no_new_evidence`;
 - `coverage.new_evidence=0` with repeated evidence;
 - a materialization that exposes no unseen range or new text;
+- repeated `aggregate`, `replay`, or `verify` calls that derive or revisit information without expanding raw source-evidence coverage;
 - Host `agent_feedback.convergence_checkpoint.triggered=true`.
+
+The Host may trigger a checkpoint after repeated low-novelty operations, a burst of non-frontier analysis, or a long TraceCite investigation. When that happens, the next TraceCite evidence operation requires an `investigation_goal`.
+
+A valid `investigation_goal` should state both:
+
+1. the exact unresolved question that still matters to the task; and
+2. the materially different evidence expected from the next call.
+
+Do not use generic goals such as "look for more evidence", "confirm the hypothesis", or a paraphrase of the previous search. A new goal should target a genuinely different source, component, entity, time region, error signature, relation, or unseen range.
 
 When the Host convergence checkpoint is triggered, reassess before another evidence operation:
 
 1. State the strongest conclusion currently supported by observed evidence.
 2. Identify the exact unresolved question that still matters to the task.
 3. Decide whether the supplied inputs actually contain the evidence class needed to resolve it.
-4. Continue only if the next operation targets a materially different evidence frontier, such as a different source, component, entity, time window, error signature, or previously unseen range.
-5. Do not continue by merely paraphrasing the same query or repeatedly materializing already-covered context.
+4. Continue only if the next operation targets a materially different evidence frontier or a necessary derived check.
+5. Do not continue by merely paraphrasing the same query, repeatedly materializing already-covered context, or chaining aggregates that do not change the evidence boundary.
 6. If the required deeper evidence is not present in the supplied inputs, stop that line of investigation and state the evidence boundary explicitly.
 
 A search miss is not the same as evidence insufficiency. One miss may justify a different retrieval strategy. Repeated low-novelty operations across the relevant source/component/time region are evidence that the current investigation direction is exhausted, not proof that the hypothesized event never happened.
@@ -97,7 +107,7 @@ Use exact refs and returned source SHA-256 for later materialization/replay.
 `tracecite_replay` intentionally re-reads context already covered by the same immutable RetrievalSession.
 
 - SHA-256 is required.
-- Replay does not create new evidence.
+- Replay does not create new evidence or expand the raw evidence frontier.
 - Use replay when reconsidering old text rather than repeating searches and treating old output as new discovery.
 
 ## `tracecite_aggregate`
@@ -106,6 +116,8 @@ Use exact refs and returned source SHA-256 for later materialization/replay.
 
 - It returns mechanical values and source provenance.
 - It does not rank groups by causal importance.
+- It derives information from supplied evidence but does not expand raw source-evidence coverage by itself.
+- Do not chain aggregates merely to keep investigating after the relevant raw evidence is already covered.
 - For `group`, the Agent supplies the grouping regex.
 
 ## `tracecite_traverse`
@@ -121,7 +133,7 @@ Use exact refs and returned source SHA-256 for later materialization/replay.
 `tracecite_verify` verifies a caller-selected evidence manifest mechanically.
 
 - It verifies integrity/manifest facts.
-- It does not validate the Agent's causal conclusion.
+- It does not validate the Agent's causal conclusion or expand source-evidence coverage.
 
 ## RetrievalSession semantics
 
