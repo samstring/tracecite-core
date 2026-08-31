@@ -120,7 +120,8 @@ jobs:
             tests/test_pi_session_to_transcript.py \
             tests/test_root_cause_benchmarking.py \
             tests/test_support_aware_root_cause_benchmarking.py \
-            tests/test_benchmark_run_result.py
+            tests/test_benchmark_run_result.py \
+            tests/test_log_code_score.py
           python scripts/check_architecture.py
           python -m tracecite.root_cause_benchmarking validate "$CASE_DIR"
 
@@ -290,7 +291,7 @@ jobs:
             python benchmarks/agent-investigation/pi_session_to_transcript.py \
               "$SESSION" "$ANSWER" "$TRANSCRIPT" \
               --mode "pi-log-code-${arm}" --model "$BENCH_MODEL"
-            python -m tracecite.root_cause_benchmarking score \
+            python benchmarks/agent-investigation/log_code_score.py \
               "$CASE_DIR" "$TRANSCRIPT" > "$SCORE" || true
             if [[ -f "$SCORE" ]]; then
               python benchmarks/agent-investigation/run_result.py \
