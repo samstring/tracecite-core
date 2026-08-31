@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Unified formal Agent runner for Native and TraceCite modes.
+"""Unified formal Agent runner for Native and TraceCite benchmark modes.
 
-The runner owns only process setup and observability wiring.
+The runner owns process setup, benchmark isolation and observability wiring.
 It never chooses hypotheses, evidence sufficiency, causal conclusions, or stopping.
 
 Native mode:
@@ -9,9 +9,10 @@ Native mode:
     No TraceCite Skill or MCP server is configured by this runner.
 
 TraceCite mode:
-    The same Agent keeps its own native tools and normal Agent resources and additionally
-    receives the explicit TraceCite Skill plus standard TraceCite MCP tools. Native
-    runtime-evidence access is observed as channel contamination, never blocked.
+    The same Agent keeps native tools for source-code exploration and additionally receives
+    the explicit TraceCite Skill plus standard TraceCite MCP tools. For benchmark purity,
+    direct native access to runtime evidence is blocked before execution by the benchmark
+    host extension; runtime evidence must go through TraceCite MCP.
 """
 
 from __future__ import annotations
@@ -127,10 +128,10 @@ def build_prompt(mode: str, runtime_log: Path) -> str:
     return (
         base
         + " The user explicitly selected TraceCite for this investigation. Follow the TraceCite "
-        "Agent Skill and use the standard TraceCite MCP Evidence Runtime for runtime-evidence "
-        "handling. Your normal Agent-native capabilities remain available; the harness does not "
-        "block or remove them. Direct native access to the runtime evidence, if you choose to do "
-        "it, is recorded only as evidence-channel contamination for benchmark analysis."
+        "Agent Skill and use the standard TraceCite MCP Evidence Runtime for all runtime-evidence "
+        "handling. Native tools remain available for source-code exploration, but this benchmark "
+        "blocks direct native access to the runtime log/evidence before execution. If a native "
+        "runtime-evidence tool call is rejected, continue through TraceCite MCP instead."
     )
 
 
@@ -206,15 +207,20 @@ def run_pi(args: argparse.Namespace) -> int:
         command += ["--skill", str(skill_dir)]
 
     # Deliberately no --tools allowlist and no --no-skills. The Agent keeps its
-    # normal capability surface; TraceCite mode only adds one Skill + MCP server.
+    # normal source-analysis capability surface; the benchmark host enforces only
+    # the TraceCite arm's runtime-evidence channel boundary.
     command.append(task)
 
     env = os.environ.copy()
     env.update(
         {
+            "TRACECITE_BENCHMARK_MODE": args.mode,
             "TRACECITE_HOST_ACTIVITY": str(result_root / f"{args.mode}-host-tool-activity.json"),
             "TRACECITE_LOG_ACCESS_ACTIVITY": str(result_root / f"{args.mode}-tracecite-runtime-log-access.jsonl"),
             "TRACECITE_NATIVE_EVIDENCE_ACTIVITY": str(result_root / f"{args.mode}-native-runtime-evidence-access.jsonl"),
+            "TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY": str(
+                result_root / f"{args.mode}-blocked-native-runtime-evidence-attempts.jsonl"
+            ),
             "TRACECITE_RUNTIME_EVIDENCE_ROOT": str(evidence_root),
             "TRACECITE_RUNTIME_LOG": str(runtime_log),
         }
@@ -224,10 +230,15 @@ def run_pi(args: argparse.Namespace) -> int:
         "schema_version": 1,
         "agent": args.agent,
         "mode": args.mode,
-        "native_tools_policy": "agent-default-unrestricted",
+        "native_tools_policy": (
+            "agent-default-unrestricted"
+            if args.mode == "native"
+            else "native-source-tools-allowed-runtime-evidence-blocked"
+        ),
         "agent_skills_policy": "agent-default-plus-tracecite-in-tracecite-mode",
         "tracecite_skill_activation": "/skill:tracecite" if args.mode == "tracecite" else None,
         "tracecite_mcp_configured": args.mode == "tracecite",
+        "tracecite_runtime_evidence_enforcement": "hard-block-before-execution" if args.mode == "tracecite" else None,
         "tracecite_tools_expected": list(TRACE_TOOLS) if args.mode == "tracecite" else [],
         "runtime_log": str(runtime_log),
         "source_root": str(source_root),
