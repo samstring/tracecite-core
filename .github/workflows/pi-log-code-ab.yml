@@ -321,6 +321,37 @@ jobs:
               return rows
           def valid(value):
               return bool(value and (value.get('run_validity') or {}).get('valid_for_comparison'))
+          def primary(value):
+              if not value:
+                  return None
+              task = value.get('task_result') or {}
+              evaluation = task.get('primary_evaluation') or {}
+              tokens = value.get('token_usage') or {}
+              validity = value.get('run_validity') or {}
+              return {
+                  'valid_for_comparison': bool(validity.get('valid_for_comparison')),
+                  'validity_reason': validity.get('reason'),
+                  'root_cause_accurate': evaluation.get('root_cause_accurate'),
+                  'evidence_chain_complete_and_bounded': evaluation.get('evidence_chain_complete_and_bounded'),
+                  'evidence_boundary_respected': evaluation.get('evidence_boundary_respected'),
+                  'fresh_input_tokens': tokens.get('fresh_input_tokens'),
+                  'cached_input_tokens': tokens.get('cached_input_tokens'),
+                  'fresh_plus_cached_input_tokens': tokens.get('fresh_plus_cached_input_tokens'),
+                  'output_tokens': tokens.get('output_tokens'),
+                  'model_calls': tokens.get('model_calls'),
+              }
+          def token_delta(native_value, tracecite_value):
+              if not isinstance(native_value, int) or not isinstance(tracecite_value, int):
+                  return None
+              reduction = None
+              if native_value > 0:
+                  reduction = round((native_value - tracecite_value) / native_value * 100, 1)
+              return {
+                  'native': native_value,
+                  'tracecite': tracecite_value,
+                  'tracecite_minus_native': tracecite_value - native_value,
+                  'tracecite_reduction_pct': reduction,
+              }
           native = read('pi-native-run-result.json')
           tracecite = read('pi-tracecite-run-result.json')
           activity = read('tracecite-host-tool-activity.json')
@@ -329,10 +360,27 @@ jobs:
           trajectory = (tracecite or {}).get('trajectory') or {}
           tracecite_calls = int(trajectory.get('tracecite_evidence_calls') or 0)
           runtime_log_tracecite_calls = len(runtime_log_access)
+          clean_pair = valid(native) and valid(tracecite) and runtime_log_tracecite_calls > 0
+          native_primary = primary(native)
+          tracecite_primary = primary(tracecite)
+          token_comparison = None
+          if clean_pair and native_primary and tracecite_primary:
+              token_comparison = {
+                  'fresh_input_tokens': token_delta(native_primary.get('fresh_input_tokens'), tracecite_primary.get('fresh_input_tokens')),
+                  'cached_input_tokens': token_delta(native_primary.get('cached_input_tokens'), tracecite_primary.get('cached_input_tokens')),
+                  'fresh_plus_cached_input_tokens': token_delta(native_primary.get('fresh_plus_cached_input_tokens'), tracecite_primary.get('fresh_plus_cached_input_tokens')),
+                  'output_tokens': token_delta(native_primary.get('output_tokens'), tracecite_primary.get('output_tokens')),
+              }
           report = {
-              'schema_version': 2,
+              'schema_version': 3,
               'case_id': os.environ['CASE_ID'],
               'repetition': 1,
+              'primary_comparison': {
+                  'clean_pair': clean_pair,
+                  'native': native_primary,
+                  'tracecite': tracecite_primary,
+                  'token_comparison': token_comparison,
+              },
               'source_repository': os.environ.get('SOURCE_REPOSITORY'),
               'source_commit': os.environ.get('SOURCE_COMMIT'),
               'runtime_log_bytes': int(os.environ.get('RUNTIME_LOG_BYTES') or 0),
@@ -346,15 +394,15 @@ jobs:
               'tracecite_runtime_log_calls': runtime_log_tracecite_calls,
               'tracecite_runtime_log_used': runtime_log_tracecite_calls > 0,
               'tracecite_log_contract_valid': runtime_log_tracecite_calls > 0,
-              'comparison_valid': valid(native) and valid(tracecite) and runtime_log_tracecite_calls > 0,
+              'comparison_valid': clean_pair,
               'experimental_contract': {
                   'source_code_access': 'native tools unrestricted for both arms inside identical pre-fix checkout',
                   'native_runtime_log_access': 'native read/grep/bash',
                   'tracecite_runtime_log_access': 'TraceCite required; native content access outside source root blocked by Host',
               },
           }
-          (root / 'comparison.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
-          print(json.dumps(report, indent=2, sort_keys=True))
+          (root / 'comparison.json').write_text(json.dumps(report, indent=2) + '\n')
+          print(json.dumps(report, indent=2))
           PY
 
       - name: Upload artifact
