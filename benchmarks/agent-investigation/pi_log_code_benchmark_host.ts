@@ -8,6 +8,7 @@ const ACCESS_PATH = process.env.TRACECITE_LOG_ACCESS_ACTIVITY || "";
 const NATIVE_EVIDENCE_PATH = process.env.TRACECITE_NATIVE_EVIDENCE_ACTIVITY || "";
 const BLOCKED_NATIVE_EVIDENCE_PATH = process.env.TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY || "";
 const ACTIVITY_PATH = process.env.TRACECITE_HOST_ACTIVITY || "";
+// Benchmark-only enforcement. TraceCite MCP/Skill product behavior is unchanged.
 const BENCHMARK_MODE = String(process.env.TRACECITE_BENCHMARK_MODE || "").trim();
 
 const TRACE_TOOLS = new Set([
