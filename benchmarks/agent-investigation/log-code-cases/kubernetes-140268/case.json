@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "id": "kubernetes-140268-log-code",
+  "title": "Device health update routed to the wrong pod with pre-fix source checkout",
+  "source_issue": "https://github.com/kubernetes/kubernetes/issues/140268",
+  "fix_reference": "https://github.com/kubernetes/kubernetes/pull/140323",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "ci-build-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-containerd/2074205743732494336/build-log.txt",
+      "filename": "build-log.txt",
+      "sha256": "201850aabf8100794bcd50ca6017a6e927c4f3d98333248d163563190e2253ad",
+      "required": true
+    }
+  ],
+  "source_checkout": {
+    "repository": "https://github.com/kubernetes/kubernetes.git",
+    "commit": "16e45f3b5e6a76a1ac741550e3a65980eea783c2",
+    "fix_must_not_be_present": true
+  },
+  "provenance": {
+    "project": "kubernetes/kubernetes",
+    "public_log": true,
+    "scale_bucket": "10-25MiB",
+    "bytes": 24216286,
+    "mode": "runtime-log-plus-full-prefix-source",
+    "notes": "The runtime log is paired with a complete Kubernetes checkout at the PR base commit, before the fix. Issue/PR/fix contents remain evaluator-only."
+  }
+}
