@@ -5,12 +5,13 @@ The runner owns only process setup and observability wiring.
 It never chooses hypotheses, evidence sufficiency, causal conclusions, or stopping.
 
 Native mode:
-    Agent uses its own default/native tools. No TraceCite Skill or MCP server is configured.
+    Agent uses its own default/native tools and normal Agent resources.
+    No TraceCite Skill or MCP server is configured by this runner.
 
 TraceCite mode:
-    The same Agent keeps its own native tools and additionally receives the explicit
-    TraceCite Skill plus standard TraceCite MCP tools. Native runtime-evidence access is
-    observed as channel contamination, never blocked by this runner or Host.
+    The same Agent keeps its own native tools and normal Agent resources and additionally
+    receives the explicit TraceCite Skill plus standard TraceCite MCP tools. Native
+    runtime-evidence access is observed as channel contamination, never blocked.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-import shutil
+import signal
 import subprocess
 import sys
 
@@ -120,17 +121,34 @@ def build_prompt(mode: str, runtime_log: Path) -> str:
     if mode == "native":
         return (
             base
-            + " This is Native mode. Use your own normal tools to inspect both the runtime log "
-            "and source code. TraceCite is not part of this run."
+            + " This is Native mode. Use your own normal capabilities to inspect both the "
+            "runtime log and source code. TraceCite is not part of this run."
         )
     return (
         base
         + " The user explicitly selected TraceCite for this investigation. Follow the TraceCite "
         "Agent Skill and use the standard TraceCite MCP Evidence Runtime for runtime-evidence "
-        "handling. Your normal Agent-native tools remain available; the harness does not block "
-        "or remove them. Direct native access to the runtime evidence, if you choose to do it, "
-        "will only be recorded as evidence-channel contamination for benchmark analysis."
+        "handling. Your normal Agent-native capabilities remain available; the harness does not "
+        "block or remove them. Direct native access to the runtime evidence, if you choose to do "
+        "it, is recorded only as evidence-channel contamination for benchmark analysis."
     )
+
+
+def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=10)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    process.wait()
 
 
 def run_pi(args: argparse.Namespace) -> int:
@@ -185,11 +203,10 @@ def run_pi(args: argparse.Namespace) -> int:
     ]
 
     if args.mode == "tracecite":
-        command += ["--no-skills", "--skill", str(skill_dir)]
-    else:
-        command += ["--no-skills"]
+        command += ["--skill", str(skill_dir)]
 
-    # Deliberately no --tools allowlist. The Agent keeps its own default tool surface.
+    # Deliberately no --tools allowlist and no --no-skills. The Agent keeps its
+    # normal capability surface; TraceCite mode only adds one Skill + MCP server.
     command.append(task)
 
     env = os.environ.copy()
@@ -208,6 +225,7 @@ def run_pi(args: argparse.Namespace) -> int:
         "agent": args.agent,
         "mode": args.mode,
         "native_tools_policy": "agent-default-unrestricted",
+        "agent_skills_policy": "agent-default-plus-tracecite-in-tracecite-mode",
         "tracecite_skill_activation": "/skill:tracecite" if args.mode == "tracecite" else None,
         "tracecite_mcp_configured": args.mode == "tracecite",
         "tracecite_tools_expected": list(TRACE_TOOLS) if args.mode == "tracecite" else [],
@@ -217,24 +235,25 @@ def run_pi(args: argparse.Namespace) -> int:
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
     code = 1
+    process: subprocess.Popen[bytes] | None = None
     try:
-        with answer_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
-            "w", encoding="utf-8"
-        ) as stderr:
+        with answer_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            process = subprocess.Popen(
+                command,
+                cwd=source_root,
+                env=env,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=True,
+            )
             try:
-                completed = subprocess.run(
-                    command,
-                    cwd=source_root,
-                    env=env,
-                    stdout=stdout,
-                    stderr=stderr,
-                    timeout=args.timeout_seconds,
-                    check=False,
-                )
-                code = completed.returncode
+                code = process.wait(timeout=args.timeout_seconds)
             except subprocess.TimeoutExpired:
+                terminate_process_group(process)
                 code = 124
     finally:
+        if process is not None and process.poll() is None:
+            terminate_process_group(process)
         # Mode isolation: a later Native arm must never inherit TraceCite MCP configuration.
         remove_mcp_config(source_root)
         exit_path.write_text(f"{code}\n", encoding="utf-8")
