@@ -85,9 +85,18 @@ jobs:
       WORK_ROOT: /tmp/pi-log-code-ab/${{ matrix.case_id }}/r1/workspace
       SOURCE_ROOT: /tmp/pi-log-code-ab/${{ matrix.case_id }}/r1/workspace/source
       ARM_ORDER: ${{ matrix.arm_order }}
+      TRACECITE_MCP_REF: 2ea20b5e914f8fc50af180449869b8af2c6da5cc
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout TraceCite Core under test
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned TraceCite MCP transport
+        uses: actions/checkout@v4
+        with:
+          repository: samstring/tracecite-mcp
+          ref: ${{ env.TRACECITE_MCP_REF }}
+          path: tracecite-mcp
 
       - uses: actions/setup-python@v5
         with:
@@ -97,12 +106,33 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install Pi and TraceCite
+      - name: Install Pi, current Core, pinned MCP transport, and MCP adapter
         shell: bash
         run: |
           set -euo pipefail
           npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          pi install npm:pi-mcp-adapter@2.27.0 --approve
           python -m pip install -e ".[dev]"
+          python -m pip install 'mcp>=2,<3'
+          python -m pip install -e ./tracecite-mcp --no-deps
+          python - <<'PY'
+          import inspect
+          from pathlib import Path
+          import tracecite
+          import tracecite_mcp
+          workspace = Path.cwd().resolve()
+          core_path = Path(inspect.getfile(tracecite)).resolve()
+          mcp_path = Path(inspect.getfile(tracecite_mcp)).resolve()
+          if workspace not in core_path.parents:
+              raise SystemExit(f'MCP did not resolve current Core checkout: {core_path}')
+          if workspace / 'tracecite-mcp' not in mcp_path.parents:
+              raise SystemExit(f'wrong TraceCite MCP checkout imported: {mcp_path}')
+          print(f'core={core_path}')
+          print(f'mcp={mcp_path}')
+          PY
+          pi --version
+          pi list
 
       - name: Verify benchmark contracts
         shell: bash
@@ -110,8 +140,6 @@ jobs:
           set -euo pipefail
           python -m pytest -q \
             tests/test_session_novelty_regressions.py \
-            tests/test_pi_host_tool_activity.py \
-            tests/test_pi_tracecite_bridge.py \
             tests/test_pi_session_to_transcript.py \
             tests/test_root_cause_benchmarking.py \
             tests/test_support_aware_root_cause_benchmarking.py \
@@ -119,6 +147,7 @@ jobs:
             tests/test_log_code_score.py
           python scripts/check_architecture.py
           python -m tracecite.root_cause_benchmarking validate "$CASE_DIR"
+          python -m pytest -q tracecite-mcp/tests/test_projection.py tracecite-mcp/tests/test_server.py tracecite-mcp/tests/test_stdio_integration.py
 
       - name: Configure model
         shell: bash
@@ -214,6 +243,41 @@ jobs:
                   raise SystemExit(f"post-fix source leaked in {path}: {forbidden}")
           PY
           printf '%s\n' "$SOURCE_COMMIT" > "$RESULT_ROOT/source-commit.txt"
+          printf '%s\n' "$TRACECITE_MCP_REF" > "$RESULT_ROOT/tracecite-mcp-ref.txt"
+
+      - name: Configure standard TraceCite MCP for TraceCite arm
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$SOURCE_ROOT/.pi"
+          cat > "$SOURCE_ROOT/.mcp.json" <<EOF
+          {
+            "mcpServers": {
+              "tracecite": {
+                "command": "python",
+                "args": ["-m", "tracecite_mcp.server"],
+                "env": {
+                  "TRACECITE_MCP_ALLOWED_ROOTS": "$WORK_ROOT/evidence",
+                  "TRACECITE_MCP_STATE_DIR": "$RESULT_ROOT/tracecite-mcp-state"
+                }
+              }
+            }
+          }
+          EOF
+          cat > "$SOURCE_ROOT/.pi/mcp.json" <<'EOF'
+          {
+            "settings": {
+              "disableProxyTool": true
+            },
+            "mcpServers": {
+              "tracecite": {
+                "directTools": true,
+                "toolPrefix": "none",
+                "lifecycle": "eager"
+              }
+            }
+          }
+          EOF
 
       - name: Run one paired log-access A/B
         shell: bash
@@ -238,9 +302,8 @@ jobs:
                 --system-prompt "$NATIVE_PROMPT" "$QUESTION" \
                 > "$RESULT_ROOT/pi-native-answer.md" 2> "$RESULT_ROOT/pi-native-stderr.log"
             else
-              TRACE_PROMPT="$BASE_PROMPT This is the controlled TraceCite runtime-log arm. Native read/grep/bash/find/ls remain available for source-code exploration, but EVERY operation that inspects or derives from the runtime log content MUST use TraceCite: tracecite_retrieve, tracecite_materialize, tracecite_replay, tracecite_aggregate, tracecite_traverse, or tracecite_verify. The Host blocks native content access outside the pre-fix source tree. Do not use native tools as substitutes for runtime-log retrieval."
-              TRACECITE_PI_SESSION="$RESULT_ROOT/tracecite-retrieval-session.json" \
-              TRACECITE_PI_ACTIVITY="$RESULT_ROOT/tracecite-host-tool-activity.json" \
+              TRACE_PROMPT="$BASE_PROMPT This is the controlled TraceCite runtime-log arm. Native read/grep/bash/find/ls remain available for source-code exploration, but EVERY operation that inspects or derives from the runtime log content MUST use the standard TraceCite MCP tools. The benchmark Host blocks native content access outside the pre-fix source tree. Use the TraceCite Agent Skill for evidence handling and keep all hypothesis, causal, sufficiency, and stopping decisions yourself."
+              TRACECITE_HOST_ACTIVITY="$RESULT_ROOT/tracecite-host-tool-activity.json" \
               TRACECITE_LOG_GUARD_ACTIVITY="$RESULT_ROOT/tracecite-log-guard-blocks.jsonl" \
               TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT_ROOT/tracecite-runtime-log-access.jsonl" \
               TRACECITE_CODE_ROOT="$SOURCE_ROOT" \
@@ -249,9 +312,9 @@ jobs:
                 --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
                 --thinking off --mode text --print \
                 --session-dir "$RESULT_ROOT/pi-tracecite-session" \
-                --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_log_code_tracecite_extension.ts" \
+                --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_log_code_benchmark_host.ts" \
                 --tools read,bash,grep,find,ls,tracecite_retrieve,tracecite_materialize,tracecite_replay,tracecite_aggregate,tracecite_traverse,tracecite_verify \
-                --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+                --no-skills --skill "$GITHUB_WORKSPACE/tracecite-mcp/skills/tracecite/SKILL.md" \
                 --no-prompt-templates --no-context-files \
                 --system-prompt "$TRACE_PROMPT" "$QUESTION" \
                 > "$RESULT_ROOT/pi-tracecite-answer.md" 2> "$RESULT_ROOT/pi-tracecite-stderr.log"
@@ -372,9 +435,11 @@ jobs:
                   'output_tokens': token_delta(native_primary.get('output_tokens'), tracecite_primary.get('output_tokens')),
               }
           report = {
-              'schema_version': 3,
+              'schema_version': 4,
               'case_id': os.environ['CASE_ID'],
               'repetition': 1,
+              'tracecite_integration': 'standard-mcp-plus-agent-skill',
+              'tracecite_mcp_ref': os.environ.get('TRACECITE_MCP_REF'),
               'primary_comparison': {
                   'clean_pair': clean_pair,
                   'native': native_primary,
@@ -396,9 +461,12 @@ jobs:
               'tracecite_log_contract_valid': runtime_log_tracecite_calls > 0,
               'comparison_valid': clean_pair,
               'experimental_contract': {
+                  'product_layer': 'current tracecite-core checkout + pinned tracecite-mcp transport',
+                  'agent_layer': 'generic TraceCite MCP Skill; Agent owns hypothesis, sufficiency, causal reasoning, and stopping',
+                  'benchmark_layer': 'Pi Host adapter owns native-log guard and full tool telemetry only',
                   'source_code_access': 'native tools unrestricted for both arms inside identical pre-fix checkout',
                   'native_runtime_log_access': 'native read/grep/bash',
-                  'tracecite_runtime_log_access': 'TraceCite required; native content access outside source root blocked by Host',
+                  'tracecite_runtime_log_access': 'standard TraceCite MCP required; native content access outside source root blocked by benchmark Host',
               },
           }
           (root / 'comparison.json').write_text(json.dumps(report, indent=2) + '\n')
