@@ -1,6 +1,10 @@
 name: TraceCite 140039 End-to-End
 
 on:
+  push:
+    branches: [experiment/evidence-intelligence]
+    paths:
+      - .tracecite-run-140039
   workflow_dispatch:
 
 permissions:
