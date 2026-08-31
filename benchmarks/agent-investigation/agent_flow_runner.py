@@ -41,6 +41,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--agent", default="pi", choices=["pi"])
     parser.add_argument("--mode", required=True, choices=["native", "tracecite"])
     parser.add_argument("--source-root", required=True)
+    parser.add_argument(
+        "--workspace-kind",
+        default="source-repo",
+        choices=["source-repo", "evidence-only"],
+        help="Whether source-root contains a pre-fix source checkout or only an isolated workspace.",
+    )
     parser.add_argument("--runtime-log", required=True)
     parser.add_argument("--result-root", required=True)
     parser.add_argument("--question-file", required=True)
@@ -109,29 +115,51 @@ def configure_tracecite_mcp(
     )
 
 
-def build_prompt(mode: str, runtime_log: Path) -> str:
-    base = (
-        "You are a real coding agent debugging a failure with a complete bug-producing "
-        "pre-fix source repository as your current working directory. Do not use the web, "
-        "issue/PR content, remote git operations, or post-fix knowledge. A failing runtime "
-        f"log is available at {runtime_log}. Use your normal Agent-native tools for source "
-        "exploration. You own hypotheses, investigation order, causal reasoning, evidence "
-        "sufficiency, final conclusions, and when to stop. Cite exact runtime-log or source "
-        "path:L<line> references actually observed, and distinguish observation from inference."
-    )
+def build_prompt(mode: str, runtime_log: Path, workspace_kind: str) -> str:
+    if workspace_kind == "source-repo":
+        base = (
+            "You are a real coding agent debugging a failure with a complete bug-producing "
+            "pre-fix source repository as your current working directory. Do not use the web, "
+            "issue/PR content, remote git operations, or post-fix knowledge. A failing runtime "
+            f"log is available at {runtime_log}. Use your normal Agent-native tools for source "
+            "exploration. You own hypotheses, investigation order, causal reasoning, evidence "
+            "sufficiency, final conclusions, and when to stop. Cite exact runtime-log or source "
+            "path:L<line> references actually observed, and distinguish observation from inference."
+        )
+        native_scope = "both the runtime log and source code"
+        tracecite_scope = (
+            "Native tools remain available for source-code exploration, but this benchmark "
+            "blocks direct native access to the runtime log/evidence before execution."
+        )
+    else:
+        base = (
+            "You are a real coding agent investigating a failure from supplied runtime evidence. "
+            "This case does not provide a pre-fix source repository. Do not use the web, issue/PR "
+            "content, remote git operations, or external/post-fix knowledge. A failing runtime "
+            f"log is available at {runtime_log}. You own hypotheses, investigation order, causal "
+            "reasoning, evidence sufficiency, final conclusions, and when to stop. Keep claims "
+            "bounded by the supplied evidence. Cite exact runtime-log path:L<line> references "
+            "actually observed, and distinguish observation from inference."
+        )
+        native_scope = "the supplied runtime evidence"
+        tracecite_scope = (
+            "No source checkout is provided; native tools may be used for ordinary workspace "
+            "inspection, but this benchmark blocks direct native access to the runtime log/evidence "
+            "before execution."
+        )
+
     if mode == "native":
         return (
             base
-            + " This is Native mode. Use your own normal capabilities to inspect both the "
-            "runtime log and source code. TraceCite is not part of this run."
+            + f" This is Native mode. Use your own normal capabilities to inspect {native_scope}. "
+            "TraceCite is not part of this run."
         )
     return (
         base
         + " The user explicitly selected TraceCite for this investigation. Follow the TraceCite "
         "Agent Skill and use the standard TraceCite MCP Evidence Runtime for all runtime-evidence "
-        "handling. Native tools remain available for source-code exploration, but this benchmark "
-        "blocks direct native access to the runtime log/evidence before execution. If a native "
-        "runtime-evidence tool call is rejected, continue through TraceCite MCP instead."
+        f"handling. {tracecite_scope} If a native runtime-evidence tool call is rejected, continue "
+        "through TraceCite MCP instead."
     )
 
 
@@ -178,7 +206,7 @@ def run_pi(args: argparse.Namespace) -> int:
 
     question = question_file.read_text(encoding="utf-8")
     task = f"/skill:tracecite {question}" if args.mode == "tracecite" else question
-    prompt = build_prompt(args.mode, runtime_log)
+    prompt = build_prompt(args.mode, runtime_log, args.workspace_kind)
 
     command = [
         "pi",
@@ -230,6 +258,7 @@ def run_pi(args: argparse.Namespace) -> int:
         "schema_version": 1,
         "agent": args.agent,
         "mode": args.mode,
+        "workspace_kind": args.workspace_kind,
         "native_tools_policy": (
             "agent-default-unrestricted"
             if args.mode == "native"
