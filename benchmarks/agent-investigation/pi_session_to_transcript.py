@@ -31,6 +31,7 @@ def convert_session(
     model: str,
 ) -> None:
     events: list[dict[str, Any]] = [{"type": "session", "mode": mode, "model": model}]
+    tool_calls: dict[str, dict[str, Any]] = {}
 
     for raw_line in session_path.read_text(encoding="utf-8").splitlines():
         if not raw_line.strip():
@@ -44,11 +45,18 @@ def convert_session(
 
         role = str(message.get("role") or "")
         if role == "toolResult":
+            call_id = str(message.get("toolCallId") or "")
+            call = tool_calls.get(call_id) or {}
             tool_event: dict[str, Any] = {
                 "type": "tool",
-                "name": str(message.get("toolName") or "unknown"),
+                "name": str(message.get("toolName") or call.get("name") or "unknown"),
                 "output": _text_content(message.get("content")),
             }
+            arguments = call.get("arguments")
+            if isinstance(arguments, Mapping):
+                # Preserve the tool target/range so evaluators can bind source
+                # citations to the exact file lines the Agent actually read.
+                tool_event["arguments"] = dict(arguments)
             details = message.get("details")
             if isinstance(details, Mapping):
                 activity = details.get("tracecite_host_activity")
@@ -65,6 +73,21 @@ def convert_session(
 
         if role != "assistant":
             continue
+
+        content = message.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if not isinstance(item, Mapping) or str(item.get("type") or "") != "toolCall":
+                    continue
+                call_id = str(item.get("id") or "")
+                if not call_id:
+                    continue
+                call: dict[str, Any] = {"name": str(item.get("name") or "unknown")}
+                arguments = item.get("arguments")
+                if isinstance(arguments, Mapping):
+                    call["arguments"] = dict(arguments)
+                tool_calls[call_id] = call
+
         usage = message.get("usage")
         if isinstance(usage, Mapping):
             events.append(
