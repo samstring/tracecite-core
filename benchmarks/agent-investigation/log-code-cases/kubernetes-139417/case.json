@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "id": "kubernetes-139417-log-code",
+  "title": "DRA PodScheduled race with complete pre-fix Kubernetes source checkout",
+  "source_issue": "https://github.com/kubernetes/kubernetes/issues/139417",
+  "fix_reference": "https://github.com/kubernetes/kubernetes/pull/139602",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "ci-build-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/pr-logs/pull/139129/pull-kubernetes-integration/2061373559082586112/build-log.txt",
+      "filename": "build-log.txt",
+      "sha256": "e98b45b6b3f7b430b7fd54222710a68abda87426ee92f04ed390bc0e20bcd168",
+      "required": true
+    }
+  ],
+  "source_checkout": {
+    "repository": "https://github.com/kubernetes/kubernetes.git",
+    "commit": "3cac8f6eae3107e186b04371276168858696d6dd",
+    "pre_fix_assertions": [
+      {
+        "path": "pkg/scheduler/util/utils.go",
+        "contains": "func PatchPodStatus(ctx context.Context, cs kubernetes.Interface, name string, namespace string, oldStatus *v1.PodStatus, newStatus *v1.PodStatus) error {",
+        "not_contains": "resourceVersion string, oldStatus *v1.PodStatus"
+      }
+    ]
+  },
+  "provenance": {
+    "project": "kubernetes/kubernetes",
+    "public_log": true,
+    "evidence_bytes": 13492765,
+    "source_snapshot": "pre-fix PR base commit",
+    "notes": "Agent receives the original CI log plus the complete Kubernetes repository at the pre-fix base commit. Issue/PR content and post-fix code are excluded."
+  }
+}
