@@ -1,0 +1,613 @@
+name: Pi Dual GMI Sequential 16 A/B
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/pi-dual-gmi-sequential-16.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-dual-gmi-sequential-16
+  cancel-in-progress: false
+
+jobs:
+  native_01:
+    name: Native 01 / doublecmd-2264
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: doublecmd-2264
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2264
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_02:
+    name: Native 02 / doublecmd-2616
+    needs: native_01
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: doublecmd-2616
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2616
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_03:
+    name: Native 03 / doublecmd-2731
+    needs: native_02
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: doublecmd-2731
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2731
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_04:
+    name: Native 04 / doublecmd-2772
+    needs: native_03
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: doublecmd-2772
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2772
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_05:
+    name: Native 05 / doublecmd-2777
+    needs: native_04
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: doublecmd-2777
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2777
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_06:
+    name: Native 06 / doublecmd-2809
+    needs: native_05
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: doublecmd-2809
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2809
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_07:
+    name: Native 07 / doublecmd-2815
+    needs: native_06
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: doublecmd-2815
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2815
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_08:
+    name: Native 08 / doublecmd-3061
+    needs: native_07
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: doublecmd-3061
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-3061
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_09:
+    name: Native 09 / flutter-179398
+    needs: native_08
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: flutter-179398
+      case_dir: benchmarks/agent-investigation/cases/flutter-179398
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_10:
+    name: Native 10 / mobile-payment-runtime-evidence
+    needs: native_09
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: mobile-payment-runtime-evidence
+      case_dir: benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_11:
+    name: Native 11 / prometheus-18018
+    needs: native_10
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: prometheus-18018
+      case_dir: benchmarks/agent-investigation/cases/prometheus-18018
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_12:
+    name: Native 12 / pulumi-20529
+    needs: native_11
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: pulumi-20529
+      case_dir: benchmarks/agent-investigation/cases/pulumi-20529
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_13:
+    name: Native 13 / kubernetes-140039-runc-5347
+    needs: native_12
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: kubernetes-140039-runc-5347
+      case_dir: benchmarks/agent-investigation/log-code-cases/kubernetes-140039-runc-5347
+      scorer: log_code
+      workspace_kind: source-repo
+    secrets: inherit
+
+  native_14:
+    name: Native 14 / kubernetes-140268
+    needs: native_13
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: kubernetes-140268
+      case_dir: benchmarks/agent-investigation/log-code-cases/kubernetes-140268
+      scorer: log_code
+      workspace_kind: source-repo
+    secrets: inherit
+
+  native_15:
+    name: Native 15 / kubernetes-140628
+    needs: native_14
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: kubernetes-140628
+      case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-140628
+      scorer: root_cause
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  native_16:
+    name: Native 16 / kubernetes-140848
+    needs: native_15
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: native
+      case_key: kubernetes-140848
+      case_dir: benchmarks/agent-investigation/log-code-cases/kubernetes-140848
+      scorer: log_code
+      workspace_kind: source-repo
+    secrets: inherit
+
+  tracecite_01:
+    name: Tracecite 01 / doublecmd-2264
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: doublecmd-2264
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2264
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_02:
+    name: Tracecite 02 / doublecmd-2616
+    needs: tracecite_01
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: doublecmd-2616
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2616
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_03:
+    name: Tracecite 03 / doublecmd-2731
+    needs: tracecite_02
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: doublecmd-2731
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2731
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_04:
+    name: Tracecite 04 / doublecmd-2772
+    needs: tracecite_03
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: doublecmd-2772
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2772
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_05:
+    name: Tracecite 05 / doublecmd-2777
+    needs: tracecite_04
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: doublecmd-2777
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2777
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_06:
+    name: Tracecite 06 / doublecmd-2809
+    needs: tracecite_05
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: doublecmd-2809
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2809
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_07:
+    name: Tracecite 07 / doublecmd-2815
+    needs: tracecite_06
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: doublecmd-2815
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-2815
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_08:
+    name: Tracecite 08 / doublecmd-3061
+    needs: tracecite_07
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: doublecmd-3061
+      case_dir: benchmarks/agent-investigation/cases/doublecmd-3061
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_09:
+    name: Tracecite 09 / flutter-179398
+    needs: tracecite_08
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: flutter-179398
+      case_dir: benchmarks/agent-investigation/cases/flutter-179398
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_10:
+    name: Tracecite 10 / mobile-payment-runtime-evidence
+    needs: tracecite_09
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: mobile-payment-runtime-evidence
+      case_dir: benchmarks/agent-investigation/cases/mobile-payment-runtime-evidence
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_11:
+    name: Tracecite 11 / prometheus-18018
+    needs: tracecite_10
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: prometheus-18018
+      case_dir: benchmarks/agent-investigation/cases/prometheus-18018
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_12:
+    name: Tracecite 12 / pulumi-20529
+    needs: tracecite_11
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: pulumi-20529
+      case_dir: benchmarks/agent-investigation/cases/pulumi-20529
+      scorer: legacy
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_13:
+    name: Tracecite 13 / kubernetes-140039-runc-5347
+    needs: tracecite_12
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: kubernetes-140039-runc-5347
+      case_dir: benchmarks/agent-investigation/log-code-cases/kubernetes-140039-runc-5347
+      scorer: log_code
+      workspace_kind: source-repo
+    secrets: inherit
+
+  tracecite_14:
+    name: Tracecite 14 / kubernetes-140268
+    needs: tracecite_13
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: kubernetes-140268
+      case_dir: benchmarks/agent-investigation/log-code-cases/kubernetes-140268
+      scorer: log_code
+      workspace_kind: source-repo
+    secrets: inherit
+
+  tracecite_15:
+    name: Tracecite 15 / kubernetes-140628
+    needs: tracecite_14
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: kubernetes-140628
+      case_dir: benchmarks/agent-investigation/scale-cases/kubernetes-140628
+      scorer: root_cause
+      workspace_kind: evidence-only
+    secrets: inherit
+
+  tracecite_16:
+    name: Tracecite 16 / kubernetes-140848
+    needs: tracecite_15
+    if: ${{ always() }}
+    uses: ./.github/workflows/pi-dual-gmi-sequential-case.yml
+    with:
+      arm: tracecite
+      case_key: kubernetes-140848
+      case_dir: benchmarks/agent-investigation/log-code-cases/kubernetes-140848
+      scorer: log_code
+      workspace_kind: source-repo
+    secrets: inherit
+
+  compare:
+    name: Compare all 16 cases
+    needs: [native_16, tracecite_16]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download all available case artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: seq16-*
+          path: /tmp/pi-seq16-results
+
+      - name: Build 16-case comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pi-seq16-comparison
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('/tmp/pi-seq16-results')
+          out = Path('/tmp/pi-seq16-comparison')
+          cases = [
+              'doublecmd-2264',
+              'doublecmd-2616',
+              'doublecmd-2731',
+              'doublecmd-2772',
+              'doublecmd-2777',
+              'doublecmd-2809',
+              'doublecmd-2815',
+              'doublecmd-3061',
+              'flutter-179398',
+              'mobile-payment-runtime-evidence',
+              'prometheus-18018',
+              'pulumi-20529',
+              'kubernetes-140039-runc-5347',
+              'kubernetes-140268',
+              'kubernetes-140628',
+              'kubernetes-140848',
+          ]
+
+          def load(arm, case):
+              p = root / f'seq16-{arm}-{case}' / 'case-summary.json'
+              if not p.is_file():
+                  return {
+                      'case_key': case,
+                      'arm': arm,
+                      'missing_artifact': True,
+                      'valid_for_comparison': False,
+                      'validity_reason': 'missing_artifact',
+                  }
+              try:
+                  value = json.loads(p.read_text())
+                  value['missing_artifact'] = False
+                  return value
+              except Exception as exc:
+                  return {
+                      'case_key': case,
+                      'arm': arm,
+                      'missing_artifact': True,
+                      'valid_for_comparison': False,
+                      'validity_reason': f'invalid_summary:{type(exc).__name__}',
+                  }
+
+          rows = []
+          for case in cases:
+              n = load('native', case)
+              t = load('tracecite', case)
+              nt = n.get('total_input_tokens')
+              tt = t.get('total_input_tokens')
+              saving = None
+              if isinstance(nt, int) and nt > 0 and isinstance(tt, int):
+                  saving = round((nt - tt) / nt * 100.0, 2)
+              channel_ok = t.get('channel_valid')
+              pair_valid = bool(
+                  n.get('valid_for_comparison')
+                  and t.get('valid_for_comparison')
+                  and channel_ok is True
+              )
+              rows.append({
+                  'case': case,
+                  'pair_valid': pair_valid,
+                  'native': n,
+                  'tracecite': t,
+                  'token_reduction_pct': saving,
+              })
+
+          valid = [r for r in rows if r['pair_valid']]
+          native_total = sum(
+              r['native']['total_input_tokens']
+              for r in valid
+              if isinstance(r['native'].get('total_input_tokens'), int)
+          )
+          trace_total = sum(
+              r['tracecite']['total_input_tokens']
+              for r in valid
+              if isinstance(r['tracecite'].get('total_input_tokens'), int)
+          )
+          aggregate_saving = (
+              round((native_total - trace_total) / native_total * 100.0, 2)
+              if native_total > 0 else None
+          )
+
+          def success(summary):
+              value = summary.get('support_aware_passed')
+              if value is None:
+                  value = summary.get('passed')
+              return value is True
+
+          aggregate = {
+              'schema_version': 1,
+              'case_count': len(cases),
+              'valid_pair_count': len(valid),
+              'invalid_pair_count': len(cases) - len(valid),
+              'native_pass_count_on_valid_pairs': sum(success(r['native']) for r in valid),
+              'tracecite_pass_count_on_valid_pairs': sum(success(r['tracecite']) for r in valid),
+              'native_total_input_tokens_on_valid_pairs': native_total,
+              'tracecite_total_input_tokens_on_valid_pairs': trace_total,
+              'aggregate_token_reduction_pct': aggregate_saving,
+              'tracecite_channel_clean_valid_pairs': sum(
+                  r['tracecite'].get('native_runtime_evidence_accesses') == 0 for r in valid
+              ),
+          }
+          payload = {'aggregate': aggregate, 'rows': rows}
+          (out / 'comparison.json').write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
+          )
+
+          def fmt(v):
+              return '-' if v is None else str(v)
+
+          md = [
+              '# Pi Dual GMI Sequential 16 A/B',
+              '',
+              f"- Valid pairs: {aggregate['valid_pair_count']}/{aggregate['case_count']}",
+              f"- Native pass count (valid pairs): {aggregate['native_pass_count_on_valid_pairs']}",
+              f"- TraceCite pass count (valid pairs): {aggregate['tracecite_pass_count_on_valid_pairs']}",
+              f"- Native total input tokens (valid pairs): {aggregate['native_total_input_tokens_on_valid_pairs']}",
+              f"- TraceCite total input tokens (valid pairs): {aggregate['tracecite_total_input_tokens_on_valid_pairs']}",
+              f"- Aggregate TraceCite token reduction: {fmt(aggregate['aggregate_token_reduction_pct'])}%",
+              '',
+              '| Case | Valid | Native pass | TraceCite pass | Native input | TraceCite input | Saving | N citation | T citation | T MCP | T native evidence |',
+              '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+          ]
+          for r in rows:
+              n, t = r['native'], r['tracecite']
+              md.append(
+                  '| {case} | {valid} | {np} | {tp} | {ni} | {ti} | {save} | {nc} | {tc} | {mcp} | {native_ev} |'.format(
+                      case=r['case'],
+                      valid='yes' if r['pair_valid'] else 'no',
+                      np=fmt(n.get('support_aware_passed', n.get('passed'))),
+                      tp=fmt(t.get('support_aware_passed', t.get('passed'))),
+                      ni=fmt(n.get('total_input_tokens')),
+                      ti=fmt(t.get('total_input_tokens')),
+                      save=(f"{r['token_reduction_pct']}%" if r['token_reduction_pct'] is not None else '-'),
+                      nc=fmt(n.get('citation_accuracy')),
+                      tc=fmt(t.get('citation_accuracy')),
+                      mcp=fmt(t.get('mcp_calls')),
+                      native_ev=fmt(t.get('native_runtime_evidence_accesses')),
+                  )
+              )
+          md += ['', '## Invalid / incomplete pairs', '']
+          for r in rows:
+              if r['pair_valid']:
+                  continue
+              md.append(
+                  f"- {r['case']}: native={r['native'].get('validity_reason')} "
+                  f"tracecite={r['tracecite'].get('validity_reason')} "
+                  f"channel_valid={r['tracecite'].get('channel_valid')}"
+              )
+          (out / 'comparison.md').write_text('\n'.join(md) + '\n')
+          print(json.dumps(aggregate, indent=2))
+          PY
+
+      - name: Upload suite comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: seq16-comparison
+          path: /tmp/pi-seq16-comparison
+          if-no-files-found: error
+          retention-days: 14
