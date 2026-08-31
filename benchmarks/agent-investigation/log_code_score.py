@@ -212,6 +212,70 @@ def _dimension_support(
     return rows
 
 
+def _primary_evaluation(score: Mapping[str, Any]) -> dict[str, Any]:
+    """Reduce detailed scorer diagnostics to the three benchmark questions that matter.
+
+    The detailed mechanical scorer is intentionally retained underneath this
+    view so we can diagnose failures, but it no longer defines the headline.
+    The headline asks only whether the answer is substantively correct and
+    whether every required causal claim is backed by observed evidence without
+    crossing an evidence boundary. Token usage is attached later by run_result.
+    """
+
+    quality = score.get("quality") or {}
+    if not isinstance(quality, Mapping):
+        quality = {}
+    support_levels = quality.get("support_levels") or []
+    if not isinstance(support_levels, list):
+        support_levels = []
+
+    missing_required_dimensions: list[str] = []
+    unsupported_overreach_dimensions: list[str] = []
+    for row in support_levels:
+        if not isinstance(row, Mapping):
+            continue
+        dimension = str(row.get("id") or "")
+        support_level = str(row.get("support_level") or "supported")
+        if support_level != "unsupported_from_log" and not bool(row.get("claim_hit")):
+            missing_required_dimensions.append(dimension)
+        if bool(row.get("overreach")):
+            unsupported_overreach_dimensions.append(dimension)
+
+    unsupported_claim_hits = int(quality.get("unsupported_claim_hits") or 0)
+    contradiction_hits = int(quality.get("contradiction_hits") or 0)
+    overreach_hits = int(quality.get("unsupported_dimension_overreach_hits") or 0)
+    dimension_recall = float(quality.get("dimension_recall") or 0.0)
+    supported_dimension_recall = float(quality.get("supported_dimension_recall") or 0.0)
+    evidence_boundary_recall = float(quality.get("evidence_boundary_recall") or 0.0)
+    support_level_accuracy = float(quality.get("support_level_accuracy") or 0.0)
+
+    root_cause_accurate = bool(
+        dimension_recall >= 1.0
+        and unsupported_claim_hits == 0
+        and contradiction_hits == 0
+    )
+    evidence_boundary_respected = bool(
+        evidence_boundary_recall >= 1.0
+        and overreach_hits == 0
+        and unsupported_claim_hits == 0
+        and contradiction_hits == 0
+    )
+    evidence_chain_complete_and_bounded = bool(
+        root_cause_accurate
+        and supported_dimension_recall >= 1.0
+        and support_level_accuracy >= 1.0
+        and evidence_boundary_respected
+    )
+
+    return {
+        "root_cause_accurate": root_cause_accurate,
+        "evidence_chain_complete_and_bounded": evidence_chain_complete_and_bounded,
+        "evidence_boundary_respected": evidence_boundary_respected,
+        "missing_required_dimensions": missing_required_dimensions,
+        "unsupported_overreach_dimensions": unsupported_overreach_dimensions,
+    }
+
+
 def score_log_code(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
     score = root.score_transcript(case_dir, transcript_path)
     case = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
@@ -233,10 +297,11 @@ def score_log_code(case_dir: Path, transcript_path: Path) -> dict[str, Any]:
     )
     score["quality"] = quality
 
-    # Re-run support-aware evaluation after replacing only the citation/support
-    # evidence mechanics. Semantic dimensions, markers and negatives stay from
-    # the canonical root-cause scorer.
-    return apply_support_levels(score, gold, answer)
+    # Keep the detailed support-aware scorer as a diagnostic layer, then expose
+    # a deliberately small primary evaluation for Native vs TraceCite A/B.
+    evaluated = apply_support_levels(score, gold, answer)
+    evaluated["primary_evaluation"] = _primary_evaluation(evaluated)
+    return evaluated
 
 
 def main() -> int:
