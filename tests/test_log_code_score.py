@@ -117,6 +117,8 @@ def test_log_code_score_accepts_source_and_runtime_path_citations(tmp_path: Path
     assert citation["accuracy"] == 1.0
     assert "pkg/worker.go:L41" in citation["valid_refs"]
     assert "evidence/runtime.log:L12" in citation["valid_refs"]
+    assert score["primary_evaluation"]["root_cause_accurate"] is True
+    assert score["primary_evaluation"]["evidence_chain_complete_and_bounded"] is True
 
 
 def test_log_code_score_does_not_validate_same_line_in_wrong_source_file(tmp_path: Path) -> None:
@@ -137,6 +139,24 @@ def test_log_code_score_does_not_validate_same_line_in_wrong_source_file(tmp_pat
     assert citation["accuracy"] == 0.0
     assert citation["invalid_refs"] == ["pkg/other.go:L41"]
     assert score["quality"]["supported_dimension_recall"] == 0.0
+    # The substantive answer is still correct; only its evidence chain failed.
+    assert score["primary_evaluation"]["root_cause_accurate"] is True
+    assert score["primary_evaluation"]["evidence_chain_complete_and_bounded"] is False
+
+
+def test_primary_evaluation_rejects_wrong_root_cause(tmp_path: Path) -> None:
+    module = _load_score_module()
+    case_dir = _case(tmp_path)
+    transcript = tmp_path / "wrong-root-cause.jsonl"
+    _write_transcript(
+        transcript,
+        "The failure was caused by a network outage. Evidence: runtime.log:L12.",
+    )
+
+    score = module.score_log_code(case_dir, transcript)
+    assert score["primary_evaluation"]["root_cause_accurate"] is False
+    assert score["primary_evaluation"]["evidence_chain_complete_and_bounded"] is False
+    assert score["primary_evaluation"]["missing_required_dimensions"]
 
 
 def test_pi_session_adapter_preserves_tool_call_arguments(tmp_path: Path) -> None:
