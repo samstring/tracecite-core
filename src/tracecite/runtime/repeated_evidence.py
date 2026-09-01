@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from .agent_api import RetrievalResult
+from .evidence_coordinates import attach_source_line_coordinates
 
 
 _REPEAT_REF_FIELDS = ("uri", "source_path", "start_line", "end_line", "sha256")
@@ -61,13 +62,27 @@ def attach_matched_existing_evidence(
     *,
     limit: int = 50,
 ) -> dict[str, Any]:
-    """Project novelty plus compact refs for repeated rows into an Agent payload."""
+    """Project novelty, repeated refs, and objective source-line coordinates.
+
+    Coordinates are computed only among rows present in this response (new rows
+    plus repeated rows matched by the current request).  A line gap is a source
+    geometry fact, never a claim that two evidence rows are semantically related.
+    """
 
     payload = result.to_dict()
     matched = matched_existing_evidence(result, limit=limit)
-    if matched:
+    new_rows = [
+        dict(item)
+        for item in payload.get("evidence") or []
+        if isinstance(item, Mapping)
+    ]
+    combined = attach_source_line_coordinates([*new_rows, *matched])
+    payload["evidence"] = combined[: len(new_rows)]
+
+    annotated_matched = combined[len(new_rows) :]
+    if annotated_matched:
         data = dict(payload.get("data") or {})
-        data["matched_existing_evidence"] = [dict(item) for item in matched]
+        data["matched_existing_evidence"] = [dict(item) for item in annotated_matched]
         payload["data"] = data
     return payload
 
