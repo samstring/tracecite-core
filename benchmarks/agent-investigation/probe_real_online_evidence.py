@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -14,11 +17,9 @@ def _download(url: str) -> bytes:
         return response.read()
 
 
-def _probe_case(case: dict[str, Any]) -> dict[str, Any]:
-    raw = _download(str(case["url"]))
-    text = raw.decode("utf-8", errors="replace")
+def _probe_text(payload: bytes, needles: list[str]) -> dict[str, Any]:
+    text = payload.decode("utf-8", errors="replace")
     lines = text.splitlines()
-    needles = [str(item) for item in case.get("needles", []) if str(item)]
     results = []
     for needle in needles:
         folded = needle.casefold()
@@ -32,14 +33,61 @@ def _probe_case(case: dict[str, Any]) -> dict[str, Any]:
                 matches.append({"line": line_no, "text": line[:800]})
         results.append({"needle": needle, "count": count, "samples": matches})
     return {
+        "bytes": len(payload),
+        "mib": round(len(payload) / (1024 * 1024), 3),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "line_count": len(lines),
+        "needles": results,
+    }
+
+
+def _probe_zip(raw: bytes, needles: list[str]) -> dict[str, Any]:
+    members: list[dict[str, Any]] = []
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            payload = archive.read(info)
+            row = {
+                "name": info.filename,
+                "compressed_bytes": info.compress_size,
+                **_probe_text(payload, needles),
+            }
+            members.append(row)
+    return {
+        "archive_kind": "zip",
+        "member_count": len(members),
+        "members": members,
+    }
+
+
+def _probe_gzip(raw: bytes, needles: list[str]) -> dict[str, Any]:
+    payload = gzip.decompress(raw)
+    return {
+        "archive_kind": "gzip",
+        "member_count": 1,
+        "members": [{"name": "<gzip-payload>", **_probe_text(payload, needles)}],
+    }
+
+
+def _probe_case(case: dict[str, Any]) -> dict[str, Any]:
+    raw = _download(str(case["url"]))
+    needles = [str(item) for item in case.get("needles", []) if str(item)]
+    archive_kind = str(case.get("archive_kind") or "").lower()
+    row: dict[str, Any] = {
         "id": case["id"],
         "url": case["url"],
         "bytes": len(raw),
         "mib": round(len(raw) / (1024 * 1024), 3),
         "sha256": hashlib.sha256(raw).hexdigest(),
-        "line_count": len(lines),
-        "needles": results,
     }
+    if archive_kind == "zip":
+        row.update(_probe_zip(raw, needles))
+    elif archive_kind in {"gz", "gzip"}:
+        row.update(_probe_gzip(raw, needles))
+    else:
+        row.update(_probe_text(raw, needles))
+    return row
 
 
 def main() -> int:
