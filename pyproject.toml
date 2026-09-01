@@ -26,6 +26,10 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["build>=1", "pytest>=7"]
+experiments = [
+  "drain3>=0.9.11,<1",
+  "scikit-learn>=1.4,<2",
+]
 
 [project.scripts]
 tracecite = "tracecite.integrations.stateful_cli:main"
