@@ -62,14 +62,14 @@ Source、Segmenter、Sample、Survey、Filter、Snapshot、Evidence、Manifest�
 Evidence Store
 冻结输入、过滤产物、事件、报告、Manifest
 
-Stable Extension Protocol v2
+Stable TraceCite Extension Protocol
    ^
    |
 Domain Extensions
 Mobile / CI / Backend / Third-party
 ```
 
-Extension 与 Runtime 之间交换的是稳定 Contract 和 Capability，不是 Runtime 内部对象。当前实现可在内部把 `ScenarioCapability` 适配成 `ScenarioRuntime`，但 `ScenarioRuntime` 不再是 Extension Protocol v2 的长期公共边界。
+Extension 与 Runtime 之间交换的是稳定 Contract 和 Capability，不是 Runtime 内部对象。当前实现可在内部把 `ScenarioCapability` 适配成 `ScenarioRuntime`，但 `ScenarioRuntime` 不再是长期公共 Extension 边界。
 
 ### 3.1 Agent Host
 
@@ -112,7 +112,7 @@ Core 不理解“白屏”“卡顿”“构建失败”等领域概念，也不
 
 ### 3.5 Domain Extensions
 
-领域扩展保存领域数据和语义。Mobile 只是一个官方扩展，不是 Core 特例。Extension Protocol v2 使用声明式对象：
+领域扩展保存领域数据和语义。Mobile 只是一个官方扩展，不是 Core 特例。TraceCite Extension Protocol 使用声明式对象：
 
 - `ExtensionManifest`：扩展身份、领域、版本、协议版本。
 - `TraceCiteExtension`：Manifest + Capability 列表。
@@ -241,7 +241,7 @@ Scenario 是可重复测试配方，不是领域 Runtime。Extension 可通过 `
 
 Canonical Evidence 和 Result 保持完整可恢复；Agent-facing 投影可以压缩，但必须保留必要 Coverage、截断信号和恢复路径。Runtime/Integration 已具备预算、Agent profile、compact projection、Evidence Ledger、`expand-many`、有界 Seen Evidence 与可持久化跨轮 Context Delta。Context Engine 的传输状态与 InvestigationState 分离，并且只有在 canonical Result 可恢复之后才应用 delta。参见 [Context Engine](context-engine.zh-CN.md)。
 
-代表性 Evidence Group 和语义压缩仍属于后续 Runtime/Integration 优化，不进入 Extension Protocol v2。
+代表性 Evidence Group 和语义压缩仍属于后续 Runtime/Integration 优化，不进入 Extension Protocol。
 
 不能为了省 Token 隐藏缺失 Evidence、近似、解析失败或 Coverage 缺口。
 
@@ -264,14 +264,14 @@ Agent 不能自行晋升 Knowledge。正式治理规则见[知识治理](knowled
 
 | 主包公共能力 | 领域扩展示例 |
 |---|---|
-| Extension Protocol v2 | Mobile、CI、Backend Extension |
+| TraceCite Extension Protocol | Mobile、CI、Backend Extension |
 | Core Plugin Capability | Source、Segmenter、Preprocessor、Event Transformer 注册包 |
 | Agent Capability | 设备查询、CI 状态查询、领域只读/动作工具 |
 | Scenario Capability | Mobile/CI 的 profile、preset、scenario resolver |
 | Assertion / Report Capability | 领域断言与报告 |
 | DomainEvent / EvidenceRef / Coverage | Mobile crash/network、CI build/test 等领域事实 |
 
-`ScenarioRuntime` 是当前 Runtime 内部适配对象，不是 v2 Extension 的长期公共能力。若一个概念只能由单一领域解释，它应留在扩展；跨领域不变量才进入主包。
+`ScenarioRuntime` 是当前 Runtime 内部适配对象，不是长期公共 Extension 能力。若一个概念只能由单一领域解释，它应留在扩展；跨领域不变量才进入主包。
 
 ## 11. 当前实现与目标差距
 
@@ -283,11 +283,11 @@ Agent 不能自行晋升 Knowledge。正式治理规则见[知识治理](knowled
 | Knowledge Governance 与显式迁移 | 已实现 |
 | Agent profile、compact projection、Evidence Ledger、`expand-many` | 已实现 |
 | Agent Capability Registry 与 live safety gate | 已实现 |
-| Extension Protocol v2 声明式 Contract 与内部 Scenario 适配 | 已实现 |
-| Mobile Extension Protocol v2 迁移 | 已实现 |
+| 声明式 Extension Protocol 与内部 Scenario 适配 | 已实现 |
+| Mobile Extension 接入 | 已实现 |
 | Context Engine：Seen Evidence、跨轮去重、Context Delta | 已实现 |
 | 代表性 Evidence grouping / 语义压缩 | 计划 |
-| MCP 基于 v2 Runtime/Context API 的适配 | 已实现 |
+| MCP 基于 Runtime/Context API 的适配 | 已实现 |
 | Mobile 真机与 CI 跨领域验收 | 部分实现：已有 Mobile 自动化真实日志/全矩阵验证；真机和独立 CI 领域扩展验证仍未完成 |
 
 Contract → Context Engine → Mobile → MCP 的迁移顺序已在重构分支完成。下一阶段优先做真实 Agent Host / Token benchmark、Mobile 真机验收，以及第二个独立领域（例如 CI）的验证；在此之前不继续把新的领域概念上提到主包。
