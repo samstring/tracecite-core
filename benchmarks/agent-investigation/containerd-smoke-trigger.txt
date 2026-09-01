@@ -1,2 +1,2 @@
-trigger: 2026-09-01 stability run 1 after preview guidance
+trigger: 2026-09-01 stability run 2 after preview guidance
 validated_head: b11bf27634e732d65bd98c1efc918307953e703b
