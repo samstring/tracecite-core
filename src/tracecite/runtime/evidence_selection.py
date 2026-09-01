@@ -13,9 +13,11 @@ plain-text records whose stable wording is the same but whose parameters vary.
 No root-cause vocabulary, component-specific terms, or causal inference is used.
 
 Structural neighborhoods and Drain templates are internal clustering aids only.
-Their raw bodies are never returned to the Agent. All neighborhood, signature,
-label and hint sizes are hard-bounded so diversity discovery cannot become an
-unbounded model context expansion mechanism.
+Their raw bodies are never returned to the Agent. Selected navigation hints may
+point at a bounded source segment (for example one blank-delimited stack block),
+but the Agent still has to materialize that range before seeing or citing it.
+All neighborhood, segment, signature, label and hint sizes are hard-bounded so
+diversity discovery cannot become an unbounded model context expansion mechanism.
 """
 
 from __future__ import annotations
@@ -60,6 +62,11 @@ _STACK_FUNCTION_RE = re.compile(r"\(\*[^)]+\)\.[A-Za-z_][A-Za-z0-9_]*\s*\(")
 _STACK_SOURCE_RE = re.compile(
     r"(?:^|[/\\])[^\s:]+\.(?:go|c|cc|cpp|m|mm|swift|java|kt|rs):\d+"
 )
+_GO_STACK_HEADER_RE = re.compile(r"^goroutine\s+\d+\s+\[[^\]]+\]:\s*$", re.IGNORECASE)
+_PY_TRACEBACK_HEADER_RE = re.compile(r"^traceback \(most recent call last\):\s*$", re.IGNORECASE)
+_JAVA_STACK_FRAME_RE = re.compile(r"^\s*at\s+\S+\([^)]*\)\s*$")
+_PY_STACK_FRAME_RE = re.compile(r'^\s*File\s+".+",\s+line\s+\d+')
+_NATIVE_STACK_FRAME_RE = re.compile(r"^\s*#\d+\s+")
 
 DEFAULT_SIGNAL_SIGNATURE_CAP = 256
 MAX_SIGNAL_SIGNATURE_CAP = 2_048
@@ -73,6 +80,8 @@ STRUCTURAL_SIGNATURE_CHAR_LIMIT = 3_000
 HINT_LABEL_CHAR_LIMIT = 160
 MAX_DRAIN_CANDIDATES = 8_192
 DRAIN_TEXT_CHAR_LIMIT = 1_200
+MAX_EVIDENCE_SEGMENT_LINES = 61
+MAX_EVIDENCE_SEGMENT_SCAN_RADIUS = 60
 
 
 def signal_severity(text: str) -> int:
@@ -230,6 +239,180 @@ def _looks_like_stack_record(text: str) -> bool:
     return False
 
 
+def _looks_like_stack_block(lines: list[str]) -> bool:
+    """Recognize stack-shaped syntax without interpreting its meaning."""
+
+    headers = 0
+    function_frames = 0
+    source_frames = 0
+    external_frames = 0
+    for raw in lines:
+        value = raw.rstrip("\r\n")
+        if _GO_STACK_HEADER_RE.match(value) or _PY_TRACEBACK_HEADER_RE.match(value):
+            headers += 1
+        if _STACK_FUNCTION_RE.search(value):
+            function_frames += 1
+        if _STACK_SOURCE_RE.search(value):
+            source_frames += 1
+        if (
+            _JAVA_STACK_FRAME_RE.match(value)
+            or _PY_STACK_FRAME_RE.match(value)
+            or _NATIVE_STACK_FRAME_RE.match(value)
+        ):
+            external_frames += 1
+    if headers and (function_frames + source_frames + external_frames) >= 1:
+        return True
+    if function_frames >= 2 and source_frames >= 1:
+        return True
+    return external_frames >= 3
+
+
+def _cap_segment_around_match(
+    segment_start: int,
+    segment_end: int,
+    match_start: int,
+    match_end: int,
+) -> tuple[int, int]:
+    """Bound a candidate segment while retaining the matched range."""
+
+    if segment_end - segment_start + 1 <= MAX_EVIDENCE_SEGMENT_LINES:
+        return segment_start, segment_end
+
+    max_span = MAX_EVIDENCE_SEGMENT_LINES - 1
+    if match_end - segment_start <= max_span:
+        bounded_start = segment_start
+        bounded_end = min(segment_end, bounded_start + max_span)
+        return bounded_start, bounded_end
+
+    center = (match_start + match_end) // 2
+    half = MAX_EVIDENCE_SEGMENT_LINES // 2
+    bounded_start = max(segment_start, center - half)
+    bounded_end = min(segment_end, bounded_start + max_span)
+    if bounded_end - bounded_start < max_span:
+        bounded_start = max(segment_start, bounded_end - max_span)
+    if bounded_start > match_start:
+        bounded_start = match_start
+        bounded_end = min(segment_end, bounded_start + max_span)
+    if bounded_end < match_end:
+        bounded_end = match_end
+        bounded_start = max(segment_start, bounded_end - max_span)
+    return bounded_start, bounded_end
+
+
+def _source_segment_ranges(
+    source_path: Path,
+    selected: list[dict[str, Any]],
+    *,
+    fallback_radius: int,
+) -> list[dict[str, Any]]:
+    """Resolve a tiny selected set to bounded structural source ranges.
+
+    Only already-selected navigation representatives are scanned with the larger
+    segment window. This keeps segment discovery bounded even when the original
+    query matched thousands of records.
+    """
+
+    fallback = [
+        {
+            "line": max(1, int(item["line"]) - fallback_radius),
+            "end_line": int(item["end_line"]) + fallback_radius,
+            "match_line": int(item["line"]),
+            "match_end_line": int(item["end_line"]),
+            "segment_kind": "context_neighborhood",
+        }
+        for item in selected
+    ]
+    if not source_path.is_file() or not selected:
+        return fallback
+
+    intervals: list[tuple[int, int, int]] = []
+    for index, item in enumerate(selected):
+        start = int(item["line"])
+        end = int(item["end_line"])
+        intervals.append(
+            (
+                max(1, start - MAX_EVIDENCE_SEGMENT_SCAN_RADIUS),
+                end + MAX_EVIDENCE_SEGMENT_SCAN_RADIUS,
+                index,
+            )
+        )
+    intervals.sort(key=lambda item: (item[0], item[1], item[2]))
+
+    buffers: list[list[tuple[int, str]]] = [[] for _ in selected]
+    active: list[tuple[int, int]] = []
+    next_interval = 0
+    with source_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line_number, raw in enumerate(handle, start=1):
+            while next_interval < len(intervals) and intervals[next_interval][0] <= line_number:
+                _left, right, index = intervals[next_interval]
+                active.append((right, index))
+                next_interval += 1
+            if active:
+                active = [(right, index) for right, index in active if right >= line_number]
+                for _right, index in active:
+                    buffers[index].append((line_number, raw))
+            if next_interval >= len(intervals) and not active:
+                break
+
+    resolved: list[dict[str, Any]] = []
+    for index, item in enumerate(selected):
+        match_start = int(item["line"])
+        match_end = int(item["end_line"])
+        rows = buffers[index]
+        if not rows:
+            resolved.append(fallback[index])
+            continue
+
+        anchor_indexes = [
+            row_index
+            for row_index, (line_number, _raw) in enumerate(rows)
+            if match_start <= line_number <= match_end
+        ]
+        if not anchor_indexes:
+            resolved.append(fallback[index])
+            continue
+
+        left = anchor_indexes[0]
+        right = anchor_indexes[-1]
+        while left > 0 and rows[left - 1][1].strip():
+            left -= 1
+        while right + 1 < len(rows) and rows[right + 1][1].strip():
+            right += 1
+
+        block_lines = [raw for _line_number, raw in rows[left : right + 1]]
+        if _looks_like_stack_block(block_lines):
+            segment_start = rows[left][0]
+            segment_end = rows[right][0]
+            segment_start, segment_end = _cap_segment_around_match(
+                segment_start,
+                segment_end,
+                match_start,
+                match_end,
+            )
+            kind = "stack_block"
+        else:
+            first_available = rows[0][0]
+            last_available = rows[-1][0]
+            segment_start = max(first_available, match_start - fallback_radius)
+            segment_end = min(last_available, match_end + fallback_radius)
+            kind = "context_neighborhood"
+
+        center = (segment_start + segment_end) // 2
+        radius = max(center - segment_start, segment_end - center)
+        resolved.append(
+            {
+                "line": segment_start,
+                "end_line": segment_end,
+                "match_line": match_start,
+                "match_end_line": match_end,
+                "segment_kind": kind,
+                "expand_line": center,
+                "expand_radius": radius,
+            }
+        )
+    return resolved
+
+
 def _drain_grouping(candidates: list[dict[str, Any]]) -> tuple[list[str | None], set[str]]:
     """Return optional Drain cluster ids and clusters that truly generalized.
 
@@ -308,9 +491,10 @@ def select_signal_hints(
     stack-frame records always keep the structural-neighborhood path. No
     file-level log-type decision is made.
 
-    Neighborhoods and templates are used only for mechanical clustering;
-    returned hints contain only bounded coordinates and a short match label,
-    never those internal bodies.
+    After ranking, only the selected representatives are resolved to bounded
+    source segments. Stack-shaped blank-delimited blocks are retained as one
+    navigation range when they fit the hard line cap; everything else falls back
+    to a small context neighborhood. Segment bodies are never returned here.
     """
 
     if limit < 1 or limit > MAX_SIGNAL_HINT_LIMIT:
@@ -365,13 +549,18 @@ def select_signal_hints(
     if not candidates:
         return []
 
+    resolved_source = (
+        Path(source_path).expanduser().resolve()
+        if source_path is not None
+        else None
+    )
     structural_texts = (
         _source_neighborhoods(
-            Path(source_path).expanduser().resolve(),
+            resolved_source,
             candidates,
             radius=neighborhood_radius,
         )
-        if source_path is not None
+        if resolved_source is not None
         else [
             str(item.get("text") or "")[:MAX_STRUCTURAL_NEIGHBORHOOD_CHARS]
             for item in candidates
@@ -442,27 +631,75 @@ def select_signal_hints(
             int(pair[1]["ordinal"]),
         ),
     )[:limit]
-    return [
-        {
-            "line": int(item["line"]),
-            "end_line": int(item["end_line"]),
-            "severity": int(item["severity"]),
-            "count": int(item["count"]),
-            "label": str(item["label"])[:HINT_LABEL_CHAR_LIMIT],
-            "kind": (
-                "high_signal"
-                if int(item["severity"]) > 0
-                else (
-                    "template_diversity"
-                    if str(item.get("grouping_view") or "") == "template"
-                    else "structural_diversity"
-                )
-            ),
-            "grouping_view": str(item.get("grouping_view") or "structural"),
-            "distinctiveness": round(float(distinctiveness.get(group_key, 0.0)), 6),
-        }
-        for group_key, item in selected_pairs
-    ]
+
+    segment_rows = (
+        _source_segment_ranges(
+            resolved_source,
+            [item for _group_key, item in selected_pairs],
+            fallback_radius=neighborhood_radius,
+        )
+        if resolved_source is not None
+        else [
+            {
+                "line": int(item["line"]),
+                "end_line": int(item["end_line"]),
+                "match_line": int(item["line"]),
+                "match_end_line": int(item["end_line"]),
+                "segment_kind": "match",
+                "expand_line": int(item["line"]),
+                "expand_radius": 0,
+            }
+            for _group_key, item in selected_pairs
+        ]
+    )
+
+    results: list[dict[str, Any]] = []
+    for (group_key, item), segment in zip(selected_pairs, segment_rows):
+        match_line = int(segment["match_line"])
+        match_end_line = int(segment["match_end_line"])
+        segment_kind = str(segment["segment_kind"])
+        expand_line = int(segment.get("expand_line") or match_line)
+        expand_radius = int(segment.get("expand_radius") or 0)
+        original_label = str(item["label"])[:HINT_LABEL_CHAR_LIMIT]
+        if resolved_source is not None:
+            match_ref = (
+                f"L{match_line}"
+                if match_end_line == match_line
+                else f"L{match_line}-L{match_end_line}"
+            )
+            navigation_prefix = (
+                f"segment={segment_kind} match={match_ref} "
+                f"expand_line={expand_line} expand_radius={expand_radius} | "
+            )
+            label = (navigation_prefix + original_label)[:HINT_LABEL_CHAR_LIMIT]
+        else:
+            label = original_label
+        results.append(
+            {
+                "line": int(segment["line"]),
+                "end_line": int(segment["end_line"]),
+                "match_line": match_line,
+                "match_end_line": match_end_line,
+                "segment_kind": segment_kind,
+                "expand_line": expand_line,
+                "expand_radius": expand_radius,
+                "severity": int(item["severity"]),
+                "count": int(item["count"]),
+                "label": label,
+                "kind": (
+                    "high_signal"
+                    if int(item["severity"]) > 0
+                    else (
+                        "template_diversity"
+                        if str(item.get("grouping_view") or "") == "template"
+                        else "structural_diversity"
+                    )
+                ),
+                "grouping_view": str(item.get("grouping_view") or "structural"),
+                "distinctiveness": round(float(distinctiveness.get(group_key, 0.0)), 6),
+            }
+        )
+    return results
 
 
 __all__ = [
@@ -472,6 +709,7 @@ __all__ = [
     "DRAIN_TEXT_CHAR_LIMIT",
     "HINT_LABEL_CHAR_LIMIT",
     "MAX_DRAIN_CANDIDATES",
+    "MAX_EVIDENCE_SEGMENT_LINES",
     "MAX_SIGNAL_HINT_LIMIT",
     "MAX_SIGNAL_SIGNATURE_CAP",
     "MAX_STRUCTURAL_NEIGHBORHOOD_CHARS",
