@@ -5,12 +5,8 @@ on:
     branches:
       - test/tracecite-mode-containerd
     paths:
-      - .github/workflows/pi-tracecite-mode-containerd-smoke.yml
-      - benchmarks/agent-investigation/pi_tracecite_bridge.py
-      - src/tracecite/runtime/evidence_selection.py
-      - tests/test_pi_source_identity_projection.py
-      - tests/test_evidence_selection_diversity.py
-      - tests/test_pi_navigation_hint_projection.py
+      - benchmarks/agent-investigation/containerd-smoke-trigger.txt
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -45,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev,diversity]"
 
       - name: Run guard and retrieval regressions
         shell: bash
