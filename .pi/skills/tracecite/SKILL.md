@@ -133,9 +133,9 @@ Some TraceCite outputs are deliberately only navigation landmarks. Examples incl
 - projected `navigation_hint` rows;
 - suggested bounded stack/context ranges.
 
-These say where the Agent may want to look. They are not a substitute for materializing the referenced source text.
+These say where source structure can be recovered. They are not a substitute for materializing the referenced source text, and their presence is not a recommendation about what the evidence means.
 
-If a conclusion depends on a navigation-only range, materialize the range before citing or reasoning from its body.
+If a conclusion depends on a navigation-only range, its body remains unobserved until the range is materialized. TraceCite does not decide whether that body matters to the conclusion.
 
 # Adaptive retrieval and why outputs can look different
 
@@ -169,7 +169,7 @@ A source is not repeatedly dumped simply because it is small. Once it has alread
 
 For a larger source, TraceCite may return a deterministic bounded sample or a bounded number of search matches.
 
-A bounded source sample is explicitly navigation-only. The Agent should use it to understand the shape of the source and choose ranges to materialize.
+A bounded source sample is explicitly navigation-only. It describes the shape of available source output while keeping transport bounded.
 
 Current default routing budgets include bounded caps such as a limited number of evidence rows and bounded per-row text. These are context-control limits, not evidence-importance thresholds, and policy/Host configuration may change them.
 
@@ -201,6 +201,14 @@ not visible in returned rows != not present in the source
 ```
 
 Likewise, a small number of returned examples must not be interpreted as the total number of matching records unless the response explicitly establishes complete coverage.
+
+## Match coverage and structural visibility are different
+
+A truncated search can return many inline rows with the same visible shape while mechanically retaining navigation hints for other normalized record shapes from the full matched-record artifact.
+
+This means the dominant inline shape describes what is visible in the bounded projection; it does not prove that all matching logical records have that same complete structure. Conversely, a structurally distinct navigation hint only proves that a mechanically different source shape was retained for recovery. It does not prove semantic importance, anomaly, contradiction, or causal relevance.
+
+Until the source body behind a navigation hint is materialized, the Agent has not observed the complete record represented by that hint. TraceCite does not decide whether that unseen record should affect a hypothesis.
 
 ## `no_match` is a retrieval fact, not a global absence proof
 
@@ -258,7 +266,7 @@ Only returned/materialized text is available for Agent reasoning.
 
 # Bounded segment navigation
 
-For selected navigation hints, TraceCite may turn a single matching line into a bounded source range that is easier for the Agent to materialize coherently.
+For selected navigation hints, TraceCite may turn a single matching line into a bounded source range that is easier to recover as a coherent source block.
 
 For strong stack-shaped text, the current implementation can detect a blank-delimited stack block around the match. The block is hard-bounded so it cannot become an unbounded context dump. If no strong stack block is recognized, TraceCite falls back to a small context neighborhood.
 
@@ -280,7 +288,7 @@ navigation range:   L23105-L23151
 
 This means the match is inside a bounded context/stack segment. It does not mean L23105 itself matched or is more important.
 
-The Agent should materialize the suggested range and reason from the returned frames/text, not from the range boundary itself.
+The range is a recovery coordinate only. Any meaning in its frames/text is determined by the Agent after observing the materialized source.
 
 # Source line ordering
 
@@ -617,17 +625,11 @@ The Pi extension can observe actual Host tool activity for trajectory/benchmark 
 
 Host activity telemetry is not source evidence and is not an evidence-sufficiency or root-cause signal.
 
-In a controlled native-vs-TraceCite A/B mode, the Host may intentionally require all evidence-content operations to go through TraceCite while leaving file-location helpers available.
+In a controlled TraceCite evidence mode, the Host may intentionally expose only TraceCite evidence-content operations.
 
-When that mode is active:
+When that mode is active, evidence search/materialization/replay/aggregation/traversal/verification remain transport capabilities. The Agent still chooses hypotheses, queries, ranges, comparisons, conclusions, and stopping independently.
 
-- use TraceCite for evidence search, materialization/replay, aggregation, traversal, and verification;
-- do not bypass the controlled evidence channel with `grep`, `cat`, shell pipelines, or native `read` against the evidence files;
-- after the Host reports such an access is blocked, do not retry equivalent native access to the protected evidence root;
-- still use Agent reasoning normally;
-- still choose hypotheses, queries, ranges, comparisons, conclusions, and stopping independently.
-
-The controlled mode is a capability comparison, not an instruction to trust TraceCite's retrieval order as a diagnosis.
+The controlled mode is a capability configuration, not an instruction to trust TraceCite's retrieval order as a diagnosis.
 
 # What TraceCite mechanics do NOT imply
 
@@ -650,6 +652,8 @@ status=no_new_evidence        != no useful evidence exists
 coverage suppression          != empty source text
 verified evidence integrity   != verified diagnosis
 routing mode                  != semantic importance
+dominant inline record shape  != complete structural coverage
+structurally distinct hint    != semantically important evidence
 ```
 
 # Recommended Agent investigation loop
