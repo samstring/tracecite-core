@@ -1,2 +1,2 @@
-trigger: 2026-09-01 sparse materialized evidence geometry validation
-validated_head: b83eb75143d58fbbd4ad6a31306b8e55b977bf1a
+trigger: 2026-09-01 tracecite skill mechanics root-cause validation
+validated_head: 68e829182e9321b68c11fa420fdac5ed90263a5f
