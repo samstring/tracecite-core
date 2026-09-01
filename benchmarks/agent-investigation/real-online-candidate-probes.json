@@ -20,6 +20,59 @@
       ]
     },
     {
+      "id": "kubernetes-140268-ubuntu-ginkgo",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-containerd/2074205743732494336/artifacts/tmp-node-e2e-7a8e0c18-ubuntu-gke-2404-1-34-amd64-v20260705/tmp-node-e2e-7a8e0c18-ubuntu-gke-2404-1-34-amd64-v20260705-ginkgo.log",
+      "needles": [
+        "device-plugin-failures-3083",
+        "device-plugin-failures-5477",
+        "testdevice",
+        "Unhealthy",
+        "Healthy"
+      ]
+    },
+    {
+      "id": "kubernetes-140268-cos-ginkgo",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-containerd/2074205743732494336/artifacts/tmp-node-e2e-7a8e0c18-cos-125-19216-395-138/tmp-node-e2e-7a8e0c18-cos-125-19216-395-138-ginkgo.log",
+      "needles": [
+        "device-plugin-failures-3083",
+        "device-plugin-failures-5477",
+        "testdevice",
+        "Unhealthy",
+        "Healthy"
+      ]
+    },
+    {
+      "id": "kubernetes-140887-system",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-e2e-containerd-alpha-features/2079839944150355968/artifacts/tmp-node-e2e-450c392b-cos-125-19216-532-25-system.log",
+      "needles": [
+        "GenericWorkload",
+        "WorkloadWithJob is enabled",
+        "DRAWorkloadResourceClaims is enabled",
+        "depends on features that are disabled",
+        "initialize feature gates"
+      ]
+    },
+    {
+      "id": "kubernetes-140848-build-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-kubelet-containerd-resource-managers/2079792906901655552/build-log.txt",
+      "needles": [
+        "PodLevelResourcesFixDefaulting is enabled",
+        "depends on features that are disabled: [PodLevelResources]",
+        "failed to merge global and in-flight KubeletConfiguration while setting defaults",
+        "Failed to get successful response from /configz"
+      ]
+    },
+    {
+      "id": "kubernetes-140848-system-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-kubelet-containerd-resource-managers/2079792906901655552/artifacts/n2d-standard-32-cos-125-19216-532-25-913c732d-system.log",
+      "needles": [
+        "PodLevelResourcesFixDefaulting is enabled",
+        "depends on features that are disabled: [PodLevelResources]",
+        "failed to merge global and in-flight KubeletConfiguration while setting defaults",
+        "Failed to get successful response from /configz"
+      ]
+    },
+    {
       "id": "kubernetes-141402-worker-journal",
       "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-kind-cloud-provider-loadbalancer/2086677576276774912/artifacts/kind-worker/journal.log",
       "needles": [
