@@ -8,6 +8,14 @@ from pathlib import Path
 from tracecite.benchmarking import prepare_case, validate_case
 
 
+CASES_ROOT = (
+    Path(__file__).resolve().parents[1]
+    / "benchmarks"
+    / "agent-investigation"
+    / "cases"
+)
+
+
 def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
@@ -55,3 +63,14 @@ def test_prepare_case_extracts_and_pins_gzip_payload(tmp_path: Path) -> None:
     assert prepared["source_sha256"] == _sha256(archive)
     assert prepared["extract"] == {"kind": "gzip"}
     assert Path(prepared["path"]).read_bytes() == payload
+
+
+def test_containerd_6772_case_is_valid_and_does_not_leak_gold() -> None:
+    case_dir = CASES_ROOT / "containerd-6772"
+    result = validate_case(case_dir)
+    assert result["status"] == "ok"
+    assert result["case_id"] == "containerd-6772"
+    question = (case_dir / "question.md").read_text(encoding="utf-8")
+    assert "WithConstLabels" not in question
+    assert "lock inversion" not in question
+    assert "deadlock in metrics" not in question
