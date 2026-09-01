@@ -1,2 +1,2 @@
-trigger: 2026-09-01 bounded stack segment validation
-validated_head: b50371d63f83e829180600a168dfa22b1ef31bdb
+trigger: 2026-09-01 evidence coordinate validation
+validated_head: 7d6326cd56602e9eefab6355d968ddcb845aaa37
