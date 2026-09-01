@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -43,6 +44,50 @@ def _session_store(path: str) -> RetrievalSessionStore:
     return store
 
 
+def _valid_sha256(value: object) -> str:
+    digest = str(value or "").strip().lower()
+    if len(digest) == 64 and all(ch in "0123456789abcdef" for ch in digest):
+        return digest
+    return ""
+
+
+def _payload_sha256(payload: Mapping[str, Any], source: Path) -> str:
+    direct = _valid_sha256(payload.get("sha256"))
+    if direct:
+        return direct
+
+    rows = payload.get("evidence")
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, Mapping):
+                digest = _valid_sha256(row.get("sha256"))
+                if digest:
+                    return digest
+
+    data = payload.get("data")
+    if isinstance(data, Mapping):
+        sources = data.get("sources")
+        if isinstance(sources, list):
+            resolved = source.resolve()
+            for row in sources:
+                if not isinstance(row, Mapping):
+                    continue
+                raw_path = str(row.get("path") or "").strip()
+                if raw_path and Path(raw_path).expanduser().resolve() != resolved:
+                    continue
+                digest = _valid_sha256(row.get("sha256"))
+                if digest:
+                    return digest
+
+    if source.is_file():
+        hasher = hashlib.sha256()
+        with source.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+    return ""
+
+
 def _directory_source_identity_evidence(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Project SourceTarget directory results as metadata-only evidence pointers.
 
@@ -65,18 +110,20 @@ def _directory_source_identity_evidence(payload: dict[str, Any]) -> list[dict[st
         source_path = str(row.get("path") or "").strip()
         if not source_path:
             continue
-        digest = str(row.get("sha256") or "").strip().lower()
+        source_path = str(Path(source_path).expanduser().resolve())
+        digest = _valid_sha256(row.get("sha256"))
         size = row.get("size")
         segmenter = str(row.get("segmenter") or "").strip()
         name = Path(source_path).name
 
-        label = [f"source={name}"]
+        label = [f"source={name}", f"access_file={source_path}"]
         if isinstance(size, int) and not isinstance(size, bool):
             label.append(f"bytes={size}")
         if digest:
             label.append(f"sha256={digest}")
         if segmenter:
             label.append(f"segmenter={segmenter}")
+        label.append("use access_file for later TraceCite calls")
 
         pointers.append(
             {
@@ -94,9 +141,57 @@ def _directory_source_identity_evidence(payload: dict[str, Any]) -> list[dict[st
     return pointers
 
 
+def _file_access_identity_evidence(
+    requested: Path,
+    payload: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Return the stable file argument separately from immutable evidence refs.
+
+    Query evidence refs may point at immutable snapshots. Those refs are citation
+    identities, not filesystem paths for a later retrieve/materialize call. The
+    Agent therefore receives an explicit original access path alongside the SHA.
+    """
+
+    if not requested.is_file():
+        return None
+    source_path = str(requested.expanduser().resolve())
+    digest = _payload_sha256(payload, requested)
+    name = Path(source_path).name
+    label = [
+        f"follow_up_file={source_path}",
+        f"source={name}",
+    ]
+    if digest:
+        label.append(f"sha256={digest}")
+    label.append("snapshot refs are citations, not file paths")
+    label.append("reuse follow_up_file for later TraceCite calls")
+    return {
+        "uri": (
+            f"tracecite-access://sha256/{digest}"
+            if digest
+            else f"tracecite-access://path/{name}"
+        ),
+        "source_path": source_path,
+        "sha256": digest or None,
+        "label": " ".join(label),
+        "metadata_only": True,
+    }
+
+
+def _append_identity_evidence(payload: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    existing = payload.get("evidence")
+    payload["evidence"] = [*(existing if isinstance(existing, list) else []), *rows]
+
+
 def _retrieve(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[str, Any]:
     requested = Path(args.file)
-    if args.query:
+
+    # Compatibility tracecite_search always sends a query. A directory cannot be
+    # searched as a text file, so treat directory requests as SourceTarget source
+    # discovery even when the compatibility alias supplied a placeholder query.
+    if args.query and not requested.is_dir():
         target = QueryTarget(
             requested,
             args.query,
@@ -113,20 +208,20 @@ def _retrieve(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[
     result = retrieve(EvidenceRequest(target), session=session)
     payload = attach_matched_existing_evidence(result)
 
-    # A strict evidence guard can intentionally block native ls/find inside the
-    # evidence root. When the caller inspects a directory SourceTarget, preserve
-    # Core's source identities so the Agent can discover which source to query
-    # next without gaining direct access to source content.
-    if not args.query and requested.is_dir():
+    if requested.is_dir():
         identities = _directory_source_identity_evidence(payload)
+        _append_identity_evidence(payload, identities)
         if identities:
-            existing = payload.get("evidence")
-            payload["evidence"] = (
-                [*existing, *identities] if isinstance(existing, list) else identities
-            )
             data = payload.setdefault("data", {})
             if isinstance(data, dict):
                 data["source_identity_projection"] = True
+    elif requested.is_file():
+        access = _file_access_identity_evidence(requested, payload)
+        if access is not None:
+            _append_identity_evidence(payload, [access])
+            data = payload.setdefault("data", {})
+            if isinstance(data, dict):
+                data["follow_up_access_file"] = access["source_path"]
 
     return payload
 
