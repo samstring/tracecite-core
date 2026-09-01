@@ -257,8 +257,9 @@ def _drain_grouping(candidates: list[dict[str, Any]]) -> tuple[list[str | None],
 
     config = TemplateMinerConfig()
     config.profiling_enabled = False
-    # Prefer under-grouping over accidentally merging distinct failures.
-    config.drain_sim_th = 0.7
+    # Still conservative versus Drain's default, while allowing a minority of
+    # dynamic tokens to vary in an otherwise stable log-template shape.
+    config.drain_sim_th = 0.6
     miner = TemplateMiner(config=config)
 
     final_template: dict[str, str] = {}
