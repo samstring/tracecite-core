@@ -37,9 +37,10 @@ jobs:
           - case_id: kubernetes-141283-compat-feature-gate
             case_dir: benchmarks/agent-investigation/cases/kubernetes-141283-compat-feature-gate
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
-      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      NATIVE_API_KEY: ${{ secrets.GMI_API_KEY }}
+      TRACECITE_API_KEY: ${{ secrets.GMI2_API_KEY }}
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      BENCH_MODEL: ${{ vars.GMI_MODEL }}
       PI_CODING_AGENT_DIR: /tmp/pi-agent-config
       PI_SKIP_VERSION_CHECK: "1"
       PI_TELEMETRY: "0"
@@ -73,11 +74,12 @@ jobs:
           set -euo pipefail
           python -m pytest -q tests/test_retrieval_guidance.py tests/test_session_novelty_regressions.py
 
-      - name: Configure GMI model for Pi
+      - name: Configure validated GMI model for Pi
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$OPENAI_API_KEY"
+          test -n "$NATIVE_API_KEY"
+          test -n "$TRACECITE_API_KEY"
           test -n "$BENCH_MODEL"
           mkdir -p "$PI_CODING_AGENT_DIR"
           python - <<'PY'
@@ -86,7 +88,7 @@ jobs:
           model = os.environ['BENCH_MODEL']
           payload = {'providers': {'gmi': {
               'name': 'GMI OpenAI-compatible',
-              'baseUrl': os.environ['OPENAI_BASE_URL'],
+              'baseUrl': os.environ['GMI_BASE_URL'],
               'api': 'openai-completions',
               'models': [{
                   'id': model,
@@ -137,7 +139,7 @@ jobs:
           cd "$INPUT_ROOT"
           set +e
           timeout -k 30s 600s pi \
-            --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$NATIVE_API_KEY" \
             --thinking off --mode text --print \
             --session-dir "$RESULT/pi-native-session" \
             --tools read,bash,grep,find,ls \
@@ -162,7 +164,7 @@ jobs:
           cd "$INPUT_ROOT"
           set +e
           timeout -k 30s 600s pi \
-            --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$TRACECITE_API_KEY" \
             --thinking off --mode text --print \
             --session-dir "$RESULT/pi-tracecite-session" \
             --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
