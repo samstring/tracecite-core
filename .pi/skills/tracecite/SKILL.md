@@ -93,6 +93,16 @@ The Agent still owns the decision to continue, switch hypotheses, answer, or dec
 
 Use exact refs and returned source SHA-256 for later materialization/replay.
 
+## Source line ordering
+
+Returned refs and ranges such as `L123-L140` describe positions in the captured source output.
+
+- Within the same source file, a lower line number only means that line appears earlier in that file's output than a higher line number.
+- Line order is output order, not event-time order, execution order, happens-before, causal order, lock order, or proof that one action occurred before another.
+- Use line numbers to navigate, revisit, and compare nearby output context.
+- Do not infer a relationship merely because two ranges are close together or appear in a particular file order.
+- If the evidence itself provides timestamps, sequence numbers, trace/span IDs, thread/goroutine context, or another explicit ordering signal, the Agent may reason from those observed fields separately.
+
 ## `tracecite_materialize`
 
 `tracecite_materialize` materializes exact bounded context around a caller-selected line/range.
