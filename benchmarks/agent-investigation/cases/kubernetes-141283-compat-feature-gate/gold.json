@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "case_id": "kubernetes-141283-compat-feature-gate",
+  "confirmed_by": [
+    "https://github.com/kubernetes/kubernetes/issues/141283",
+    "https://github.com/kubernetes/kubernetes/pull/141324",
+    "https://github.com/kubernetes/test-infra/pull/37665"
+  ],
+  "summary": "The runtime is reporting the expected value for the emulated compatibility state; the failure is in the compatibility validator/reference path. DRAFractionalCapacityRange has two feature specs at version 1.37, but the later default=true spec is constrained by MinCompatibilityVersion=1.37. With emulation at 1.37, the default minimum compatibility version is one minor lower, so that constrained spec does not apply and the live metric correctly remains 0. The generated feature reference omitted minCompatibilityVersion and the validator therefore selected the wrong same-version spec. The fix records minCompatibilityVersion in the feature-gate YAML and makes the validator exclude compatibility-constrained specs when selecting the emulated-version target.",
+  "required_concepts": [
+    {
+      "id": "live-runtime-value-zero",
+      "patterns": [
+        "DRAFractionalCapacityRange.{0,120}(0|disabled|false)",
+        "live.{0,120}(metric|runtime).{0,120}(0|disabled|false)"
+      ]
+    },
+    {
+      "id": "validator-reference-mismatch",
+      "patterns": [
+        "(validator|reference|yaml|metadata).{0,180}(wrong|mismatch|missing|omit|select)",
+        "(not|rather than).{0,100}(runtime|feature gate).{0,120}(bug|failure|root cause)"
+      ]
+    },
+    {
+      "id": "min-compatibility-version",
+      "patterns": [
+        "MinCompatibilityVersion|minCompatibilityVersion",
+        "minimum compatibility.{0,120}(1\\.36|one minor|previous minor)"
+      ]
+    },
+    {
+      "id": "same-version-spec-selection",
+      "patterns": [
+        "(two|multiple|same-version).{0,120}(spec|feature spec).{0,160}(1\\.37|default)",
+        "default.{0,80}(false|0).{0,160}default.{0,80}(true|1)"
+      ]
+    }
+  ],
+  "evidence_markers": [
+    "Validating features for emulated_version=1.37, current_version=1.38...",
+    "kubernetes_feature_enabled{name=\"DRAFractionalCapacityRange\",stage=\"BETA\"} 0"
+  ],
+  "thresholds": {
+    "concept_recall": 0.75,
+    "evidence_marker_recall": 1.0
+  },
+  "leak_terms": [
+    "validator ignores MinCompatibilityVersion",
+    "Exclude minCompatibilityVersion feature specs",
+    "Include minCompatibilityVersion info in featuregates yaml"
+  ]
+}
