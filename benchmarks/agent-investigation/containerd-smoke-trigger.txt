@@ -1,3 +1,3 @@
-trigger: 2026-09-02 tracecite v3 stability round 1
-validated_head: 3b6f667d8159072ed4b94570955f06ce897e5b1d
-skill_head: a837365e1caf1b3d536b4fdcb76e16f0d01065b9
+trigger: 2026-09-02 tracecite v4 stability round 1
+skill_head: 3d8f28b88d9fc459c78fa3ba4c58e0cd42639188
+tracecite_only_tools: true
