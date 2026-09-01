@@ -3,7 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tracecite.runtime.evidence_selection import select_signal_hints, structural_signature
+import pytest
+
+from tracecite.runtime.evidence_selection import (
+    HINT_LABEL_CHAR_LIMIT,
+    MAX_SIGNAL_HINT_LIMIT,
+    MAX_STRUCTURAL_NEIGHBORHOOD_RADIUS,
+    select_signal_hints,
+    structural_signature,
+)
 
 
 def _record(text: str, start_line: int) -> dict:
@@ -66,3 +74,54 @@ example.com/project.(*Supervisor).Run(5)
     common_hint = next(item for item in hints if item["line"] == 10)
     assert common_hint["count"] == 61
     assert hints.index(rare_hint) < hints.index(common_hint)
+
+
+def test_source_neighborhood_fingerprint_stays_metadata_only(tmp_path: Path) -> None:
+    source = tmp_path / "goroutines.txt"
+    records = tmp_path / "matched-records.jsonl"
+
+    lines = [f"filler {index}\n" for index in range(1, 260)]
+    match_lines = [50, 90, 130, 170, 210]
+    for line in match_lines[:-1]:
+        lines[line - 3] = "example.com/project.(*CommonCaller).Run()\n"
+        lines[line - 2] = "/src/common.go:42 +0x4a\n"
+        lines[line - 1] = "example.com/project.(*Collector).Add()\n"
+    rare_line = match_lines[-1]
+    rare_marker = "example.com/project.(*RareCaller).SpecialPath()"
+    lines[rare_line - 3] = rare_marker + "\n"
+    lines[rare_line - 2] = "/src/rare.go:77 +0x9b\n"
+    lines[rare_line - 1] = "example.com/project.(*Collector).Add()\n"
+    source.write_text("".join(lines), encoding="utf-8")
+
+    rows = [_record("example.com/project.(*Collector).Add()", line) for line in match_lines]
+    records.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    hints = select_signal_hints(
+        records,
+        source_path=source,
+        limit=4,
+        signature_cap=256,
+    )
+
+    assert len(hints) <= 4
+    assert any(item["line"] == rare_line for item in hints)
+    serialized = json.dumps(hints, sort_keys=True)
+    assert rare_marker not in serialized
+    assert all(len(str(item.get("label") or "")) <= HINT_LABEL_CHAR_LIMIT for item in hints)
+    assert all("text" not in item and "neighborhood" not in item for item in hints)
+
+
+def test_structural_navigation_rejects_unbounded_output_requests(tmp_path: Path) -> None:
+    records = tmp_path / "matched-records.jsonl"
+    records.write_text(json.dumps(_record("one match", 1)) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        select_signal_hints(records, limit=MAX_SIGNAL_HINT_LIMIT + 1)
+    with pytest.raises(ValueError):
+        select_signal_hints(
+            records,
+            neighborhood_radius=MAX_STRUCTURAL_NEIGHBORHOOD_RADIUS + 1,
+        )
