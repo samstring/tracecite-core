@@ -1,0 +1,73 @@
+name: Public Benchmark Case Prepare Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - bench/add-four-public-cases
+    paths:
+      - src/tracecite/benchmarking.py
+      - benchmarks/agent-investigation/cases/containerd-6772/**
+      - .github/workflows/benchmark-public-case-prepare-smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-containerd-6772:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install package
+        run: python -m pip install -e .
+      - name: Validate case
+        run: |
+          python -m tracecite.benchmarking validate \
+            benchmarks/agent-investigation/cases/containerd-6772
+      - name: Download, verify, and prepare original evidence
+        run: |
+          python -m tracecite.benchmarking prepare \
+            benchmarks/agent-investigation/cases/containerd-6772 \
+            --work-dir /tmp/tracecite-bench \
+            | tee /tmp/containerd-6772-prepare.json
+      - name: Verify prepared payload
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(
+              Path('/tmp/tracecite-bench/containerd-6772/prepared.json').read_text()
+          )
+          row = manifest['inputs'][0]
+          assert row['bytes'] == 2731626, row
+          assert row['sha256'] == '0e1577c8ab150ac41e322acb587ccd33f1947db822bd766ac6d92a568dcb3d91', row
+          assert row['source_bytes'] == 175897, row
+          assert row['source_sha256'] == 'f5c23f999094acd18859d85951e948f684acc698d8e8dac092207ec0b88362c7', row
+          text = Path(row['path']).read_text(encoding='utf-8', errors='replace')
+          markers = [
+              'github.com/containerd/containerd/metrics/cgroups/v1.(*Collector).Add',
+              'github.com/containerd/containerd/metrics/cgroups/v1.(*Collector).Collect',
+              'github.com/docker/go-metrics.(*Namespace).WithConstLabels',
+              'github.com/docker/go-metrics.(*Namespace).Collect',
+          ]
+          for marker in markers:
+              assert marker in text, marker
+          print(json.dumps({
+              'case_id': manifest['case_id'],
+              'payload_bytes': row['bytes'],
+              'source_archive_bytes': row['source_bytes'],
+              'markers_verified': markers,
+          }, indent=2))
+          PY
+      - name: Upload preparation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: containerd-6772-prepare-report
+          path: /tmp/containerd-6772-prepare.json
+          if-no-files-found: error
