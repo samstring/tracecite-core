@@ -1,2 +1,2 @@
-trigger: 2026-09-01 tracecite skill mechanics root-cause validation
-validated_head: 68e829182e9321b68c11fa420fdac5ed90263a5f
+trigger: 2026-09-01 stability run 1 after preview guidance
+validated_head: b11bf27634e732d65bd98c1efc918307953e703b
