@@ -2,14 +2,44 @@
   "schema_version": 1,
   "candidates": [
     {
-      "id": "kubernetes-140628-build-log",
-      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-node-crio-swap-serial/2077851676416413696/build-log.txt",
+      "id": "kubernetes-141283-build-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-e2e-kind-compatibility-versions-feature-gate-test/2085346290606018560/build-log.txt",
       "needles": [
-        "PodLevelResourcesFixKubeletQOSClass is enabled",
-        "depends on features that are disabled: [PodLevelResources]",
-        "failed to merge global and in-flight KubeletConfiguration while setting defaults",
-        "panic: failed to merge global and in-flight KubeletConfiguration",
-        "Found more than one kubelet service running"
+        "DRAFractionalCapacityRange",
+        "expected value 1, got 0",
+        "Validating features for emulated_version=1.37, current_version=1.38",
+        "FAIL: feature"
+      ]
+    },
+    {
+      "id": "kubernetes-141283-latest-metrics",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-e2e-kind-compatibility-versions-feature-gate-test/2085346290606018560/artifacts/latest_metrics.txt",
+      "needles": [
+        "DRAFractionalCapacityRange",
+        "kubernetes_feature_enabled",
+        "stage=\"BETA\"",
+        " 0"
+      ]
+    },
+    {
+      "id": "kubernetes-141402-build-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-kind-cloud-provider-loadbalancer/2086677576276774912/build-log.txt",
+      "needles": [
+        "client logs did not contain expected success message pattern",
+        "Got response body: Client Identity: spiffe://",
+        "Timed out after 30.001s",
+        "Projected PodCertificate"
+      ]
+    },
+    {
+      "id": "kubernetes-141402-worker-containerd",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-kind-cloud-provider-loadbalancer/2086677576276774912/artifacts/kind-worker/containerd.log",
+      "needles": [
+        "client-",
+        "server-",
+        "podcertificate",
+        "RunPodSandbox",
+        "CreateContainer"
       ]
     },
     {
@@ -22,16 +52,6 @@
         "health: Healthy",
         "health: Unhealthy",
         "Timed out after 60.000s"
-      ]
-    },
-    {
-      "id": "kubernetes-140848-build-log",
-      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-node-kubelet-containerd-resource-managers/2079792906901655552/build-log.txt",
-      "needles": [
-        "PodLevelResourcesFixDefaulting is enabled",
-        "depends on features that are disabled: [PodLevelResources]",
-        "failed to merge global and in-flight KubeletConfiguration while setting defaults",
-        "Failed to get successful response from /configz"
       ]
     }
   ]
