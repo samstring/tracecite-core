@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "kubernetes-141283-compat-feature-gate",
+  "title": "Compatibility-version feature gate validation disagrees with live metrics",
+  "source_issue": "https://github.com/kubernetes/kubernetes/issues/141283",
+  "fix_reference": "https://github.com/kubernetes/test-infra/pull/37665",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "prow-build-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-e2e-kind-compatibility-versions-feature-gate-test/2085346290606018560/build-log.txt",
+      "filename": "build-log.txt",
+      "sha256": "4f930a5b80b058f054e179ee4e48cb3c67397b87d4b7f4fab17f1877e9a63c9c",
+      "required": true
+    },
+    {
+      "id": "live-feature-metrics",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-e2e-kind-compatibility-versions-feature-gate-test/2085346290606018560/artifacts/latest_metrics.txt",
+      "filename": "latest_metrics.txt",
+      "sha256": "b18bf8fd37ab1da01e95a19489bcf56eadefcf0457964cc80436596fe7e9c5ad",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "kubernetes/kubernetes + kubernetes/test-infra",
+    "issue_state": "closed",
+    "public_log": true,
+    "fix_commit": "fa6c7e95e8c8deebfc04fcca4c748dce077d46fc",
+    "supporting_fix": "https://github.com/kubernetes/kubernetes/pull/141324",
+    "model_visible_payload_bytes": 3340840,
+    "notes": "Two complete original files from the same failing public Prow run: a 50,489-byte build log and a 3,290,351-byte live metrics snapshot. Combined evidence is 3.186 MiB. The issue was closed after the reference metadata and validator compatibility handling fixes landed and the job returned green. No padding, concatenation, or truncation is used."
+  }
+}
