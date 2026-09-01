@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from tracecite_core.state_file import state_lock
 
 from .agent_api import EvidenceRequest, ProviderTarget, QueryTarget, RangeTarget, RetrievalResult, SourceTarget
+from .evidence_coordinates import attach_seen_range_distances
 from .evidence_identity import SourceVersion, file_source_version, pointer_source_key
 from .evidence_progress import EvidenceProgressTracker
 from .evidence_routing import EvidenceRoutingPolicy
@@ -123,7 +124,7 @@ def _matched_existing_evidence_refs(
     """Project repeated matches as lightweight identities, never repeated bodies.
 
     A repeated match only means the current retrieval matched evidence that was
-    delivered earlier in this RetrievalSession.  It does not imply that the
+    delivered earlier in this RetrievalSession. It does not imply that the
     Agent understood, used, or should ignore that evidence now.
     """
 
@@ -146,6 +147,9 @@ def _matched_existing_evidence_refs(
         sha256 = str(item.get("sha256") or "").strip().lower()
         if re.fullmatch(r"[0-9a-f]{64}", sha256):
             ref["sha256"] = sha256
+        position = item.get("position")
+        if isinstance(position, Mapping):
+            ref["position"] = dict(position)
         refs.append(ref)
     return tuple(refs)
 
@@ -550,6 +554,28 @@ def retrieve_with_session(
         source_observation=source_observation,
         line_ranges=line_ranges,
     )
+
+    # Query candidates are compared only to ranges the Agent has actually
+    # materialized earlier in this RetrievalSession. Query retrieval itself does
+    # not add covered ranges, so reading the post-commit state cannot turn a
+    # candidate into its own historical neighbor.
+    if isinstance(request.target, QueryTarget) and evidence:
+        with state_lock(session.path):
+            coordinate_state = session.load()
+        annotated = tuple(
+            attach_seen_range_distances(evidence, coordinate_state.covered_ranges)
+        )
+        by_uri = {
+            str(item.get("uri") or "").strip(): item
+            for item in annotated
+            if str(item.get("uri") or "").strip()
+        }
+        new_rows = tuple(
+            by_uri.get(str(item.get("uri") or "").strip(), dict(item))
+            for item in new_rows
+        )
+        evidence = annotated
+        canonical["evidence"] = [dict(item) for item in annotated]
 
     data = dict(canonical.get("data") or {})
     data["session_progress"] = session_progress
