@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "case_id": "kubernetes-141402-podcertificate-readiness",
+  "confirmed_by": [
+    "https://github.com/kubernetes/kubernetes/issues/141402",
+    "https://github.com/kubernetes/kubernetes/pull/141440",
+    "https://github.com/kubernetes/kubernetes/commit/b3bc2ac58fa173967f27ade80f28cc5015b8c1c3"
+  ],
+  "summary": "The flake is a test sequencing/readiness race, not evidence of a broken PodCertificate or mTLS implementation. The test starts its fixed 30-second poll for a success line before the server and client deployments are guaranteed healthy; the worker runtime log shows client containers still being created during the failing run. The merged fix waits for both deployments to complete before starting the mTLS log poll.",
+  "required_concepts": [
+    {
+      "id": "fixed-poll-timeout",
+      "patterns": [
+        "30(.001)?[ -]?second.{0,120}(poll|timeout|window)",
+        "Timed out after 30\\.001s",
+        "client logs.{0,120}(expected|success).{0,120}(missing|not contain|timeout)"
+      ]
+    },
+    {
+      "id": "startup-readiness-race",
+      "patterns": [
+        "(readiness|ready|deployment|startup|sequenc).{0,180}(race|before|not yet|still|wait)",
+        "(client|server).{0,160}(container|deployment).{0,160}(created|starting|not ready|still starting)"
+      ]
+    },
+    {
+      "id": "not-mtls-runtime-root",
+      "patterns": [
+        "(not|no evidence).{0,100}(mTLS|certificate|PodCertificate).{0,100}(bug|failure|root cause)",
+        "(test|timing|readiness).{0,120}(rather than|instead of).{0,120}(mTLS|certificate|runtime)"
+      ]
+    }
+  ],
+  "evidence_markers": [
+    "Timed out after 30.001s.",
+    "client logs did not contain expected success message pattern",
+    "Got response body: Client Identity: spiffe://",
+    "container name:\"client-container\""
+  ],
+  "thresholds": {
+    "concept_recall": 0.6667,
+    "evidence_marker_recall": 0.75
+  },
+  "leak_terms": [
+    "readiness race",
+    "WaitForDeploymentComplete",
+    "waits for the server and client deployments to be healthy"
+  ]
+}
