@@ -27,6 +27,7 @@ from tracecite.runtime import (
     traverse,
     verify,
 )
+from tracecite.runtime.evidence_selection import select_signal_hints
 from tracecite.runtime.repeated_evidence import attach_matched_existing_evidence
 
 
@@ -89,12 +90,7 @@ def _payload_sha256(payload: Mapping[str, Any], source: Path) -> str:
 
 
 def _directory_source_identity_evidence(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Project SourceTarget directory results as metadata-only evidence pointers.
-
-    Core already returns source path/size/SHA-256 under data.sources. Pi's compact
-    projection preserves top-level evidence pointers, so mirror only immutable
-    source identity here. No source text is copied into the pointer.
-    """
+    """Project SourceTarget directory results as metadata-only evidence pointers."""
 
     data = payload.get("data")
     if not isinstance(data, Mapping):
@@ -145,12 +141,7 @@ def _file_access_identity_evidence(
     requested: Path,
     payload: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    """Return the stable file argument separately from immutable evidence refs.
-
-    Query evidence refs may point at immutable snapshots. Those refs are citation
-    identities, not filesystem paths for a later retrieve/materialize call. The
-    Agent therefore receives an explicit original access path alongside the SHA.
-    """
+    """Return the stable file argument separately from immutable evidence refs."""
 
     if not requested.is_file():
         return None
@@ -178,17 +169,83 @@ def _file_access_identity_evidence(
     }
 
 
+def _matched_records_path(payload: Mapping[str, Any]) -> Path | None:
+    for row in payload.get("artifacts") or []:
+        if not isinstance(row, Mapping) or row.get("role") != "matched_records":
+            continue
+        raw = str(row.get("path") or "").strip()
+        if raw:
+            return Path(raw)
+    return None
+
+
+def _refresh_source_aware_navigation_hints(requested: Path, payload: dict[str, Any]) -> None:
+    """Re-rank truncated Pi navigation hints with local source neighborhoods.
+
+    Core owns the generic structural selector. This Pi projection supplies the
+    original source path so identical matching lines can still be distinguished
+    by nearby caller/callee structure. The selector returns coordinates only;
+    the Agent must materialize a range before using its body as Evidence.
+    """
+
+    if not requested.is_file():
+        return
+    coverage = payload.get("coverage")
+    if not isinstance(coverage, Mapping) or not bool(coverage.get("evidence_truncated")):
+        return
+    records_path = _matched_records_path(payload)
+    if records_path is None:
+        return
+    try:
+        hints = select_signal_hints(
+            records_path,
+            source_path=requested,
+            limit=4,
+            signature_cap=256,
+        )
+    except (OSError, ValueError):
+        return
+    if not hints:
+        return
+
+    inline_ranges: list[tuple[int, int]] = []
+    for row in payload.get("evidence") or []:
+        if not isinstance(row, Mapping):
+            continue
+        start = row.get("start_line")
+        end = row.get("end_line")
+        if not isinstance(start, int) or isinstance(start, bool):
+            continue
+        if not isinstance(end, int) or isinstance(end, bool) or end < start:
+            end = start
+        inline_ranges.append((start, end))
+
+    retained: list[dict[str, Any]] = []
+    for hint in hints:
+        line = int(hint["line"])
+        if any(start <= line <= end for start, end in inline_ranges):
+            continue
+        retained.append(dict(hint))
+    if not retained:
+        return
+
+    data = payload.setdefault("data", {})
+    if isinstance(data, dict):
+        data["signal_hints"] = retained
+        data["signal_hint_note"] = (
+            "Structurally diverse truncated-search navigation candidates; "
+            "materialize the referenced range before citing."
+        )
+        data["source_neighborhood_diversity"] = True
+    if isinstance(coverage, dict):
+        coverage["signal_hints_returned"] = len(retained)
+
+
 def _navigation_hint_evidence(
     requested: Path,
     payload: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    """Project Core navigation hints without promoting them to source Evidence.
-
-    Truncated searches may identify rare/high-signal record structures outside
-    the inline first-N result. They are only coordinates: Pi receives the source
-    path, immutable digest and line range, then must materialize that range with
-    TraceCite before using its contents as evidence.
-    """
+    """Project navigation hints without promoting them to source Evidence."""
 
     if not requested.is_file():
         return []
@@ -216,7 +273,7 @@ def _navigation_hint_evidence(
         severity_value = int(severity) if isinstance(severity, int) and not isinstance(severity, bool) else 0
         count = row.get("count")
         count_value = int(count) if isinstance(count, int) and not isinstance(count, bool) else 1
-        kind = "high_signal" if severity_value > 0 else "structural_diversity"
+        kind = str(row.get("kind") or ("high_signal" if severity_value > 0 else "structural_diversity"))
         preview = str(row.get("label") or "").strip()[:240]
         line_ref = f"L{start}" if end == start else f"L{start}-L{end}"
         label = [
@@ -259,9 +316,6 @@ def _append_identity_evidence(payload: dict[str, Any], rows: list[dict[str, Any]
 def _retrieve(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[str, Any]:
     requested = Path(args.file)
 
-    # Compatibility tracecite_search always sends a query. A directory cannot be
-    # searched as a text file, so treat directory requests as SourceTarget source
-    # discovery even when the compatibility alias supplied a placeholder query.
     if args.query and not requested.is_dir():
         target = QueryTarget(
             requested,
@@ -287,6 +341,8 @@ def _retrieve(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[
             if isinstance(data, dict):
                 data["source_identity_projection"] = True
     elif requested.is_file():
+        if args.query:
+            _refresh_source_aware_navigation_hints(requested, payload)
         navigation = _navigation_hint_evidence(requested, payload)
         _append_identity_evidence(payload, navigation)
         access = _file_access_identity_evidence(requested, payload)
@@ -343,12 +399,7 @@ def _aggregate(args: argparse.Namespace) -> dict[str, Any]:
 
 
 class _FixtureProvider:
-    """Minimal provider adapter for exposing canonical traversal to Pi.
-
-    The fixture format is provider-shaped evidence, not raw-log parsing. It keeps
-    traversal operational without teaching Runtime how to choose entities or
-    inventing a second traversal model in the adapter.
-    """
+    """Minimal provider adapter for exposing canonical traversal to Pi."""
 
     def __init__(self, path: Path):
         payload = json.loads(path.read_text(encoding="utf-8"))
