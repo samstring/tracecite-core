@@ -4,8 +4,13 @@ on:
   push:
     branches:
       - experiment/evidence-intelligence
+      - bench/add-four-public-cases
     paths:
       - benchmarks/agent-investigation/scale-cases/**
+      - benchmarks/agent-investigation/cases/containerd-6772/**
+      - benchmarks/agent-investigation/cases/kubernetes-140039-runc-5347/**
+      - benchmarks/agent-investigation/cases/kubernetes-141402-podcertificate-readiness/**
+      - benchmarks/agent-investigation/cases/kubernetes-141283-compat-feature-gate/**
       - .github/workflows/evidence-real-online-scale-paired.yml
   workflow_dispatch:
 
@@ -25,12 +30,14 @@ jobs:
       max-parallel: 1
       matrix:
         case:
-          - id: kubernetes-140848-scale
-            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140848
-          - id: kubernetes-140628-scale
-            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140628
-          - id: kubernetes-140039-runc-5347-scale
-            dir: benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347
+          - id: containerd-6772
+            dir: benchmarks/agent-investigation/cases/containerd-6772
+          - id: kubernetes-140039-runc-5347
+            dir: benchmarks/agent-investigation/cases/kubernetes-140039-runc-5347
+          - id: kubernetes-141402-podcertificate-readiness
+            dir: benchmarks/agent-investigation/cases/kubernetes-141402-podcertificate-readiness
+          - id: kubernetes-141283-compat-feature-gate
+            dir: benchmarks/agent-investigation/cases/kubernetes-141283-compat-feature-gate
         mode:
           - free_shell
           - tracecite
