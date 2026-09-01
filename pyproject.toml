@@ -26,6 +26,9 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["build>=1", "pytest>=7"]
+diversity = [
+  "drain3>=0.9.11,<1",
+]
 experiments = [
   "drain3>=0.9.11,<1",
   "scikit-learn>=1.4,<2",
