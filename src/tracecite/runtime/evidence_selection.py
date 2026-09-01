@@ -42,7 +42,7 @@ _SIGNAL_PATTERNS: tuple[tuple[int, re.Pattern[str]], ...] = (
     ),
 )
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_HEX_RE = re.compile(r"\b(?:0x)?[0-9a-f]{8,}\b", re.IGNORECASE)
+_HEX_RE = re.compile(r"\b(?:0x[0-9a-f]+|[0-9a-f]{8,})\b", re.IGNORECASE)
 _UUID_RE = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
     re.IGNORECASE,
@@ -124,8 +124,6 @@ def _distinctiveness(clusters: Mapping[str, Mapping[str, Any]]) -> dict[str, flo
         if not features:
             scores[signature] = 0.0
             continue
-        # Rare frames/messages contribute more than ubiquitous ones. Bound the
-        # contribution count so very long records cannot win just by length.
         contributions = sorted(
             (1.0 / max(1, feature_frequency[feature]) for feature in features),
             reverse=True,
