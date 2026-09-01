@@ -31,7 +31,9 @@ def test_directory_source_target_exposes_identity_without_content(tmp_path: Path
     source.write_text(body, encoding="utf-8")
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
 
-    payload = _run_bridge(tmp_path, "retrieve", ".")
+    # Compatibility tracecite_search always supplies a query. A directory is
+    # still a source-discovery target rather than a text QueryTarget.
+    payload = _run_bridge(tmp_path, "retrieve", ".", "--query", ".")
     rows = payload.get("evidence") or []
     row = next(
         item
