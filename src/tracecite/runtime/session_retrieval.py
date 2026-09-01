@@ -9,7 +9,7 @@ from typing import Any, Mapping
 from tracecite_core.state_file import state_lock
 
 from .agent_api import EvidenceRequest, ProviderTarget, QueryTarget, RangeTarget, RetrievalResult, SourceTarget
-from .evidence_coordinates import attach_seen_range_distances
+from .evidence_coordinates import attach_seen_evidence_distances
 from .evidence_identity import SourceVersion, file_source_version, pointer_source_key
 from .evidence_progress import EvidenceProgressTracker
 from .evidence_routing import EvidenceRoutingPolicy
@@ -19,6 +19,7 @@ from .retrieval_guidance import prioritize_actionable_retrieval
 from .retrieval_session import (
     DEFAULT_MAX_SEEN_EVIDENCE,
     DEFAULT_MAX_SEEN_RELATIONS,
+    EvidenceCoordinate,
     RetrievalOperation,
     RetrievalSessionState,
     RetrievalSessionStore,
@@ -27,6 +28,7 @@ from .retrieve_contract import retrieve as _retrieve_contract
 
 
 _LINE_PREFIX_RE = re.compile(r"^\s*(\d+):(?:\s|$)")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _request_operation(request: EvidenceRequest) -> tuple[str, str]:
@@ -145,7 +147,7 @@ def _matched_existing_evidence_refs(
         if isinstance(end, int) and not isinstance(end, bool) and end > 0:
             ref["end_line"] = end
         sha256 = str(item.get("sha256") or "").strip().lower()
-        if re.fullmatch(r"[0-9a-f]{64}", sha256):
+        if _SHA256_RE.fullmatch(sha256):
             ref["sha256"] = sha256
         position = item.get("position")
         if isinstance(position, Mapping):
@@ -321,6 +323,43 @@ def _already_covered_range(
     return None
 
 
+def _materialized_evidence_coordinates(
+    request: EvidenceRequest,
+    evidence: tuple[Mapping[str, Any], ...],
+    line_ranges: tuple[tuple[int, int], ...],
+) -> tuple[EvidenceCoordinate, ...]:
+    """Describe only source ranges whose body was delivered by a Range request."""
+
+    target = request.target
+    if not isinstance(target, RangeTarget) or not line_ranges:
+        return ()
+    path = Path(target.source).expanduser().resolve()
+    digest = ""
+    for item in evidence:
+        candidate = str(item.get("sha256") or "").strip().lower()
+        if _SHA256_RE.fullmatch(candidate):
+            digest = candidate
+            break
+    if not digest and path.is_file():
+        digest = _sha256(path)
+    if not digest:
+        return ()
+
+    name = path.name or "evidence"
+    coordinates: list[EvidenceCoordinate] = []
+    for start, end in line_ranges:
+        line_ref = f"L{start}" if end == start else f"L{start}-L{end}"
+        coordinates.append(
+            EvidenceCoordinate(
+                ref=f"{name}:{line_ref}",
+                source_sha256=digest,
+                start_line=start,
+                end_line=end,
+            )
+        )
+    return tuple(coordinates)
+
+
 def _commit_observation(
     store: RetrievalSessionStore,
     *,
@@ -395,10 +434,12 @@ def _commit_observation(
         observations = None
         if source_observation is not None:
             observations = {source_observation[0]: source_observation[1]}
+        coordinates = _materialized_evidence_coordinates(request, evidence, line_ranges)
         next_state, _ = state.advance(
             evidence=evidence_ids,
             relations=relation_ids,
             covered_ranges={source_key: line_ranges} if source_key and line_ranges else None,
+            evidence_coordinates=coordinates,
             source_observations=observations,
             operation=_operation_record(
                 request,
@@ -555,15 +596,17 @@ def retrieve_with_session(
         line_ranges=line_ranges,
     )
 
-    # Query candidates are compared only to ranges the Agent has actually
-    # materialized earlier in this RetrievalSession. Query retrieval itself does
-    # not add covered ranges, so reading the post-commit state cannot turn a
-    # candidate into its own historical neighbor.
+    # Query candidates are compared only to Evidence bodies the Agent actually
+    # materialized earlier in this RetrievalSession. Search itself never writes
+    # coordinates, and radius + top-k keep the returned geometry sparse.
     if isinstance(request.target, QueryTarget) and evidence:
         with state_lock(session.path):
             coordinate_state = session.load()
         annotated = tuple(
-            attach_seen_range_distances(evidence, coordinate_state.covered_ranges)
+            attach_seen_evidence_distances(
+                evidence,
+                coordinate_state.seen_evidence_coordinates,
+            )
         )
         by_uri = {
             str(item.get("uri") or "").strip(): item
