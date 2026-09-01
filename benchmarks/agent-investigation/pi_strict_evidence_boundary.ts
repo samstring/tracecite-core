@@ -7,7 +7,6 @@ const BENCHMARK_MODE = String(process.env.TRACECITE_BENCHMARK_MODE || "").trim()
 const EVIDENCE_ROOT_RAW = String(process.env.TRACECITE_RUNTIME_EVIDENCE_ROOT || "").trim();
 const EVIDENCE_ROOT = EVIDENCE_ROOT_RAW ? resolve(EVIDENCE_ROOT_RAW) : "";
 const TRACE_ACCESS_PATH = String(process.env.TRACECITE_LOG_ACCESS_ACTIVITY || "").trim();
-const NATIVE_EVIDENCE_PATH = String(process.env.TRACECITE_NATIVE_EVIDENCE_ACTIVITY || "").trim();
 const BLOCKED_NATIVE_EVIDENCE_PATH = String(process.env.TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY || "").trim();
 const EVIDENCE_BASENAMES = new Set(
   String(process.env.TRACECITE_RUNTIME_EVIDENCE_FILES || "")
@@ -151,11 +150,6 @@ export default function strictEvidenceBoundary(pi: ExtensionAPI) {
     await appendJsonl(BLOCKED_NATIVE_EVIDENCE_PATH, {
       ...nativeAccess,
       status: "blocked_before_execution",
-    });
-    await appendJsonl(NATIVE_EVIDENCE_PATH, {
-      ...nativeAccess,
-      status: "blocked_before_execution",
-      executed: false,
     });
 
     return {
