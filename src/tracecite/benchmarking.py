@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import math
 import re
 import sys
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -69,6 +72,27 @@ def validate_case(case_dir: Path) -> dict[str, Any]:
                 errors.append(
                     f"inputs[{index}].sha256 must be a 64-character lowercase SHA-256 digest"
                 )
+            extract = item.get("extract")
+            if extract is not None:
+                if not isinstance(extract, Mapping):
+                    errors.append(f"inputs[{index}].extract must be an object")
+                    continue
+                kind = extract.get("kind")
+                if kind not in {"gzip", "zip"}:
+                    errors.append(f"inputs[{index}].extract.kind must be 'gzip' or 'zip'")
+                payload_sha256 = extract.get("sha256")
+                if (
+                    not isinstance(payload_sha256, str)
+                    or _SHA256_RE.fullmatch(payload_sha256) is None
+                ):
+                    errors.append(
+                        f"inputs[{index}].extract.sha256 must be a 64-character lowercase SHA-256 digest"
+                    )
+                if kind == "zip" and (
+                    not isinstance(extract.get("member"), str)
+                    or not str(extract.get("member")).strip()
+                ):
+                    errors.append(f"inputs[{index}].extract.member must be a non-empty string for zip")
 
     gold: dict[str, Any] = {}
     if gold_path.is_file():
@@ -111,31 +135,71 @@ def _download(url: str, target: Path) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
+def _extract_payload(source_path: Path, extract: Mapping[str, Any]) -> bytes:
+    raw = source_path.read_bytes()
+    kind = str(extract["kind"])
+    if kind == "gzip":
+        return gzip.decompress(raw)
+    member = str(extract["member"])
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        return archive.read(member)
+
+
 def prepare_case(case_dir: Path, work_dir: Path) -> dict[str, Any]:
     validation = validate_case(case_dir)
     case, _, _ = _case_paths(case_dir)
     case_root = work_dir / str(case["id"])
     input_root = case_root / "inputs"
+    source_root = case_root / ".sources"
     prepared: list[dict[str, Any]] = []
 
     for source in case["inputs"]:
         target = input_root / str(source["filename"])
-        size, sha256 = _download(str(source["url"]), target)
-        expected = str(source["sha256"])
-        if expected != sha256:
-            target.unlink(missing_ok=True)
-            raise ValueError(
-                f"sha256 mismatch for {source['id']}: expected {expected}, got {sha256}"
-            )
-        prepared.append(
-            {
-                "id": source["id"],
-                "path": str(target),
-                "bytes": size,
-                "sha256": sha256,
-                "source_url": source["url"],
-            }
+        extract = source.get("extract")
+        download_target = (
+            source_root / f"{source['id']}.download" if isinstance(extract, Mapping) else target
         )
+        source_size, source_sha256 = _download(str(source["url"]), download_target)
+        expected = str(source["sha256"])
+        if expected != source_sha256:
+            download_target.unlink(missing_ok=True)
+            raise ValueError(
+                f"sha256 mismatch for {source['id']}: expected {expected}, got {source_sha256}"
+            )
+
+        payload_size = source_size
+        payload_sha256 = source_sha256
+        extraction: dict[str, Any] | None = None
+        if isinstance(extract, Mapping):
+            payload = _extract_payload(download_target, extract)
+            payload_sha256 = hashlib.sha256(payload).hexdigest()
+            expected_payload = str(extract["sha256"])
+            if payload_sha256 != expected_payload:
+                download_target.unlink(missing_ok=True)
+                raise ValueError(
+                    f"extracted sha256 mismatch for {source['id']}: "
+                    f"expected {expected_payload}, got {payload_sha256}"
+                )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+            payload_size = len(payload)
+            extraction = {"kind": extract["kind"]}
+            if extract.get("member") is not None:
+                extraction["member"] = extract["member"]
+            download_target.unlink(missing_ok=True)
+
+        row: dict[str, Any] = {
+            "id": source["id"],
+            "path": str(target),
+            "bytes": payload_size,
+            "sha256": payload_sha256,
+            "source_url": source["url"],
+            "source_bytes": source_size,
+            "source_sha256": source_sha256,
+        }
+        if extraction is not None:
+            row["extract"] = extraction
+        prepared.append(row)
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
