@@ -95,6 +95,21 @@ If the conclusion depends on the complete call chain, state, nested resource acq
 
 This is a visibility rule, not a relevance rule: TraceCite is not saying that every matching record must be expanded or that a particular record is important. The Agent decides which records require full materialization for the unresolved question.
 
+### Stack/backtrace visibility does not enumerate all prior state
+
+Even after a stack, traceback, or backtrace is fully materialized, it normally describes the current call path and the operation at which execution is presently blocked or running. It does not necessarily enumerate resources, state transitions, or successful operations that occurred earlier in the same call path.
+
+Therefore:
+
+```text
+not visible as a current frame != proven not previously acquired / performed
+present somewhere in a call path != proven currently held / active
+```
+
+When a conclusion depends on previously acquired or retained state, establish that state from evidence that actually supports it: for example explicit runtime metadata, source-visible control flow, state fields, or another independently observed artifact. Do not fill the hidden state from assumption alone.
+
+This is only an evidence-visibility boundary. TraceCite does not infer which prior state exists, which records should be combined, or what mechanism follows from them.
+
 ### Navigation-only information
 
 Some TraceCite outputs are deliberately only navigation landmarks. Examples include:
@@ -561,7 +576,11 @@ When multiple fully materialized Evidence items already support a coherent candi
 
 Continue retrieval only when a concrete unresolved question remains and the next operation is expected to add materially different evidence that could distinguish, contradict, refine, or materially change the candidate mechanism. Newly exposed lines are not automatically a new kind of information; additional instances of an already-established structure may add no useful discriminating evidence unless multiplicity itself matters.
 
+Do not turn an entity, actor, owner, event, or state that exists only because the current hypothesis expects it into a mandatory retrieval target. Before searching for a hypothesized missing piece, ask whether observing it would actually distinguish competing explanations or materially change the conclusion, and whether the already-observed Evidence supports a different mechanism without that assumed piece.
+
 This is an Agent reasoning/stop discipline, not a TraceCite sufficiency judgment. TraceCite does not decide that the existing Evidence is enough; the Agent must explicitly compare what is already established against the unresolved question.
+
+Efficiency is subordinate to correctness. Low novelty, repeated evidence, or token cost alone is not a reason to stop when a specific unresolved fact could materially change the conclusion. Conversely, the mere availability of more source text is not a correctness requirement when no such discriminating question remains.
 
 If a Host convergence checkpoint requires `investigation_goal`, state both:
 
