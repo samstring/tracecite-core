@@ -1,9 +1,9 @@
-"""Mechanical source-line coordinates for bounded Evidence rows.
+"""Mechanical source-line geometry for bounded Evidence rows.
 
 This module exposes where Evidence lives, not what the Evidence means. It may
-report exact source/range facts and bounded line-distance facts to ranges the
-RetrievalSession has already materialized. It never reports relevance,
-relatedness, causality, diagnosis, or a combined association score.
+report exact line-distance facts between a current row and evidence blocks the
+Agent previously materialized. It never reports relevance, relatedness,
+causality, diagnosis, or a combined association score.
 """
 
 from __future__ import annotations
@@ -17,6 +17,10 @@ DEFAULT_POSITION_PEER_LIMIT = 3
 MAX_POSITION_PEER_LIMIT = 8
 DEFAULT_SEEN_RANGE_LIMIT = 2
 MAX_SEEN_RANGE_LIMIT = 4
+DEFAULT_EVIDENCE_NEIGHBOR_LIMIT = 2
+MAX_EVIDENCE_NEIGHBOR_LIMIT = 8
+DEFAULT_EVIDENCE_NEIGHBOR_RADIUS_LINES = 500
+MAX_EVIDENCE_NEIGHBOR_RADIUS_LINES = 100_000
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_KEY_SHA256_RE = re.compile(r"@sha256:([0-9a-f]{64})$")
 
@@ -56,14 +60,130 @@ def _range_distance(
     return 0, "overlap", True
 
 
+def _coordinate_fields(value: object) -> tuple[str, str, int, int] | None:
+    if isinstance(value, Mapping):
+        ref = str(value.get("ref") or "").strip()
+        digest = _sha256(value.get("source_sha256"))
+        start = _positive_line(value.get("start_line"))
+        end = _positive_line(value.get("end_line"))
+    else:
+        ref = str(getattr(value, "ref", "") or "").strip()
+        digest = _sha256(getattr(value, "source_sha256", ""))
+        start = _positive_line(getattr(value, "start_line", None))
+        end = _positive_line(getattr(value, "end_line", None))
+    if not ref or not digest or start is None:
+        return None
+    if end is None or end < start:
+        end = start
+    return ref, digest, start, end
+
+
+def attach_seen_evidence_distances(
+    rows: Sequence[Mapping[str, Any]],
+    seen_coordinates: Sequence[object],
+    *,
+    default_sha256: str | None = None,
+    start_field: str = "start_line",
+    end_field: str = "end_line",
+    radius_lines: int = DEFAULT_EVIDENCE_NEIGHBOR_RADIUS_LINES,
+    neighbor_limit: int = DEFAULT_EVIDENCE_NEIGHBOR_LIMIT,
+) -> list[dict[str, Any]]:
+    """Attach sparse distance facts to previously materialized Evidence blocks.
+
+    Only immutable SHA256-identical coordinate spaces are compared. Candidates
+    outside ``radius_lines`` are omitted, then at most ``neighbor_limit`` nearest
+    materialized blocks are returned. Ordering by line gap is only a mechanical
+    size bound; it is not a semantic relevance score.
+
+    The current row already carries its own ``start_line`` / ``end_line`` and
+    usually ``sha256``, so ``position`` only contains the additional neighbor
+    facts to avoid repeating coordinates and inflating Agent context.
+    """
+
+    if (
+        isinstance(radius_lines, bool)
+        or not isinstance(radius_lines, int)
+        or radius_lines < 0
+        or radius_lines > MAX_EVIDENCE_NEIGHBOR_RADIUS_LINES
+    ):
+        raise ValueError(
+            "radius_lines must be in "
+            f"[0, {MAX_EVIDENCE_NEIGHBOR_RADIUS_LINES}]"
+        )
+    if (
+        isinstance(neighbor_limit, bool)
+        or not isinstance(neighbor_limit, int)
+        or neighbor_limit < 0
+        or neighbor_limit > MAX_EVIDENCE_NEIGHBOR_LIMIT
+    ):
+        raise ValueError(
+            f"neighbor_limit must be in [0, {MAX_EVIDENCE_NEIGHBOR_LIMIT}]"
+        )
+
+    normalized_seen = [
+        item
+        for item in (_coordinate_fields(value) for value in seen_coordinates)
+        if item is not None
+    ]
+    fallback_digest = _sha256(default_sha256)
+    copied = [dict(row) for row in rows]
+    if not normalized_seen or neighbor_limit == 0:
+        return copied
+
+    for row in copied:
+        start = _positive_line(row.get(start_field))
+        if start is None:
+            continue
+        end = _positive_line(row.get(end_field))
+        if end is None or end < start:
+            end = start
+        digest = _sha256(row.get("sha256")) or fallback_digest
+        if not digest:
+            continue
+
+        neighbors: list[tuple[int, int, str, dict[str, Any]]] = []
+        for ref, seen_digest, seen_start, seen_end in normalized_seen:
+            if seen_digest != digest:
+                continue
+            line_gap, direction, _overlaps = _range_distance(
+                start,
+                end,
+                seen_start,
+                seen_end,
+            )
+            if line_gap > radius_lines:
+                continue
+            neighbors.append(
+                (
+                    line_gap,
+                    seen_start,
+                    ref,
+                    {
+                        "ref": ref,
+                        "range": [seen_start, seen_end],
+                        "line_gap": line_gap,
+                        "direction": direction,
+                    },
+                )
+            )
+        if not neighbors:
+            continue
+        neighbors.sort(key=lambda item: (item[0], item[1], item[2]))
+        row["position"] = {
+            "coordinate_space": "source_line_sha256",
+            "nearest_seen": [item[3] for item in neighbors[:neighbor_limit]],
+        }
+    return copied
+
+
 def _covered_ranges_by_sha256(
     covered_ranges: Mapping[str, Sequence[tuple[int, int]]],
 ) -> dict[str, tuple[tuple[int, int], ...]]:
-    """Index persisted materialized ranges by immutable content identity.
+    """Index persisted covered ranges by immutable content identity.
 
-    Query retrieval may use a temporary immutable snapshot path while a later
-    materialize call uses the caller's original path. Equal sha256 content has
-    the same line coordinate space even when those transport paths differ.
+    This compatibility helper is retained for callers that only have coverage
+    state. Agent-facing retrieval should prefer explicit materialized Evidence
+    coordinates so merged coverage ranges do not erase Evidence identity.
     """
 
     indexed: dict[str, list[tuple[int, int]]] = {}
@@ -107,13 +227,7 @@ def attach_seen_range_distances(
     end_field: str = "end_line",
     range_limit: int = DEFAULT_SEEN_RANGE_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Attach bounded distance facts to already-materialized session ranges.
-
-    Only immutable sha256-backed coordinate spaces are compared.  The result
-    says where the current row lies relative to source ranges the Agent has
-    already materialized in this RetrievalSession.  Ordering by line gap is a
-    deterministic size bound, not a relevance ranking.
-    """
+    """Compatibility projection against merged materialized coverage ranges."""
 
     if (
         isinstance(range_limit, bool)
@@ -179,11 +293,7 @@ def attach_source_line_coordinates(
     end_field: str = "end_line",
     peer_limit: int = DEFAULT_POSITION_PEER_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Attach same-response line geometry; retained as a low-level primitive.
-
-    Prefer :func:`attach_seen_range_distances` for Agent-facing retrieval because
-    it compares candidates to evidence the Agent actually materialized earlier.
-    """
+    """Attach same-response line geometry as a low-level compatibility primitive."""
 
     if (
         isinstance(peer_limit, bool)
@@ -246,10 +356,15 @@ def attach_source_line_coordinates(
 
 
 __all__ = [
+    "DEFAULT_EVIDENCE_NEIGHBOR_LIMIT",
+    "DEFAULT_EVIDENCE_NEIGHBOR_RADIUS_LINES",
     "DEFAULT_POSITION_PEER_LIMIT",
     "DEFAULT_SEEN_RANGE_LIMIT",
+    "MAX_EVIDENCE_NEIGHBOR_LIMIT",
+    "MAX_EVIDENCE_NEIGHBOR_RADIUS_LINES",
     "MAX_POSITION_PEER_LIMIT",
     "MAX_SEEN_RANGE_LIMIT",
+    "attach_seen_evidence_distances",
     "attach_seen_range_distances",
     "attach_source_line_coordinates",
 ]
