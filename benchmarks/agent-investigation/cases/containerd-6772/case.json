@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "id": "containerd-6772",
+  "title": "containerd task startup stalls under high pod churn",
+  "source_issue": "https://github.com/containerd/containerd/issues/6772",
+  "fix_reference": "https://github.com/containerd/containerd/pull/6788",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "containerd-goroutines",
+      "url": "https://github.com/containerd/containerd/files/8438569/containerd-goroutines.gz",
+      "filename": "containerd-goroutines.txt",
+      "sha256": "f5c23f999094acd18859d85951e948f684acc698d8e8dac092207ec0b88362c7",
+      "extract": {
+        "kind": "gzip",
+        "sha256": "0e1577c8ab150ac41e322acb587ccd33f1947db822bd766ac6d92a568dcb3d91"
+      },
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "containerd/containerd",
+    "issue_state": "closed",
+    "public_log": true,
+    "fix_commit": "449eb08b89b1854eaaec86f3233778d87c952e48",
+    "source_archive_bytes": 175897,
+    "model_visible_payload_bytes": 2731626,
+    "notes": "Reporter-published containerd goroutine dump captured during the incident. The benchmark verifies the original gzip SHA-256, deterministically decompresses it, verifies the payload SHA-256, and exposes only the original decompressed dump to both benchmark arms. No padding, concatenation, or truncation is used."
+  }
+}
