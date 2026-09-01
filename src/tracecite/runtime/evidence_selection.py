@@ -1,16 +1,19 @@
-"""Bounded, diagnosis-free retention of high-signal search candidates.
+"""Bounded, diagnosis-free retention of useful search candidates.
 
-Search result transport may be much smaller than the complete match set.  This
-module lets Runtime scan the already-produced matched-record artifact and keep
-a tiny set of line-addressable incident candidates without turning those hints
-into canonical EvidencePointers prematurely.
+Search result transport may be much smaller than the complete match set. This
+module scans the already-produced matched-record artifact and keeps a tiny set
+of line-addressable navigation candidates without turning those hints into
+canonical EvidencePointers prematurely.
 
-The selector is deliberately mechanical: generic severity vocabulary, bounded
-signature memory, deterministic replacement, and no root-cause inference.
+Selection is deliberately mechanical. Generic severity vocabulary keeps late
+fatal/error records visible, while structural signatures compress repeated
+records and preserve rare call-stack/log shapes. No root-cause vocabulary,
+component-specific terms, or causal inference is used.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 import json
 import re
 from pathlib import Path
@@ -39,11 +42,17 @@ _SIGNAL_PATTERNS: tuple[tuple[int, re.Pattern[str]], ...] = (
     ),
 )
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_HEX_RE = re.compile(r"\b[0-9a-f]{8,}\b", re.IGNORECASE)
+_HEX_RE = re.compile(r"\b(?:0x)?[0-9a-f]{8,}\b", re.IGNORECASE)
+_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
 _NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?\d+(?![A-Za-z])")
-_SPACE_RE = re.compile(r"\s+")
+_SPACE_RE = re.compile(r"[ \t]+")
 DEFAULT_SIGNAL_SIGNATURE_CAP = 256
 DEFAULT_SIGNAL_HINT_LIMIT = 4
+_STRUCTURAL_LINE_LIMIT = 24
+_STRUCTURAL_CHAR_LIMIT = 3_000
 
 
 def signal_severity(text: str) -> int:
@@ -53,13 +62,76 @@ def signal_severity(text: str) -> int:
     return 0
 
 
-def signal_signature(text: str) -> str:
-    value = text.casefold()
+def _normalise_structure_line(text: str) -> str:
+    value = text.casefold().strip()
+    value = _UUID_RE.sub("<uuid>", value)
     value = _IP_RE.sub("<ip>", value)
     value = _HEX_RE.sub("<hex>", value)
     value = _NUMBER_RE.sub("<num>", value)
     value = _SPACE_RE.sub(" ", value).strip()
+    return value
+
+
+def structural_signature(text: str) -> str:
+    """Return a bounded signature that preserves record/call-stack structure.
+
+    Volatile IDs, addresses, line numbers and counters are normalized, while
+    function names, states, messages and frame ordering remain visible. This
+    makes dozens of equivalent goroutine/log records collapse into one cluster
+    without teaching the selector what any particular component means.
+    """
+
+    lines: list[str] = []
+    chars = 0
+    for raw in str(text or "").splitlines():
+        value = _normalise_structure_line(raw)
+        if not value:
+            continue
+        remaining = _STRUCTURAL_CHAR_LIMIT - chars
+        if remaining <= 0:
+            break
+        value = value[:remaining]
+        lines.append(value)
+        chars += len(value) + 1
+        if len(lines) >= _STRUCTURAL_LINE_LIMIT:
+            break
+    return "\n".join(lines)
+
+
+def signal_signature(text: str) -> str:
+    """Backward-compatible single-line-ish normalized signature."""
+
+    value = _normalise_structure_line(text)
     return value[:600]
+
+
+def _feature_lines(signature: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(line for line in signature.splitlines() if line))
+
+
+def _distinctiveness(clusters: Mapping[str, Mapping[str, Any]]) -> dict[str, float]:
+    """Score structures by how uncommon their normalized frame/message lines are."""
+
+    feature_frequency: Counter[str] = Counter()
+    for signature, item in clusters.items():
+        count = max(1, int(item.get("count") or 1))
+        for feature in _feature_lines(signature):
+            feature_frequency[feature] += count
+
+    scores: dict[str, float] = {}
+    for signature in clusters:
+        features = _feature_lines(signature)
+        if not features:
+            scores[signature] = 0.0
+            continue
+        # Rare frames/messages contribute more than ubiquitous ones. Bound the
+        # contribution count so very long records cannot win just by length.
+        contributions = sorted(
+            (1.0 / max(1, feature_frequency[feature]) for feature in features),
+            reverse=True,
+        )[:12]
+        scores[signature] = sum(contributions)
+    return scores
 
 
 def select_signal_hints(
@@ -68,11 +140,13 @@ def select_signal_hints(
     limit: int = DEFAULT_SIGNAL_HINT_LIMIT,
     signature_cap: int = DEFAULT_SIGNAL_SIGNATURE_CAP,
 ) -> list[dict[str, Any]]:
-    """Stream matched-record JSONL and return bounded high-signal line hints.
+    """Return bounded high-signal or structurally diverse navigation hints.
 
-    Later higher-severity unique signals can evict lower-severity signatures,
-    so a fatal/panic near the end of a huge match set is not hidden merely
-    because the normal inline result already filled its first-N budget.
+    Repeated records are clustered by normalized full-record structure. High
+    severity clusters remain first. Within the same severity, rarer structures
+    rank ahead of frequent duplicates, so a one-off call-stack branch is not
+    hidden behind dozens of equivalent matches. Returned rows remain navigation
+    hints only; callers must materialize them before citing them as Evidence.
     """
 
     if limit < 1 or signature_cap < limit:
@@ -90,9 +164,10 @@ def select_signal_hints(
             if not isinstance(row, Mapping):
                 continue
             text = str(row.get("text") or "")
-            severity = signal_severity(text)
-            if not severity:
+            signature = structural_signature(text)
+            if not signature:
                 continue
+            severity = signal_severity(text)
             metadata = row.get("metadata") or {}
             if not isinstance(metadata, Mapping):
                 metadata = {}
@@ -105,7 +180,7 @@ def select_signal_hints(
             label = next((item.strip() for item in text.splitlines() if item.strip()), "")[:240]
             if not label:
                 continue
-            signature = signal_signature(label)
+
             existing = clusters.get(signature)
             if existing is not None:
                 existing["count"] += 1
@@ -124,24 +199,30 @@ def select_signal_hints(
                 clusters[signature] = candidate
                 continue
 
-            victim_signature, victim = min(
+            # Keep the memory bound deterministic while allowing a later unique
+            # structure to displace an already-repeated low-severity cluster.
+            victim_signature, victim = max(
                 clusters.items(),
                 key=lambda item: (
-                    int(item[1]["severity"]),
-                    -int(item[1]["count"]),
+                    -int(item[1]["severity"]),
+                    int(item[1]["count"]),
                     -int(item[1]["ordinal"]),
                 ),
             )
-            if severity > int(victim["severity"]):
+            victim_severity = int(victim["severity"])
+            victim_count = int(victim["count"])
+            if severity > victim_severity or (severity == victim_severity and victim_count > 1):
                 del clusters[victim_signature]
                 clusters[signature] = candidate
 
-    selected = sorted(
-        clusters.values(),
-        key=lambda item: (
-            -int(item["severity"]),
-            int(item["count"]),
-            int(item["ordinal"]),
+    distinctiveness = _distinctiveness(clusters)
+    selected_pairs = sorted(
+        clusters.items(),
+        key=lambda pair: (
+            -int(pair[1]["severity"]),
+            int(pair[1]["count"]),
+            -float(distinctiveness.get(pair[0], 0.0)),
+            int(pair[1]["ordinal"]),
         ),
     )[:limit]
     return [
@@ -151,8 +232,10 @@ def select_signal_hints(
             "severity": int(item["severity"]),
             "count": int(item["count"]),
             "label": str(item["label"]),
+            "kind": "high_signal" if int(item["severity"]) > 0 else "structural_diversity",
+            "distinctiveness": round(float(distinctiveness.get(signature, 0.0)), 6),
         }
-        for item in selected
+        for signature, item in selected_pairs
     ]
 
 
@@ -162,4 +245,5 @@ __all__ = [
     "select_signal_hints",
     "signal_severity",
     "signal_signature",
+    "structural_signature",
 ]
