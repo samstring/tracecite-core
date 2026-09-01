@@ -22,6 +22,16 @@
       ]
     },
     {
+      "id": "kubernetes-141283-junit",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-e2e-kind-compatibility-versions-feature-gate-test/2085346290606018560/artifacts/junit_01.xml",
+      "needles": [
+        "DRAFractionalCapacityRange",
+        "expected value 1, got 0",
+        "FAIL: feature",
+        "emulated_version=1.37"
+      ]
+    },
+    {
       "id": "kubernetes-141402-build-log",
       "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-kind-cloud-provider-loadbalancer/2086677576276774912/build-log.txt",
       "needles": [
