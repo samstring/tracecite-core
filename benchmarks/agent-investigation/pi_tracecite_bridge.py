@@ -21,6 +21,7 @@ from tracecite.runtime import (
     SourceTarget,
     TraversalLimits,
     aggregate,
+    attach_source_line_coordinates,
     materialize,
     replay,
     retrieve,
@@ -229,12 +230,20 @@ def _refresh_source_aware_navigation_hints(requested: Path, payload: dict[str, A
     if not retained:
         return
 
+    retained = attach_source_line_coordinates(
+        retained,
+        default_source_path=requested,
+        start_field="line",
+        end_field="end_line",
+    )
+
     data = payload.setdefault("data", {})
     if isinstance(data, dict):
         data["signal_hints"] = retained
         data["signal_hint_note"] = (
             "Structurally diverse truncated-search navigation candidates; "
-            "materialize the referenced range before citing."
+            "materialize the referenced range before citing. Source-line distances "
+            "are coordinate facts only and do not assert semantic relation."
         )
         data["source_neighborhood_diversity"] = True
     if isinstance(coverage, dict):
@@ -288,21 +297,33 @@ def _navigation_hint_evidence(
         if preview:
             label.append(f"preview={preview}")
         label.append("materialize this range with TraceCite before citing")
-        pointers.append(
-            {
-                "uri": (
-                    f"tracecite-navigation://sha256/{digest}/{line_ref}"
-                    if digest
-                    else f"tracecite-navigation://path/{name}/{line_ref}"
-                ),
-                "source_path": source_path,
-                "sha256": digest or None,
-                "start_line": start,
-                "end_line": end,
-                "label": " ".join(label),
-                "metadata_only": True,
-            }
-        )
+        pointer: dict[str, Any] = {
+            "uri": (
+                f"tracecite-navigation://sha256/{digest}/{line_ref}"
+                if digest
+                else f"tracecite-navigation://path/{name}/{line_ref}"
+            ),
+            "source_path": source_path,
+            "sha256": digest or None,
+            "start_line": start,
+            "end_line": end,
+            "label": " ".join(label),
+            "metadata_only": True,
+        }
+        for field in (
+            "match_line",
+            "match_end_line",
+            "segment_kind",
+            "expand_line",
+            "expand_radius",
+        ):
+            value = row.get(field)
+            if value not in (None, ""):
+                pointer[field] = value
+        position = row.get("position")
+        if isinstance(position, Mapping):
+            pointer["position"] = dict(position)
+        pointers.append(pointer)
     return pointers
 
 
