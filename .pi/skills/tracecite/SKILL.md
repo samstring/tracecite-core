@@ -557,6 +557,12 @@ Low-novelty/non-frontier signals include:
 
 Before a follow-up evidence call, keep an explicit unresolved question in mind and know what materially different evidence the next call is expected to add.
 
+When multiple fully materialized Evidence items already support a coherent candidate mechanism, synthesize and compare those established facts before retrieving more. The existence of additional searchable or materializable context is not, by itself, a reason to continue investigation.
+
+Continue retrieval only when a concrete unresolved question remains and the next operation is expected to add materially different evidence that could distinguish, contradict, refine, or materially change the candidate mechanism. Newly exposed lines are not automatically a new kind of information; additional instances of an already-established structure may add no useful discriminating evidence unless multiplicity itself matters.
+
+This is an Agent reasoning/stop discipline, not a TraceCite sufficiency judgment. TraceCite does not decide that the existing Evidence is enough; the Agent must explicitly compare what is already established against the unresolved question.
+
 If a Host convergence checkpoint requires `investigation_goal`, state both:
 
 1. the exact unresolved question that still matters; and
