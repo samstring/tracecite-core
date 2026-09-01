@@ -30,6 +30,20 @@ The Agent remains responsible for:
 - the final answer;
 - when to stop.
 
+## Non-semantic evidence-use contract
+
+This contract is only about using TraceCite as an evidence channel efficiently and correctly. It is not a diagnosis strategy and must not supply a hypothesis, relationship, root-cause hint, or stop decision.
+
+- If the Host reports that native evidence access is blocked, do not retry equivalent native `read`/`grep`/`find`/`ls`/shell attempts against the protected evidence. Resolve the source through TraceCite and then reuse the returned `follow_up_file` / `source_path` / immutable identity for later calls.
+- Once a source identity or usable follow-up path has been returned, reuse it instead of repeatedly rediscovering the same source.
+- A search `preview` is not necessarily a complete logical record. Materialize bounded source text only when the unseen body is necessary for the Agent's unresolved question.
+- `signal_hints` and navigation ranges are recovery pointers produced by bounded retrieval. They can preserve structural variety omitted from inline rows, but they are not relevance or causal rankings and do not instruct the Agent which hypothesis to pursue.
+- Session fields such as `matched_existing_evidence`, `repeated_evidence`, covered ranges, and `no_new_evidence` mean that identity/text has already been exposed under the session rules. Do not request the same body again merely to confirm that it still exists. Revisit old text only when the Agent actually needs the exact prior body for a new comparison; use replay where available.
+- After genuinely new materialized Evidence is obtained, the Agent should first synthesize it with already-established Evidence before issuing another retrieval. The next call should exist because a concrete unresolved fact could materially distinguish, contradict, refine, or change the conclusion—not because more text or more matching instances are available.
+- Saving tokens must never override correctness. If a specific unresolved fact can materially change the conclusion, low novelty or cost alone is not a reason to stop.
+
+TraceCite itself never decides that these conditions are met. The Agent makes those judgments from the evidence and task.
+
 ## Canonical operations
 
 The canonical Evidence Runtime surface is:
@@ -609,6 +623,7 @@ When that mode is active:
 
 - use TraceCite for evidence search, materialization/replay, aggregation, traversal, and verification;
 - do not bypass the controlled evidence channel with `grep`, `cat`, shell pipelines, or native `read` against the evidence files;
+- after the Host reports such an access is blocked, do not retry equivalent native access to the protected evidence root;
 - still use Agent reasoning normally;
 - still choose hypotheses, queries, ranges, comparisons, conclusions, and stopping independently.
 
