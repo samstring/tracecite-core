@@ -46,11 +46,12 @@
       "url": "https://github.com/containerd/containerd/files/8438569/containerd-goroutines.gz",
       "archive_kind": "gzip",
       "needles": [
-        "metrics",
-        "Collect",
-        "Add",
-        "sync.RWMutex",
-        "goroutine"
+        "github.com/containerd/containerd/metrics/cgroups/v1.(*Collector).Add",
+        "github.com/containerd/containerd/metrics/cgroups/v1.(*Collector).Collect",
+        "github.com/docker/go-metrics.(*Namespace).Collect",
+        "github.com/docker/go-metrics.(*Namespace).WithConstLabels",
+        "sync.(*RWMutex).Lock",
+        "sync.(*RWMutex).RLock"
       ]
     },
     {
