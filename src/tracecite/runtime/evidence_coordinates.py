@@ -1,19 +1,24 @@
 """Mechanical source-line coordinates for bounded Evidence rows.
 
-This module exposes where Evidence lives, not what the Evidence means.  It may
-report exact source/range facts and bounded line-distance facts between rows in
-the same source.  It never reports relevance, relatedness, causality, diagnosis,
-or a combined association score.
+This module exposes where Evidence lives, not what the Evidence means. It may
+report exact source/range facts and bounded line-distance facts to ranges the
+RetrievalSession has already materialized. It never reports relevance,
+relatedness, causality, diagnosis, or a combined association score.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
 DEFAULT_POSITION_PEER_LIMIT = 3
 MAX_POSITION_PEER_LIMIT = 8
+DEFAULT_SEEN_RANGE_LIMIT = 2
+MAX_SEEN_RANGE_LIMIT = 4
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SOURCE_KEY_SHA256_RE = re.compile(r"@sha256:([0-9a-f]{64})$")
 
 
 def _positive_line(value: object) -> int | None:
@@ -31,6 +36,11 @@ def _source_path(row: Mapping[str, Any], default_source_path: str | Path | None)
     return str(Path(raw).expanduser().resolve())
 
 
+def _sha256(value: object) -> str:
+    digest = str(value or "").strip().lower()
+    return digest if _SHA256_RE.fullmatch(digest) else ""
+
+
 def _range_distance(
     left_start: int,
     left_end: int,
@@ -46,6 +56,121 @@ def _range_distance(
     return 0, "overlap", True
 
 
+def _covered_ranges_by_sha256(
+    covered_ranges: Mapping[str, Sequence[tuple[int, int]]],
+) -> dict[str, tuple[tuple[int, int], ...]]:
+    """Index persisted materialized ranges by immutable content identity.
+
+    Query retrieval may use a temporary immutable snapshot path while a later
+    materialize call uses the caller's original path. Equal sha256 content has
+    the same line coordinate space even when those transport paths differ.
+    """
+
+    indexed: dict[str, list[tuple[int, int]]] = {}
+    for source_key, ranges in covered_ranges.items():
+        match = _SOURCE_KEY_SHA256_RE.search(str(source_key or "").strip().lower())
+        if match is None:
+            continue
+        digest = match.group(1)
+        bucket = indexed.setdefault(digest, [])
+        for start, end in ranges:
+            if (
+                isinstance(start, bool)
+                or isinstance(end, bool)
+                or not isinstance(start, int)
+                or not isinstance(end, int)
+                or start < 1
+                or end < start
+            ):
+                continue
+            bucket.append((start, end))
+
+    result: dict[str, tuple[tuple[int, int], ...]] = {}
+    for digest, values in indexed.items():
+        ordered = sorted(set(values))
+        merged: list[tuple[int, int]] = []
+        for start, end in ordered:
+            if not merged or start > merged[-1][1] + 1:
+                merged.append((start, end))
+            else:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        result[digest] = tuple(merged)
+    return result
+
+
+def attach_seen_range_distances(
+    rows: Sequence[Mapping[str, Any]],
+    covered_ranges: Mapping[str, Sequence[tuple[int, int]]],
+    *,
+    default_sha256: str | None = None,
+    start_field: str = "start_line",
+    end_field: str = "end_line",
+    range_limit: int = DEFAULT_SEEN_RANGE_LIMIT,
+) -> list[dict[str, Any]]:
+    """Attach bounded distance facts to already-materialized session ranges.
+
+    Only immutable sha256-backed coordinate spaces are compared.  The result
+    says where the current row lies relative to source ranges the Agent has
+    already materialized in this RetrievalSession.  Ordering by line gap is a
+    deterministic size bound, not a relevance ranking.
+    """
+
+    if (
+        isinstance(range_limit, bool)
+        or not isinstance(range_limit, int)
+        or range_limit < 0
+        or range_limit > MAX_SEEN_RANGE_LIMIT
+    ):
+        raise ValueError(f"range_limit must be in [0, {MAX_SEEN_RANGE_LIMIT}]")
+
+    indexed = _covered_ranges_by_sha256(covered_ranges)
+    fallback_digest = _sha256(default_sha256)
+    copied = [dict(row) for row in rows]
+    for row in copied:
+        start = _positive_line(row.get(start_field))
+        if start is None:
+            continue
+        end = _positive_line(row.get(end_field))
+        if end is None or end < start:
+            end = start
+        digest = _sha256(row.get("sha256")) or fallback_digest
+        if not digest:
+            continue
+        seen = indexed.get(digest, ())
+        distances: list[tuple[int, int, dict[str, Any]]] = []
+        for seen_start, seen_end in seen:
+            line_gap, direction, overlaps = _range_distance(
+                start,
+                end,
+                seen_start,
+                seen_end,
+            )
+            distances.append(
+                (
+                    line_gap,
+                    seen_start,
+                    {
+                        "start_line": seen_start,
+                        "end_line": seen_end,
+                        "line_gap": line_gap,
+                        "direction": direction,
+                        "overlaps": overlaps,
+                    },
+                )
+            )
+        distances.sort(key=lambda item: (item[0], item[1]))
+        row["position"] = {
+            "coordinate_space": "source_line_sha256",
+            "source_sha256": digest,
+            "start_line": start,
+            "end_line": end,
+            "span_lines": end - start + 1,
+            "seen_range_total": len(seen),
+            "nearest_seen_ranges": [item[2] for item in distances[:range_limit]],
+        }
+    return copied
+
+
 def attach_source_line_coordinates(
     rows: Sequence[Mapping[str, Any]],
     *,
@@ -54,12 +179,10 @@ def attach_source_line_coordinates(
     end_field: str = "end_line",
     peer_limit: int = DEFAULT_POSITION_PEER_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Copy rows and attach bounded, diagnosis-free source-line geometry.
+    """Attach same-response line geometry; retained as a low-level primitive.
 
-    ``peer_distances`` contains only rows from the same resolved source.  Peers
-    are ordered by the mechanical line gap, then by source position, solely to
-    keep the returned metadata bounded and deterministic.  A small gap is not a
-    claim of semantic relation.
+    Prefer :func:`attach_seen_range_distances` for Agent-facing retrieval because
+    it compares candidates to evidence the Agent actually materialized earlier.
     """
 
     if (
@@ -96,12 +219,7 @@ def attach_source_line_coordinates(
             if candidate is None or candidate[0] == index or candidate[1] != source:
                 continue
             peer_index, _peer_source, peer_start, peer_end, peer_uri = candidate
-            line_gap, direction, overlaps = _range_distance(
-                start,
-                end,
-                peer_start,
-                peer_end,
-            )
+            line_gap, direction, overlaps = _range_distance(start, end, peer_start, peer_end)
             peer: dict[str, Any] = {
                 "start_line": peer_start,
                 "end_line": peer_end,
@@ -129,6 +247,9 @@ def attach_source_line_coordinates(
 
 __all__ = [
     "DEFAULT_POSITION_PEER_LIMIT",
+    "DEFAULT_SEEN_RANGE_LIMIT",
     "MAX_POSITION_PEER_LIMIT",
+    "MAX_SEEN_RANGE_LIMIT",
+    "attach_seen_range_distances",
     "attach_source_line_coordinates",
 ]
