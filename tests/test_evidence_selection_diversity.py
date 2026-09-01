@@ -7,6 +7,7 @@ import pytest
 
 from tracecite.runtime.evidence_selection import (
     HINT_LABEL_CHAR_LIMIT,
+    MAX_EVIDENCE_SEGMENT_LINES,
     MAX_SIGNAL_HINT_LIMIT,
     MAX_STRUCTURAL_NEIGHBORHOOD_RADIUS,
     select_signal_hints,
@@ -108,12 +109,53 @@ def test_source_neighborhood_fingerprint_stays_metadata_only(tmp_path: Path) -> 
     )
 
     assert len(hints) <= 4
-    rare_hint = next(item for item in hints if item["line"] == rare_line)
+    rare_hint = next(item for item in hints if item["match_line"] == rare_line)
     assert rare_hint["grouping_view"] == "structural"
+    assert rare_hint["line"] <= rare_line <= rare_hint["end_line"]
+    assert rare_hint["end_line"] - rare_hint["line"] + 1 <= MAX_EVIDENCE_SEGMENT_LINES
+    assert rare_hint["expand_radius"] <= MAX_EVIDENCE_SEGMENT_LINES // 2
     serialized = json.dumps(hints, sort_keys=True)
     assert rare_marker not in serialized
     assert all(len(str(item.get("label") or "")) <= HINT_LABEL_CHAR_LIMIT for item in hints)
     assert all("text" not in item and "neighborhood" not in item for item in hints)
+
+
+def test_stack_hint_navigates_to_complete_bounded_block(tmp_path: Path) -> None:
+    source = tmp_path / "goroutines.txt"
+    records = tmp_path / "matched-records.jsonl"
+    source_lines = [f"noise {index}\n" for index in range(1, 11)] + [
+        "\n",
+        "goroutine 7 [semacquire]:\n",
+        "sync.(*Mutex).Lock()\n",
+        "/usr/local/go/src/sync/mutex.go:81\n",
+        "example.com/project.(*Collector).Add()\n",
+        "/src/collector.go:163 +0x1da\n",
+        "example.com/project.(*local).Create()\n",
+        "/src/local.go:233 +0xa14\n",
+        "\n",
+        "tail\n",
+    ]
+    source.write_text("".join(source_lines), encoding="utf-8")
+    match_line = 15
+    records.write_text(
+        json.dumps(_record("example.com/project.(*Collector).Add()", match_line)) + "\n",
+        encoding="utf-8",
+    )
+
+    hints = select_signal_hints(records, source_path=source, limit=1, signature_cap=16)
+
+    assert len(hints) == 1
+    hint = hints[0]
+    assert hint["match_line"] == match_line
+    assert hint["line"] == 12
+    assert hint["end_line"] == 18
+    assert hint["segment_kind"] == "stack_block"
+    assert hint["expand_line"] == 15
+    assert hint["expand_radius"] == 3
+    assert "segment=stack_block" in hint["label"]
+    assert "expand_line=15" in hint["label"]
+    assert "expand_radius=3" in hint["label"]
+    assert "goroutine 7" not in json.dumps(hints)
 
 
 def test_drain_groups_dynamic_plain_log_templates_when_installed(tmp_path: Path) -> None:
