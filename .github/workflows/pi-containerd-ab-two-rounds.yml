@@ -1,0 +1,240 @@
+name: Pi Containerd A/B Two Rounds
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test/tracecite-mode-containerd
+    paths:
+      - .github/workflows/pi-containerd-ab-two-rounds.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-containerd-ab-two-rounds
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        round: [1, 2]
+    env:
+      NATIVE_API_KEY: ${{ secrets.GMI_API_KEY }}
+      TRACECITE_API_KEY: ${{ secrets.GMI2_API_KEY }}
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      BENCH_MODEL: ${{ vars.GMI_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      CASE_DIR_REL: benchmarks/agent-investigation/cases/containerd-6772
+      RESULT: /tmp/pi-containerd-ab-round-${{ matrix.round }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev]"
+          test -f "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md"
+
+      - name: Configure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$NATIVE_API_KEY"
+          test -n "$TRACECITE_API_KEY"
+          test -n "$BENCH_MODEL"
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Prepare immutable evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT"
+          mkdir -p "$RESULT/prepared"
+          CASE_DIR="$GITHUB_WORKSPACE/$CASE_DIR_REL"
+          python -m tracecite.benchmarking validate "$CASE_DIR" > "$RESULT/validate.json"
+          python -m tracecite.benchmarking prepare "$CASE_DIR" --work-dir "$RESULT/prepared" > "$RESULT/prepare.json"
+          PREPARED="$(find "$RESULT/prepared" -name prepared.json -type f -print -quit)"
+          python - "$PREPARED" "$CASE_DIR" >> "$GITHUB_ENV" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          data=json.loads(Path(sys.argv[1]).read_text())
+          files=[Path(x['path']).resolve() for x in data['inputs']]
+          common=Path(os.path.commonpath([str(p.parent) for p in files])).resolve()
+          print(f'CASE_DIR_RUN={Path(sys.argv[2]).resolve()}')
+          print(f'INPUT_ROOT={common}')
+          print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
+          print('INPUT_FILES=' + ','.join(p.name for p in files))
+          PY
+
+      - name: Run native arm
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          SYSTEM_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, investigation order, conclusions, evidence sufficiency, and when to stop. Before retrieving more evidence, synthesize and compare already established facts; continue only when a concrete unresolved question remains and the next operation can add materially different evidence. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and state when supplied evidence is insufficient.'
+          mkdir -p "$RESULT/pi-native-session"
+          cd "$INPUT_ROOT"
+          set +e
+          timeout -k 30s 600s pi \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$NATIVE_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT/pi-native-session" \
+            --tools read,bash,grep,find,ls \
+            --no-extensions --no-skills --no-prompt-templates --no-context-files \
+            --system-prompt "$SYSTEM_PROMPT" "$QUESTION" \
+            > "$RESULT/pi-native-answer.md" 2> "$RESULT/pi-native-stderr.log"
+          code=$?
+          set -e
+          echo "$code" > "$RESULT/pi-native-exit.txt"
+
+      - name: Cool down provider
+        shell: bash
+        run: sleep 60
+
+      - name: Run strict TraceCite arm
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          SYSTEM_PROMPT="You are a real coding agent investigating supplied runtime evidence. Use only the supplied evidence and do not use external knowledge. You own hypotheses, causal reasoning, investigation order, conclusions, evidence sufficiency, and when to stop. This is a strict TraceCite benchmark arm: all runtime-evidence content must be obtained through TraceCite tools. Direct native read/grep/find/ls/bash access to the evidence root is blocked before execution. Supplied evidence files: ${INPUT_FILES}. You MUST use tracecite_search at least once as a real part of the evidence investigation before giving the final answer. Follow the TraceCite skill. TraceCite supplies evidence and retrieval memory; it does not decide root cause or when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and state when supplied evidence is insufficient."
+          mkdir -p "$RESULT/pi-tracecite-session"
+          cd "$INPUT_ROOT"
+          export TRACECITE_BENCHMARK_MODE=tracecite
+          export TRACECITE_RUNTIME_EVIDENCE_ROOT="$INPUT_ROOT"
+          export TRACECITE_RUNTIME_EVIDENCE_FILES="$INPUT_FILES"
+          export TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT/tracecite-runtime-evidence-access.jsonl"
+          export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$RESULT/tracecite-blocked-native-evidence-attempts.jsonl"
+          set +e
+          timeout -k 30s 600s pi \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$TRACECITE_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT/pi-tracecite-session" \
+            --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+            --tools read,bash,grep,find,ls,tracecite_search,tracecite_expand \
+            --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+            --no-prompt-templates --no-context-files \
+            --system-prompt "$SYSTEM_PROMPT" "$QUESTION" \
+            > "$RESULT/pi-tracecite-answer.md" 2> "$RESULT/pi-tracecite-stderr.log"
+          code=$?
+          set -e
+          echo "$code" > "$RESULT/pi-tracecite-exit.txt"
+
+      - name: Convert and score
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arm in native tracecite; do
+            SESSION="$(find "$RESULT/pi-${arm}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+            ANSWER="$RESULT/pi-${arm}-answer.md"
+            if [[ -n "$SESSION" && -f "$ANSWER" ]]; then
+              python benchmarks/agent-investigation/pi_session_to_transcript.py \
+                "$SESSION" "$ANSWER" "$RESULT/pi-${arm}-transcript.jsonl" \
+                --mode "pi-${arm}" --model "$BENCH_MODEL"
+              python -m tracecite.root_cause_benchmarking score \
+                "$CASE_DIR_RUN" "$RESULT/pi-${arm}-transcript.jsonl" \
+                > "$RESULT/pi-${arm}-score.json" || true
+            fi
+          done
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['RESULT'])
+          summary={'round': int(os.environ.get('MATRIX_ROUND','0') or 0)}
+          for arm in ('native','tracecite'):
+              p=root/f'pi-{arm}-transcript.jsonl'
+              usage={'input_tokens':0,'output_tokens':0,'model_calls':0,'tool_calls':0,'tool_output_chars':0}
+              tools={}
+              if p.is_file():
+                  for line in p.read_text(errors='replace').splitlines():
+                      try: e=json.loads(line)
+                      except Exception: continue
+                      if e.get('type')=='model':
+                          u=e.get('usage') or {}
+                          usage['input_tokens'] += int(u.get('input_tokens') or 0)
+                          usage['output_tokens'] += int(u.get('output_tokens') or 0)
+                          usage['model_calls'] += 1
+                      elif e.get('type')=='tool':
+                          usage['tool_calls'] += 1
+                          usage['tool_output_chars'] += len(str(e.get('output') or ''))
+                          name=str(e.get('name') or '')
+                          tools[name]=tools.get(name,0)+1
+              score={}
+              sp=root/f'pi-{arm}-score.json'
+              if sp.is_file():
+                  try: score=json.loads(sp.read_text())
+                  except Exception: pass
+              answer=(root/f'pi-{arm}-answer.md').read_text(errors='replace') if (root/f'pi-{arm}-answer.md').is_file() else ''
+              low=answer.lower()
+              strict_terms={
+                  'abba': ('ab-ba' in low or 'abba' in low),
+                  'lock_order': ('lock-order' in low or 'lock order' in low or 'lock ordering' in low),
+                  'collector_add': 'collector.add' in low,
+                  'namespace_collect': 'namespace.collect' in low,
+                  'collector_to_namespace': ('collector' in low and 'namespace' in low),
+              }
+              summary[arm]={'usage':usage,'tools':tools,'score':score,'strict_terms':strict_terms,'answer_chars':len(answer)}
+          (root/'ab-summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+        env:
+          MATRIX_ROUND: ${{ matrix.round }}
+
+      - name: Record TraceCite channel counts
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          TRACE="$RESULT/tracecite-runtime-evidence-access.jsonl"
+          BLOCKED="$RESULT/tracecite-blocked-native-evidence-attempts.jsonl"
+          echo "tracecite_evidence_calls=$([[ -f "$TRACE" ]] && grep -cve '^$' "$TRACE" || echo 0)" > "$RESULT/channel-summary.txt"
+          echo "blocked_native_attempts=$([[ -f "$BLOCKED" ]] && grep -cve '^$' "$BLOCKED" || echo 0)" >> "$RESULT/channel-summary.txt"
+
+      - name: Upload round artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: containerd-ab-convergence-round-${{ matrix.round }}
+          path: ${{ env.RESULT }}
+          if-no-files-found: warn
