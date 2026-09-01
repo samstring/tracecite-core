@@ -5,7 +5,7 @@ from typing import Any, Mapping
 from .agent_api import RetrievalResult
 
 
-_REPEAT_REF_FIELDS = ("uri", "source_path", "start_line", "end_line", "sha256", "position")
+_REPEAT_REF_FIELDS = ("uri", "source_path", "start_line", "end_line", "sha256")
 
 
 def matched_existing_evidence(
@@ -16,9 +16,9 @@ def matched_existing_evidence(
     """Return compact identities for canonical evidence already seen by the Agent.
 
     RetrievalSession novelty suppression deliberately removes repeated evidence
-    bodies from the default Agent projection. A later, materially different
+    bodies from the default Agent projection.  A later, materially different
     query can still match those old rows, so the transport must preserve which
-    old evidence matched without re-sending its text/preview. This helper is
+    old evidence matched without re-sending its text/preview.  This helper is
     purely mechanical: it reports overlap and makes no claim about relevance,
     importance, causality, or what the Agent should inspect next.
     """
@@ -61,7 +61,7 @@ def attach_matched_existing_evidence(
     *,
     limit: int = 50,
 ) -> dict[str, Any]:
-    """Project novelty plus lightweight refs for current-query repeated matches."""
+    """Project novelty plus compact refs for repeated rows into an Agent payload."""
 
     payload = result.to_dict()
     matched = matched_existing_evidence(result, limit=limit)

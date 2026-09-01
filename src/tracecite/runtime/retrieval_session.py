@@ -1,10 +1,10 @@
 """Canonical persisted retrieval memory for Agent sessions.
 
 ``RetrievalSessionState`` is the single owner for mechanical retrieval memory:
-seen Evidence identities, covered source-version ranges, materialized Evidence
-coordinates, source observations, bounded transport identities, and bounded
-retrieval-operation history. It does not own hypotheses, findings, causal
-conclusions, evidence sufficiency, or stopping decisions.
+seen Evidence identities, covered source-version ranges, source observations,
+bounded transport identities, and bounded retrieval-operation history.  It does
+not own hypotheses, findings, causal conclusions, evidence sufficiency, or
+stopping decisions.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ DEFAULT_MAX_SEEN_EVIDENCE = 4096
 DEFAULT_MAX_SEEN_RESULTS = 512
 DEFAULT_MAX_SEEN_GROUPS = 2048
 DEFAULT_MAX_SEEN_RELATIONS = 8192
-DEFAULT_MAX_SEEN_EVIDENCE_COORDINATES = 64
 DEFAULT_MAX_REQUEST_FINGERPRINTS = 512
 DEFAULT_MAX_RECENT_OPERATIONS = 32
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -143,85 +142,6 @@ def _operation_counts_from_dict(payload: Mapping[str, Any]) -> dict[str, int]:
 
 
 @dataclass(frozen=True)
-class EvidenceCoordinate:
-    """One bounded source-line coordinate for Evidence the Agent materialized."""
-
-    ref: str
-    source_sha256: str
-    start_line: int
-    end_line: int
-
-    def __post_init__(self) -> None:
-        ref = str(self.ref or "").strip()
-        digest = str(self.source_sha256 or "").strip().lower()
-        if not ref or len(ref) > 2048:
-            raise ValueError("evidence coordinate ref must be 1-2048 characters")
-        if not _FINGERPRINT_RE.fullmatch(digest):
-            raise ValueError("evidence coordinate source_sha256 must be a sha256 hex digest")
-        if (
-            isinstance(self.start_line, bool)
-            or not isinstance(self.start_line, int)
-            or self.start_line < 1
-        ):
-            raise ValueError("evidence coordinate start_line must be a positive integer")
-        if (
-            isinstance(self.end_line, bool)
-            or not isinstance(self.end_line, int)
-            or self.end_line < self.start_line
-        ):
-            raise ValueError("evidence coordinate end_line must be >= start_line")
-        object.__setattr__(self, "ref", ref)
-        object.__setattr__(self, "source_sha256", digest)
-
-    @property
-    def key(self) -> tuple[str, int, int]:
-        return self.source_sha256, self.start_line, self.end_line
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "ref": self.ref,
-            "source_sha256": self.source_sha256,
-            "start_line": self.start_line,
-            "end_line": self.end_line,
-        }
-
-    @classmethod
-    def from_mapping(cls, payload: Mapping[str, Any]) -> "EvidenceCoordinate":
-        if not isinstance(payload, Mapping):
-            raise ValueError("seen evidence coordinate must be an object")
-        return cls(
-            ref=str(payload.get("ref") or ""),
-            source_sha256=str(payload.get("source_sha256") or ""),
-            start_line=payload.get("start_line"),
-            end_line=payload.get("end_line"),
-        )
-
-
-def _evidence_coordinates_from_dict(payload: Mapping[str, Any]) -> tuple[EvidenceCoordinate, ...]:
-    raw = payload.get("seen_evidence_coordinates") or []
-    if not isinstance(raw, list):
-        raise ValueError("RetrievalSessionState seen_evidence_coordinates must be a list")
-    return tuple(EvidenceCoordinate.from_mapping(item) for item in raw)
-
-
-def _append_evidence_coordinates(
-    previous: tuple[EvidenceCoordinate, ...],
-    values: Iterable[EvidenceCoordinate | Mapping[str, Any]],
-    limit: int,
-) -> tuple[tuple[EvidenceCoordinate, ...], bool]:
-    if limit < 1:
-        raise ValueError("max_seen_evidence_coordinates must be at least 1")
-    order = list(previous)
-    for raw in values:
-        value = raw if isinstance(raw, EvidenceCoordinate) else EvidenceCoordinate.from_mapping(raw)
-        order = [item for item in order if item.key != value.key]
-        order.append(value)
-    if len(order) <= limit:
-        return tuple(order), False
-    return tuple(order[-limit:]), True
-
-
-@dataclass(frozen=True)
 class RetrievalOperation:
     """One bounded mechanical retrieval-operation observation."""
 
@@ -307,7 +227,6 @@ class RetrievalSessionState:
     seen_groups: tuple[str, ...] = ()
     seen_relations: tuple[str, ...] = ()
     covered_ranges: Mapping[str, tuple[tuple[int, int], ...]] = field(default_factory=dict)
-    seen_evidence_coordinates: tuple[EvidenceCoordinate, ...] = ()
     source_observations: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     operation_counts: Mapping[str, int] = field(default_factory=dict)
     recent_operations: tuple[RetrievalOperation, ...] = ()
@@ -328,20 +247,11 @@ class RetrievalSessionState:
             if any(not isinstance(item, str) for item in values):
                 raise ValueError(f"RetrievalSessionState {name} must contain strings")
             object.__setattr__(self, name, values)
-        coordinates = tuple(
-            item if isinstance(item, EvidenceCoordinate) else EvidenceCoordinate.from_mapping(item)
-            for item in self.seen_evidence_coordinates
-        )
-        object.__setattr__(self, "seen_evidence_coordinates", coordinates)
         fingerprints = tuple(str(item).strip().lower() for item in self.request_fingerprints)
         if any(not _FINGERPRINT_RE.fullmatch(item) for item in fingerprints):
             raise ValueError("request_fingerprints must contain sha256 digests")
         object.__setattr__(self, "request_fingerprints", fingerprints)
-        object.__setattr__(
-            self,
-            "operation_counts",
-            _operation_counts_from_dict({"operation_counts": dict(self.operation_counts)}),
-        )
+        object.__setattr__(self, "operation_counts", _operation_counts_from_dict({"operation_counts": dict(self.operation_counts)}))
         operations = tuple(
             item if isinstance(item, RetrievalOperation) else RetrievalOperation.from_mapping(item)
             for item in self.recent_operations
@@ -377,9 +287,6 @@ class RetrievalSessionState:
                 source: [[start, end] for start, end in ranges]
                 for source, ranges in sorted(self.covered_ranges.items())
             },
-            "seen_evidence_coordinates": [
-                item.to_dict() for item in self.seen_evidence_coordinates
-            ],
             "source_observations": {
                 source: dict(values)
                 for source, values in sorted(self.source_observations.items())
@@ -408,7 +315,6 @@ class RetrievalSessionState:
             seen_groups=_string_list(payload, "seen_groups"),
             seen_relations=_string_list(payload, "seen_relations"),
             covered_ranges=_covered_ranges_from_dict(payload),
-            seen_evidence_coordinates=_evidence_coordinates_from_dict(payload),
             source_observations=_source_observations_from_dict(payload),
             operation_counts=_operation_counts_from_dict(payload),
             recent_operations=tuple(RetrievalOperation.from_mapping(item) for item in recent_raw),
@@ -424,7 +330,6 @@ class RetrievalSessionState:
         return {
             "operation_counts": dict(sorted(self.operation_counts.items())),
             "unique_evidence_seen": len(self.seen_evidence),
-            "materialized_evidence_coordinates": len(self.seen_evidence_coordinates),
             "exact_duplicate_requests": self.exact_duplicate_requests,
             "recent_window": len(recent),
             "recent_with_new_evidence": sum(item.grew for item in recent),
@@ -442,14 +347,12 @@ class RetrievalSessionState:
         groups: Iterable[str] = (),
         relations: Iterable[str] = (),
         covered_ranges: Mapping[str, Iterable[tuple[int, int]]] | None = None,
-        evidence_coordinates: Iterable[EvidenceCoordinate | Mapping[str, Any]] = (),
         source_observations: Mapping[str, Mapping[str, Any]] | None = None,
         operation: RetrievalOperation | None = None,
         max_seen_evidence: int = DEFAULT_MAX_SEEN_EVIDENCE,
         max_seen_results: int = DEFAULT_MAX_SEEN_RESULTS,
         max_seen_groups: int = DEFAULT_MAX_SEEN_GROUPS,
         max_seen_relations: int = DEFAULT_MAX_SEEN_RELATIONS,
-        max_seen_evidence_coordinates: int = DEFAULT_MAX_SEEN_EVIDENCE_COORDINATES,
         max_request_fingerprints: int = DEFAULT_MAX_REQUEST_FINGERPRINTS,
         max_recent_operations: int = DEFAULT_MAX_RECENT_OPERATIONS,
     ) -> tuple["RetrievalSessionState", bool]:
@@ -459,11 +362,6 @@ class RetrievalSessionState:
         seen_results, p2 = _append_unique(self.seen_results, results, max_seen_results)
         seen_groups, p3 = _append_unique(self.seen_groups, groups, max_seen_groups)
         seen_relations, p4 = _append_unique(self.seen_relations, relations, max_seen_relations)
-        seen_coordinates, p5 = _append_evidence_coordinates(
-            self.seen_evidence_coordinates,
-            evidence_coordinates,
-            max_seen_evidence_coordinates,
-        )
         merged_ranges = dict(self.covered_ranges)
         for source, ranges in dict(covered_ranges or {}).items():
             source_key = str(source or "").strip()
@@ -485,7 +383,7 @@ class RetrievalSessionState:
         recent = list(self.recent_operations)
         fingerprints = self.request_fingerprints
         duplicates = self.exact_duplicate_requests
-        p6 = False
+        p5 = False
         if operation is not None:
             if not isinstance(operation, RetrievalOperation):
                 raise TypeError("operation must be RetrievalOperation")
@@ -493,7 +391,7 @@ class RetrievalSessionState:
             duplicate = False
             if operation.request_fingerprint:
                 duplicate = operation.request_fingerprint in set(fingerprints)
-                fingerprints, p6 = _append_unique(
+                fingerprints, p5 = _append_unique(
                     fingerprints,
                     (operation.request_fingerprint,),
                     max_request_fingerprints,
@@ -514,14 +412,13 @@ class RetrievalSessionState:
                 seen_groups=seen_groups,
                 seen_relations=seen_relations,
                 covered_ranges=merged_ranges,
-                seen_evidence_coordinates=seen_coordinates,
                 source_observations=merged_observations,
                 operation_counts=counts,
                 recent_operations=tuple(recent),
                 request_fingerprints=fingerprints,
                 exact_duplicate_requests=duplicates,
             ),
-            p1 or p2 or p3 or p4 or p5 or p6,
+            p1 or p2 or p3 or p4 or p5,
         )
 
 
@@ -607,11 +504,9 @@ __all__ = [
     "DEFAULT_MAX_RECENT_OPERATIONS",
     "DEFAULT_MAX_REQUEST_FINGERPRINTS",
     "DEFAULT_MAX_SEEN_EVIDENCE",
-    "DEFAULT_MAX_SEEN_EVIDENCE_COORDINATES",
     "DEFAULT_MAX_SEEN_GROUPS",
     "DEFAULT_MAX_SEEN_RELATIONS",
     "DEFAULT_MAX_SEEN_RESULTS",
-    "EvidenceCoordinate",
     "RETRIEVAL_SESSION_SCHEMA_VERSION",
     "RetrievalOperation",
     "RetrievalSessionState",

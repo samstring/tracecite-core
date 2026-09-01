@@ -51,8 +51,7 @@ jobs:
             tests/test_pi_four_public_strict_boundary.py \
             tests/test_pi_source_identity_projection.py \
             tests/test_evidence_selection_diversity.py \
-            tests/test_pi_navigation_hint_projection.py \
-            tests/test_evidence_coordinates.py
+            tests/test_pi_navigation_hint_projection.py
 
       - name: Configure GMI model
         shell: bash

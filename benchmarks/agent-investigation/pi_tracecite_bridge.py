@@ -21,7 +21,6 @@ from tracecite.runtime import (
     SourceTarget,
     TraversalLimits,
     aggregate,
-    attach_seen_evidence_distances,
     materialize,
     replay,
     retrieve,
@@ -180,11 +179,7 @@ def _matched_records_path(payload: Mapping[str, Any]) -> Path | None:
     return None
 
 
-def _refresh_source_aware_navigation_hints(
-    requested: Path,
-    payload: dict[str, Any],
-    session: RetrievalSessionStore,
-) -> None:
+def _refresh_source_aware_navigation_hints(requested: Path, payload: dict[str, Any]) -> None:
     """Re-rank truncated Pi navigation hints with local source neighborhoods.
 
     Core owns the generic structural selector. This Pi projection supplies the
@@ -234,23 +229,12 @@ def _refresh_source_aware_navigation_hints(
     if not retained:
         return
 
-    coordinate_state = session.load()
-    retained = attach_seen_evidence_distances(
-        retained,
-        coordinate_state.seen_evidence_coordinates,
-        default_sha256=_payload_sha256(payload, requested),
-        start_field="line",
-        end_field="end_line",
-    )
-
     data = payload.setdefault("data", {})
     if isinstance(data, dict):
         data["signal_hints"] = retained
         data["signal_hint_note"] = (
             "Structurally diverse truncated-search navigation candidates; "
-            "materialize the referenced range before citing. nearest_seen contains "
-            "bounded source-line distances only to Evidence already materialized in "
-            "this RetrievalSession; it does not assert semantic relation."
+            "materialize the referenced range before citing."
         )
         data["source_neighborhood_diversity"] = True
     if isinstance(coverage, dict):
@@ -304,33 +288,21 @@ def _navigation_hint_evidence(
         if preview:
             label.append(f"preview={preview}")
         label.append("materialize this range with TraceCite before citing")
-        pointer: dict[str, Any] = {
-            "uri": (
-                f"tracecite-navigation://sha256/{digest}/{line_ref}"
-                if digest
-                else f"tracecite-navigation://path/{name}/{line_ref}"
-            ),
-            "source_path": source_path,
-            "sha256": digest or None,
-            "start_line": start,
-            "end_line": end,
-            "label": " ".join(label),
-            "metadata_only": True,
-        }
-        for field in (
-            "match_line",
-            "match_end_line",
-            "segment_kind",
-            "expand_line",
-            "expand_radius",
-        ):
-            value = row.get(field)
-            if value not in (None, ""):
-                pointer[field] = value
-        position = row.get("position")
-        if isinstance(position, Mapping):
-            pointer["position"] = dict(position)
-        pointers.append(pointer)
+        pointers.append(
+            {
+                "uri": (
+                    f"tracecite-navigation://sha256/{digest}/{line_ref}"
+                    if digest
+                    else f"tracecite-navigation://path/{name}/{line_ref}"
+                ),
+                "source_path": source_path,
+                "sha256": digest or None,
+                "start_line": start,
+                "end_line": end,
+                "label": " ".join(label),
+                "metadata_only": True,
+            }
+        )
     return pointers
 
 
@@ -370,7 +342,7 @@ def _retrieve(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[
                 data["source_identity_projection"] = True
     elif requested.is_file():
         if args.query:
-            _refresh_source_aware_navigation_hints(requested, payload, session)
+            _refresh_source_aware_navigation_hints(requested, payload)
         navigation = _navigation_hint_evidence(requested, payload)
         _append_identity_evidence(payload, navigation)
         access = _file_access_identity_evidence(requested, payload)
