@@ -9,6 +9,11 @@ Selection is deliberately mechanical. Generic severity vocabulary keeps late
 fatal/error records visible, while structural signatures compress repeated
 records and preserve rare local record/call-stack shapes. No root-cause
 vocabulary, component-specific terms, or causal inference is used.
+
+Structural neighborhoods are an internal clustering aid only. Their raw bodies
+are never returned to the Agent. All neighborhood, signature, label and hint
+sizes are hard-bounded so diversity discovery cannot become an unbounded model
+context expansion mechanism.
 """
 
 from __future__ import annotations
@@ -49,11 +54,17 @@ _UUID_RE = re.compile(
 )
 _NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?\d+(?![A-Za-z])")
 _SPACE_RE = re.compile(r"[ \t]+")
+
 DEFAULT_SIGNAL_SIGNATURE_CAP = 256
+MAX_SIGNAL_SIGNATURE_CAP = 2_048
 DEFAULT_SIGNAL_HINT_LIMIT = 4
-_STRUCTURAL_LINE_LIMIT = 24
-_STRUCTURAL_CHAR_LIMIT = 3_000
+MAX_SIGNAL_HINT_LIMIT = 8
 DEFAULT_STRUCTURAL_NEIGHBORHOOD_RADIUS = 8
+MAX_STRUCTURAL_NEIGHBORHOOD_RADIUS = 12
+MAX_STRUCTURAL_NEIGHBORHOOD_CHARS = 6_000
+STRUCTURAL_SIGNATURE_LINE_LIMIT = 24
+STRUCTURAL_SIGNATURE_CHAR_LIMIT = 3_000
+HINT_LABEL_CHAR_LIMIT = 160
 
 
 def signal_severity(text: str) -> int:
@@ -88,13 +99,13 @@ def structural_signature(text: str) -> str:
         value = _normalise_structure_line(raw)
         if not value:
             continue
-        remaining = _STRUCTURAL_CHAR_LIMIT - chars
+        remaining = STRUCTURAL_SIGNATURE_CHAR_LIMIT - chars
         if remaining <= 0:
             break
         value = value[:remaining]
         lines.append(value)
         chars += len(value) + 1
-        if len(lines) >= _STRUCTURAL_LINE_LIMIT:
+        if len(lines) >= STRUCTURAL_SIGNATURE_LINE_LIMIT:
             break
     return "\n".join(lines)
 
@@ -139,10 +150,17 @@ def _source_neighborhoods(
     *,
     radius: int,
 ) -> list[str]:
-    """Read all requested local line neighborhoods in one bounded source pass."""
+    """Read requested neighborhoods once, with a hard per-candidate char bound.
+
+    The returned strings exist only long enough to compute structural
+    fingerprints. They are never copied into navigation hints or Agent output.
+    """
 
     if radius < 0 or not source_path.is_file() or not candidates:
-        return [str(item.get("text") or "") for item in candidates]
+        return [
+            str(item.get("text") or "")[:MAX_STRUCTURAL_NEIGHBORHOOD_CHARS]
+            for item in candidates
+        ]
 
     intervals: list[tuple[int, int, int]] = []
     for index, item in enumerate(candidates):
@@ -152,6 +170,7 @@ def _source_neighborhoods(
     intervals.sort(key=lambda item: (item[0], item[1], item[2]))
 
     buffers: list[list[str]] = [[] for _ in candidates]
+    char_counts = [0 for _ in candidates]
     active: list[tuple[int, int]] = []
     next_interval = 0
     with source_path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -163,12 +182,21 @@ def _source_neighborhoods(
             if active:
                 active = [(right, index) for right, index in active if right >= line_number]
                 for _right, index in active:
-                    buffers[index].append(raw)
+                    remaining = MAX_STRUCTURAL_NEIGHBORHOOD_CHARS - char_counts[index]
+                    if remaining <= 0:
+                        continue
+                    chunk = raw[:remaining]
+                    buffers[index].append(chunk)
+                    char_counts[index] += len(chunk)
             if next_interval >= len(intervals) and not active:
                 break
 
     return [
-        "".join(buffer) if buffer else str(candidates[index].get("text") or "")
+        (
+            "".join(buffer)
+            if buffer
+            else str(candidates[index].get("text") or "")[:MAX_STRUCTURAL_NEIGHBORHOOD_CHARS]
+        )
         for index, buffer in enumerate(buffers)
     ]
 
@@ -187,14 +215,21 @@ def select_signal_hints(
     small local line neighborhood rather than the matching line alone. This is
     important for stack dumps and multiline incidents where every matching frame
     is identical but the nearby caller/callee chain differs. The neighborhood is
-    used only for mechanical clustering; returned hints still contain line
-    coordinates and a short match label, not the neighborhood body.
+    used only for mechanical clustering; returned hints contain only bounded
+    coordinates and a short match label, never the neighborhood body.
     """
 
-    if limit < 1 or signature_cap < limit:
-        raise ValueError("signal hint bounds are invalid")
-    if neighborhood_radius < 0:
-        raise ValueError("neighborhood_radius must be non-negative")
+    if limit < 1 or limit > MAX_SIGNAL_HINT_LIMIT:
+        raise ValueError(f"limit must be in [1, {MAX_SIGNAL_HINT_LIMIT}]")
+    if signature_cap < limit or signature_cap > MAX_SIGNAL_SIGNATURE_CAP:
+        raise ValueError(
+            f"signature_cap must be in [limit, {MAX_SIGNAL_SIGNATURE_CAP}]"
+        )
+    if neighborhood_radius < 0 or neighborhood_radius > MAX_STRUCTURAL_NEIGHBORHOOD_RADIUS:
+        raise ValueError(
+            "neighborhood_radius must be in "
+            f"[0, {MAX_STRUCTURAL_NEIGHBORHOOD_RADIUS}]"
+        )
     if not records_path.is_file():
         return []
 
@@ -217,7 +252,7 @@ def select_signal_hints(
                 continue
             if not isinstance(end_line, int) or isinstance(end_line, bool) or end_line < start_line:
                 end_line = start_line
-            label = next((item.strip() for item in text.splitlines() if item.strip()), "")[:240]
+            label = next((item.strip() for item in text.splitlines() if item.strip()), "")[:HINT_LABEL_CHAR_LIMIT]
             if not label:
                 continue
             candidates.append(
@@ -227,7 +262,7 @@ def select_signal_hints(
                     "severity": signal_severity(text),
                     "label": label,
                     "ordinal": ordinal,
-                    "text": text,
+                    "text": text[:MAX_STRUCTURAL_NEIGHBORHOOD_CHARS],
                 }
             )
 
@@ -235,9 +270,16 @@ def select_signal_hints(
         return []
 
     structural_texts = (
-        _source_neighborhoods(Path(source_path).expanduser().resolve(), candidates, radius=neighborhood_radius)
+        _source_neighborhoods(
+            Path(source_path).expanduser().resolve(),
+            candidates,
+            radius=neighborhood_radius,
+        )
         if source_path is not None
-        else [str(item.get("text") or "") for item in candidates]
+        else [
+            str(item.get("text") or "")[:MAX_STRUCTURAL_NEIGHBORHOOD_CHARS]
+            for item in candidates
+        ]
     )
 
     clusters: dict[str, dict[str, Any]] = {}
@@ -257,7 +299,7 @@ def select_signal_hints(
             "end_line": int(candidate["end_line"]),
             "severity": severity,
             "count": 1,
-            "label": str(candidate["label"]),
+            "label": str(candidate["label"])[:HINT_LABEL_CHAR_LIMIT],
             "ordinal": int(candidate["ordinal"]),
         }
         if len(clusters) < signature_cap:
@@ -296,7 +338,7 @@ def select_signal_hints(
             "end_line": int(item["end_line"]),
             "severity": int(item["severity"]),
             "count": int(item["count"]),
-            "label": str(item["label"]),
+            "label": str(item["label"])[:HINT_LABEL_CHAR_LIMIT],
             "kind": "high_signal" if int(item["severity"]) > 0 else "structural_diversity",
             "distinctiveness": round(float(distinctiveness.get(signature, 0.0)), 6),
         }
@@ -308,6 +350,11 @@ __all__ = [
     "DEFAULT_SIGNAL_HINT_LIMIT",
     "DEFAULT_SIGNAL_SIGNATURE_CAP",
     "DEFAULT_STRUCTURAL_NEIGHBORHOOD_RADIUS",
+    "HINT_LABEL_CHAR_LIMIT",
+    "MAX_SIGNAL_HINT_LIMIT",
+    "MAX_SIGNAL_SIGNATURE_CAP",
+    "MAX_STRUCTURAL_NEIGHBORHOOD_CHARS",
+    "MAX_STRUCTURAL_NEIGHBORHOOD_RADIUS",
     "select_signal_hints",
     "signal_severity",
     "signal_signature",
