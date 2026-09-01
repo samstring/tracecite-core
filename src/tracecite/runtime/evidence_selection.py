@@ -257,6 +257,9 @@ def _drain_grouping(candidates: list[dict[str, Any]]) -> tuple[list[str | None],
 
     config = TemplateMinerConfig()
     config.profiling_enabled = False
+    # Split common key=value records so a changing value does not become the
+    # prefix-tree routing token. This is format-agnostic and preserves the key.
+    config.drain_extra_delimiters = ["="]
     # Still conservative versus Drain's default, while allowing a minority of
     # dynamic tokens to vary in an otherwise stable log-template shape.
     config.drain_sim_th = 0.6
