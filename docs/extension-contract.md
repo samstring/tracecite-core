@@ -1,4 +1,4 @@
-# TraceCite Extension Contract v2
+# TraceCite Extension Contract
 
 目标：第三方不修改、不 fork TraceCite，通过稳定、声明式、可独立版本化的契约提供领域数据、语义与能力；Runtime 内部实现、Agent 上下文策略和宿主适配可以持续演进，而无需反复修改领域扩展。
 
@@ -14,7 +14,7 @@ Investigation Runtime
 Evidence Core
        ^
        |
-Extension Protocol v2
+TraceCite Extension Protocol
        |
 Mobile / CI / Backend / Third-party
 ```
@@ -27,7 +27,7 @@ Extension 不感知当前 LLM、Token 策略、ContextPack、Seen Evidence、Con
 
 ## 2. 顶层协议
 
-v2 不再把可变的 `ExtensionAPI.register_xxx()` 注册表面作为公共入口。扩展声明一个 `TraceCiteExtension`：
+当前 Extension Protocol 不把可变的 `ExtensionAPI.register_xxx()` 注册表面作为公共入口。扩展声明一个 `TraceCiteExtension`：
 
 ```python
 from tracecite.extension import ExtensionManifest, TraceCiteExtension
@@ -55,6 +55,8 @@ my_domain = "my_tracecite.extension:extension"
 
 加载仍然是显式动作；仅 `import tracecite` 不执行第三方代码。Host 通过 `load_extensions()` 或相应 CLI 动作加载已安装扩展。
 
+使用者不需要选择 V1/V2 接入模式；新的领域扩展统一使用当前声明式 Extension Contract。
+
 ## 3. ExtensionManifest
 
 `ExtensionManifest` 只描述稳定身份：
@@ -63,9 +65,9 @@ my_domain = "my_tracecite.extension:extension"
 - `version`：扩展发行版本。
 - `domain`：领域标识。
 - `description`：可选说明。
-- `protocol_version`：顶层 Extension Protocol，当前为 `2`。
+- `protocol_version`：机器兼容性字段，当前值为 `2`。
 
-Manifest 不保存 Runtime 实现、Agent profile、Token 预算或领域数据。
+`protocol_version` 用于加载和兼容校验，不代表对外存在多套可选接入模式。Manifest 不保存 Runtime 实现、Agent profile、Token 预算或领域数据。
 
 ## 4. Capability 模型
 
@@ -83,11 +85,11 @@ Manifest 不保存 Runtime 实现、Agent profile、Token 预算或领域数据�
 
 Capability 版本独立于 Extension Protocol。未来只升级某个 Capability 时，不要求其他能力同时升级。
 
-同一个扩展内 `(kind, name)` 不允许重复。注册冲突默认失败；v2 不提供隐式 replace 行为。
+同一个扩展内 `(kind, name)` 不允许重复。注册冲突默认失败；当前协议不提供隐式 replace 行为。
 
 ## 5. Scenario 边界
 
-v1 允许扩展注册命名 `ScenarioRuntime`。v2 改为 `ScenarioCapability`：
+当前公共边界使用 `ScenarioCapability`：
 
 ```text
 Domain Extension
@@ -198,7 +200,7 @@ Runtime 继续拥有 safety gate。Extension 不能绕过 live-source/live-actio
 ## 9. 发现、加载与失败隔离
 
 - `tracecite.extensions` entry point 返回 `TraceCiteExtension`，或返回/导出 `extension()` / `EXTENSION`。
-- loader 校验顶层协议和 Capability version。
+- loader 校验顶层机器协议版本和 Capability version。
 - 同一 entry point 默认幂等。
 - `strict=True` 时加载失败终止；非 strict 模式结构化记录单个失败。
 - Distribution 名称和版本属于加载 provenance，不写入领域事实。
@@ -245,16 +247,17 @@ Domain Extension 只需提供足够结构化、可追溯的事实和 capability�
 
 ## 12. 版本与兼容策略
 
-- Extension Protocol 当前为 `2`。
+- 对外只有一套 TraceCite Extension Contract，不要求使用者选择 V1/V2 模式。
+- `protocol_version` 仍作为机器兼容性字段维护，当前值为 `2`。
 - Capability 各自独立版本。
 - 不兼容的顶层协议变化必须新增 ADR、迁移说明、测试和领域验收。
 - 新能力优先作为新的可选 Capability；不要为了一个新功能增加新的顶层 `register_xxx`。
 - Persisted Investigation/Knowledge/Manifest schema 的版本与 Extension Protocol 相互独立。
 
-v1 `ExtensionAPI` / `TRACECITE_EXTENSION_API = "1"` / `register(api)` 属于已被 v2 替代的公共模型。迁移见 [Extension v1 -> v2](migrations/extension-protocol-v2.zh-CN.md)。
+旧版 `ExtensionAPI` / `TRACECITE_EXTENSION_API = "1"` / `register(api)` 已废弃，不是当前接入选项。历史迁移记录保留在 [Extension protocol migration](migrations/extension-protocol-v2.zh-CN.md)，仅用于维护旧代码和理解演进历史。
 
 ## 13. 当前状态
 
-Core 已实现 v2 声明式 Contract、Capability version 校验、显式 loader，以及到现有 Scenario/Assertion/Reporter/Agent Capability registry 的内部适配。
+Core 已实现声明式 Extension Contract、Capability version 校验、显式 loader，以及到现有 Scenario/Assertion/Reporter/Agent Capability registry 的内部适配。
 
-Mobile 迁移和新的 Context Engine 在后续阶段执行；在完成对应测试前不能把它们描述成已完成。MCP 最后只接 Runtime/Context 公共接口，不直接依赖 Extension 内部 registry。
+Mobile 已通过同一声明式 Extension Contract 接入。MCP 只接 Runtime/Context 公共接口，不直接依赖 Extension 内部 registry。
