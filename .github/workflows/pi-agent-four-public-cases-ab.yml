@@ -7,6 +7,10 @@ on:
       - bench/add-four-public-cases
     paths:
       - .github/workflows/pi-agent-four-public-cases-ab.yml
+      - benchmarks/agent-investigation/pi_tracecite_extension.ts
+      - benchmarks/agent-investigation/pi_tracecite_extension_impl.ts
+      - benchmarks/agent-investigation/pi_strict_evidence_boundary.ts
+      - tests/test_pi_four_public_strict_boundary.py
       - benchmarks/agent-investigation/cases/containerd-6772/**
       - benchmarks/agent-investigation/cases/kubernetes-140039-runc-5347/**
       - benchmarks/agent-investigation/cases/kubernetes-141402-podcertificate-readiness/**
@@ -68,11 +72,14 @@ jobs:
           test -f "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md"
           pi --help | grep -q -- '--skill'
 
-      - name: Run TraceCite retrieval regressions
+      - name: Run TraceCite retrieval and boundary regressions
         shell: bash
         run: |
           set -euo pipefail
-          python -m pytest -q tests/test_retrieval_guidance.py tests/test_session_novelty_regressions.py
+          python -m pytest -q \
+            tests/test_retrieval_guidance.py \
+            tests/test_session_novelty_regressions.py \
+            tests/test_pi_four_public_strict_boundary.py
 
       - name: Configure validated GMI model for Pi
         shell: bash
@@ -154,14 +161,19 @@ jobs:
         shell: bash
         run: sleep 60
 
-      - name: Run Pi forced TraceCite B arm
+      - name: Run Pi strict TraceCite B arm
         shell: bash
         run: |
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
-          SYSTEM_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, investigation order, conclusions, and when to stop. Native tools and TraceCite tools are available. You MUST use tracecite_search at least once as a real part of the evidence investigation before giving the final answer. Follow the TraceCite skill tool-selection, search-syntax, novelty, and identity-safety semantics. TraceCite supplies evidence and retrieval memory; it does not decide root cause or when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and state when supplied evidence is insufficient.'
+          SYSTEM_PROMPT="You are a real coding agent investigating supplied runtime evidence. Use only the supplied evidence and do not use external knowledge. You own hypotheses, causal reasoning, investigation order, conclusions, and when to stop. This is a strict TraceCite benchmark arm: all runtime-evidence content must be obtained through TraceCite tools. Direct native read/grep/find/ls/bash access to the evidence root is blocked before execution. Supplied evidence files: ${INPUT_FILES}. You MUST use tracecite_search at least once as a real part of the evidence investigation before giving the final answer. Follow the TraceCite skill tool-selection, search-syntax, novelty, and identity-safety semantics. TraceCite supplies evidence and retrieval memory; it does not decide root cause or when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and state when supplied evidence is insufficient."
           mkdir -p "$RESULT/pi-tracecite-session"
           cd "$INPUT_ROOT"
+          export TRACECITE_BENCHMARK_MODE=tracecite
+          export TRACECITE_RUNTIME_EVIDENCE_ROOT="$INPUT_ROOT"
+          export TRACECITE_RUNTIME_EVIDENCE_FILES="$INPUT_FILES"
+          export TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT/tracecite-runtime-evidence-access.jsonl"
+          export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$RESULT/tracecite-blocked-native-evidence-attempts.jsonl"
           set +e
           timeout -k 30s 600s pi \
             --provider gmi --model "$BENCH_MODEL" --api-key "$TRACECITE_API_KEY" \
@@ -176,6 +188,35 @@ jobs:
           code=$?
           set -e
           echo "$code" > "$RESULT/pi-tracecite-exit.txt"
+
+      - name: Record strict TraceCite evidence channel
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          TRACE="$RESULT/tracecite-runtime-evidence-access.jsonl"
+          NATIVE="$RESULT/tracecite-native-runtime-evidence-access.jsonl"
+          BLOCKED="$RESULT/tracecite-blocked-native-evidence-attempts.jsonl"
+          trace_calls=0
+          native_calls=0
+          blocked_attempts=0
+          [[ -f "$TRACE" ]] && trace_calls="$(grep -cve '^$' "$TRACE" || true)"
+          [[ -f "$NATIVE" ]] && native_calls="$(grep -cve '^$' "$NATIVE" || true)"
+          [[ -f "$BLOCKED" ]] && blocked_attempts="$(grep -cve '^$' "$BLOCKED" || true)"
+          python - "$trace_calls" "$native_calls" "$blocked_attempts" "$RESULT/channel-status.json" <<'PY'
+          import json, sys
+          trace_calls, native_calls, blocked_attempts = map(int, sys.argv[1:4])
+          payload = {
+              'schema_version': 1,
+              'strict_boundary_enforced': True,
+              'tracecite_evidence_calls': trace_calls,
+              'native_runtime_evidence_accesses': native_calls,
+              'blocked_native_runtime_evidence_attempts': blocked_attempts,
+              'channel_valid': trace_calls > 0 and native_calls == 0,
+          }
+          open(sys.argv[4], 'w').write(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
 
       - name: Convert, score, and compare
         if: always()
@@ -245,6 +286,13 @@ jobs:
               stderr=stderr_path.read_text(errors='replace') if stderr_path.is_file() else ''
               exit_code=load_int(root/f'pi-{name}-exit.txt')
               validity=classify_arm_validity(exit_code, stderr).to_dict()
+              channel=load_json(root/'channel-status.json') if name == 'tracecite' else None
+              if name == 'tracecite' and validity.get('valid_for_comparison') and not (channel or {}).get('channel_valid'):
+                  validity = dict(validity)
+                  validity['valid_for_comparison'] = False
+                  validity['infrastructure_invalid'] = True
+                  validity['failure_kind'] = 'benchmark_evidence_channel_violation'
+                  validity['reason'] = 'tracecite_strict_evidence_channel_invalid'
               quality=score.get('quality') if isinstance(score.get('quality'),dict) else {}
               cost=score.get('context_cost') if isinstance(score.get('context_cost'),dict) else {}
               usage, tools=transcript_usage(root/f'pi-{name}-transcript.jsonl')
@@ -256,6 +304,7 @@ jobs:
               return {
                   'exit_code': exit_code,
                   'validity': validity,
+                  'channel': channel,
                   'answer_nonempty': bool(answer),
                   'answer_chars': len(answer),
                   'answer_success': semantic_success,
@@ -282,6 +331,7 @@ jobs:
               'input_bytes':int(os.environ.get('INPUT_BYTES') or 0),
               'input_files':os.environ.get('INPUT_FILES','').split(','),
               'model':os.environ.get('BENCH_MODEL'),
+              'comparison':'native evidence tools vs strict TraceCite-only evidence channel',
               'native':native,
               'tracecite':trace,
               'input_token_delta_tracecite_minus_native':t_in-n_in,
@@ -322,7 +372,7 @@ jobs:
           valid=[r for r in rows if r.get('native',{}).get('validity',{}).get('valid_for_comparison') and r.get('tracecite',{}).get('validity',{}).get('valid_for_comparison')]
           payload={
               'schema_version':1,
-              'comparison':'same Pi coding agent + same model + same evidence; native tools vs forced TraceCite tools',
+              'comparison':'same Pi coding agent + same model + same evidence; native evidence tools vs strict TraceCite-only evidence channel',
               'cases':rows,
               'valid_pair_count':len(valid),
               'native_answer_successes':sum(bool(r.get('native',{}).get('answer_success')) for r in valid),
