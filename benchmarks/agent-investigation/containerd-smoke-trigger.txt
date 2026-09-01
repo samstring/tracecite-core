@@ -1,2 +1,2 @@
-trigger: 2026-09-01 structural-drain validation
-validated_head: bbad78f919493301f057fbd72e4d62a163a7e79d
+trigger: 2026-09-01 bounded stack segment validation
+validated_head: b50371d63f83e829180600a168dfa22b1ef31bdb
