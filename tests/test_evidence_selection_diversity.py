@@ -68,6 +68,7 @@ example.com/project.(*Supervisor).Run(5)
 
     rare_hint = next(item for item in hints if item["line"] == 900)
     assert rare_hint["kind"] == "structural_diversity"
+    assert rare_hint["grouping_view"] == "structural"
     assert rare_hint["count"] == 1
     assert rare_hint["severity"] == 0
 
@@ -107,11 +108,46 @@ def test_source_neighborhood_fingerprint_stays_metadata_only(tmp_path: Path) -> 
     )
 
     assert len(hints) <= 4
-    assert any(item["line"] == rare_line for item in hints)
+    rare_hint = next(item for item in hints if item["line"] == rare_line)
+    assert rare_hint["grouping_view"] == "structural"
     serialized = json.dumps(hints, sort_keys=True)
     assert rare_marker not in serialized
     assert all(len(str(item.get("label") or "")) <= HINT_LABEL_CHAR_LIMIT for item in hints)
     assert all("text" not in item and "neighborhood" not in item for item in hints)
+
+
+def test_drain_groups_dynamic_plain_log_templates_when_installed(tmp_path: Path) -> None:
+    pytest.importorskip("drain3")
+    records = tmp_path / "matched-records.jsonl"
+    request_ids = [
+        "alpha",
+        "bravo",
+        "charlie",
+        "delta",
+        "echo",
+        "foxtrot",
+        "golf",
+        "hotel",
+    ]
+    rows = [
+        _record(
+            f"request={request_id} operation=fetch timeout after {100 + index}ms",
+            10 + index,
+        )
+        for index, request_id in enumerate(request_ids)
+    ]
+    rows.append(_record("permission denied while opening credentials", 100))
+    records.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    hints = select_signal_hints(records, limit=4, signature_cap=256)
+
+    template_hint = next(item for item in hints if item["grouping_view"] == "template")
+    assert template_hint["count"] == len(request_ids)
+    assert template_hint["severity"] == 3
+    assert "<*>" not in json.dumps(hints)
 
 
 def test_structural_navigation_rejects_unbounded_output_requests(tmp_path: Path) -> None:
