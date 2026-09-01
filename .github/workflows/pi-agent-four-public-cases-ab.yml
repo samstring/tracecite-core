@@ -1,0 +1,337 @@
+name: Pi Agent Four Public Cases A/B
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - bench/add-four-public-cases
+    paths:
+      - .github/workflows/pi-agent-four-public-cases-ab.yml
+      - benchmarks/agent-investigation/cases/containerd-6772/**
+      - benchmarks/agent-investigation/cases/kubernetes-140039-runc-5347/**
+      - benchmarks/agent-investigation/cases/kubernetes-141402-podcertificate-readiness/**
+      - benchmarks/agent-investigation/cases/kubernetes-141283-compat-feature-gate/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-agent-four-public-cases-ab
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - case_id: containerd-6772
+            case_dir: benchmarks/agent-investigation/cases/containerd-6772
+          - case_id: kubernetes-140039-runc-5347
+            case_dir: benchmarks/agent-investigation/cases/kubernetes-140039-runc-5347
+          - case_id: kubernetes-141402-podcertificate-readiness
+            case_dir: benchmarks/agent-investigation/cases/kubernetes-141402-podcertificate-readiness
+          - case_id: kubernetes-141283-compat-feature-gate
+            case_dir: benchmarks/agent-investigation/cases/kubernetes-141283-compat-feature-gate
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      CASE_ID: ${{ matrix.case_id }}
+      CASE_DIR_REL: ${{ matrix.case_dir }}
+      RESULT: /tmp/pi-four-public-${{ matrix.case_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev]"
+          test -f "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md"
+          pi --help | grep -q -- '--skill'
+
+      - name: Run TraceCite retrieval regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_retrieval_guidance.py tests/test_session_novelty_regressions.py
+
+      - name: Configure GMI model for Pi
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$OPENAI_API_KEY"
+          test -n "$BENCH_MODEL"
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['OPENAI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Prepare immutable public evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT"
+          mkdir -p "$RESULT/prepared"
+          CASE_DIR="$GITHUB_WORKSPACE/$CASE_DIR_REL"
+          python -m tracecite.benchmarking validate "$CASE_DIR" > "$RESULT/validate.json"
+          python -m tracecite.benchmarking prepare "$CASE_DIR" --work-dir "$RESULT/prepared" > "$RESULT/prepare.json"
+          PREPARED="$(find "$RESULT/prepared" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          python - "$PREPARED" "$CASE_DIR" >> "$GITHUB_ENV" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text())
+          files = [Path(item['path']).resolve() for item in data['inputs']]
+          assert files and all(p.is_file() for p in files)
+          common = Path(os.path.commonpath([str(p.parent) for p in files])).resolve()
+          print(f'CASE_DIR_RUN={Path(sys.argv[2]).resolve()}')
+          print(f'INPUT_ROOT={common}')
+          print(f'INPUT_BYTES={sum(p.stat().st_size for p in files)}')
+          print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
+          print('INPUT_FILES=' + ','.join(p.name for p in files))
+          PY
+
+      - name: Run Pi native A arm
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          SYSTEM_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, tool choice, investigation order, conclusions, and when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and state when supplied evidence is insufficient.'
+          mkdir -p "$RESULT/pi-native-session"
+          cd "$INPUT_ROOT"
+          set +e
+          timeout -k 30s 600s pi \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT/pi-native-session" \
+            --tools read,bash,grep,find,ls \
+            --no-extensions --no-skills --no-prompt-templates --no-context-files \
+            --system-prompt "$SYSTEM_PROMPT" "$QUESTION" \
+            > "$RESULT/pi-native-answer.md" 2> "$RESULT/pi-native-stderr.log"
+          code=$?
+          set -e
+          echo "$code" > "$RESULT/pi-native-exit.txt"
+
+      - name: Cool down provider between arms
+        shell: bash
+        run: sleep 60
+
+      - name: Run Pi forced TraceCite B arm
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          SYSTEM_PROMPT='You are a real coding agent investigating supplied runtime evidence. Use only evidence from files in the current working directory; do not use external knowledge. You own hypotheses, causal reasoning, investigation order, conclusions, and when to stop. Native tools and TraceCite tools are available. You MUST use tracecite_search at least once as a real part of the evidence investigation before giving the final answer. Follow the TraceCite skill tool-selection, search-syntax, novelty, and identity-safety semantics. TraceCite supplies evidence and retrieval memory; it does not decide root cause or when to stop. Keep exploration bounded. Every material factual claim must cite exact line numbers you actually observed. Distinguish direct observation from inference and state when supplied evidence is insufficient.'
+          mkdir -p "$RESULT/pi-tracecite-session"
+          cd "$INPUT_ROOT"
+          set +e
+          timeout -k 30s 600s pi \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT/pi-tracecite-session" \
+            --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+            --tools read,bash,grep,find,ls,tracecite_search,tracecite_expand \
+            --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+            --no-prompt-templates --no-context-files \
+            --system-prompt "$SYSTEM_PROMPT" "$QUESTION" \
+            > "$RESULT/pi-tracecite-answer.md" 2> "$RESULT/pi-tracecite-stderr.log"
+          code=$?
+          set -e
+          echo "$code" > "$RESULT/pi-tracecite-exit.txt"
+
+      - name: Convert, score, and compare
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arm in native tracecite; do
+            SESSION="$(find "$RESULT/pi-${arm}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+            ANSWER="$RESULT/pi-${arm}-answer.md"
+            if [[ -z "$SESSION" || ! -f "$ANSWER" ]]; then
+              continue
+            fi
+            python benchmarks/agent-investigation/pi_session_to_transcript.py \
+              "$SESSION" "$ANSWER" "$RESULT/pi-${arm}-transcript.jsonl" \
+              --mode "pi-${arm}" --model "$BENCH_MODEL"
+            python -m tracecite.root_cause_benchmarking score \
+              "$CASE_DIR_RUN" "$RESULT/pi-${arm}-transcript.jsonl" \
+              > "$RESULT/pi-${arm}-score.json" || true
+          done
+
+          python - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path('benchmarks/agent-investigation').resolve()))
+          from pi_ab_runtime import classify_arm_validity
+
+          root = Path(os.environ['RESULT'])
+          case_dir = Path(os.environ['CASE_DIR_RUN'])
+          gold = json.loads((case_dir / 'gold.json').read_text())
+
+          def load_json(path):
+              p = Path(path)
+              if not p.is_file(): return {}
+              try: return json.loads(p.read_text())
+              except Exception: return {}
+
+          def load_int(path):
+              try: return int(Path(path).read_text().strip())
+              except Exception: return None
+
+          def transcript_usage(path):
+              p = Path(path)
+              totals = {'input_tokens':0,'output_tokens':0,'reasoning_tokens':0,'model_calls':0,'tool_calls':0,'tool_output_chars':0}
+              tools = []
+              if not p.is_file(): return totals, tools
+              for line in p.read_text(errors='replace').splitlines():
+                  try: e=json.loads(line)
+                  except Exception: continue
+                  if e.get('type') == 'model':
+                      u=e.get('usage') or {}
+                      totals['input_tokens'] += int(u.get('input_tokens') or 0)
+                      totals['output_tokens'] += int(u.get('output_tokens') or 0)
+                      totals['reasoning_tokens'] += int(u.get('reasoning_tokens') or 0)
+                      totals['model_calls'] += 1
+                  elif e.get('type') == 'tool':
+                      totals['tool_calls'] += 1
+                      out=str(e.get('output') or '')
+                      totals['tool_output_chars'] += len(out)
+                      tools.append(str(e.get('name') or ''))
+              return totals, tools
+
+          def arm(name):
+              answer_path=root/f'pi-{name}-answer.md'
+              stderr_path=root/f'pi-{name}-stderr.log'
+              score=load_json(root/f'pi-{name}-score.json')
+              answer=answer_path.read_text(errors='replace').strip() if answer_path.is_file() else ''
+              stderr=stderr_path.read_text(errors='replace') if stderr_path.is_file() else ''
+              exit_code=load_int(root/f'pi-{name}-exit.txt')
+              validity=classify_arm_validity(exit_code, stderr).to_dict()
+              quality=score.get('quality') if isinstance(score.get('quality'),dict) else {}
+              cost=score.get('context_cost') if isinstance(score.get('context_cost'),dict) else {}
+              usage, tools=transcript_usage(root/f'pi-{name}-transcript.jsonl')
+              thresholds=gold.get('thresholds') if isinstance(gold.get('thresholds'),dict) else {}
+              dim=float(quality.get('dimension_recall') or 0.0)
+              unsupported=int(quality.get('unsupported_claim_hits') or 0)
+              contradictions=int(quality.get('contradiction_hits') or 0)
+              semantic_success=bool(answer) and dim >= float(thresholds.get('concept_recall',0.75)) and unsupported == 0 and contradictions == 0
+              return {
+                  'exit_code': exit_code,
+                  'validity': validity,
+                  'answer_nonempty': bool(answer),
+                  'answer_chars': len(answer),
+                  'answer_success': semantic_success,
+                  'score_passed': score.get('passed'),
+                  'dimension_recall': quality.get('dimension_recall'),
+                  'supported_dimension_recall': quality.get('supported_dimension_recall'),
+                  'citation_accuracy': (quality.get('citation') or {}).get('accuracy') if isinstance(quality.get('citation'),dict) else None,
+                  'unsupported_claim_hits': quality.get('unsupported_claim_hits'),
+                  'contradiction_hits': quality.get('contradiction_hits'),
+                  'reported_input_tokens': cost.get('reported_input_tokens'),
+                  'reported_output_tokens': cost.get('reported_output_tokens'),
+                  'usage': usage,
+                  'tools': tools,
+                  'tracecite_tool_calls': sum(1 for t in tools if t.startswith('tracecite_')),
+              }
+
+          native=arm('native')
+          trace=arm('tracecite')
+          n_in=native['usage']['input_tokens']
+          t_in=trace['usage']['input_tokens']
+          payload={
+              'schema_version':1,
+              'case_id':os.environ['CASE_ID'],
+              'input_bytes':int(os.environ.get('INPUT_BYTES') or 0),
+              'input_files':os.environ.get('INPUT_FILES','').split(','),
+              'model':os.environ.get('BENCH_MODEL'),
+              'native':native,
+              'tracecite':trace,
+              'input_token_delta_tracecite_minus_native':t_in-n_in,
+              'input_token_ratio_tracecite_over_native':(t_in/n_in if n_in else None),
+          }
+          (root/'outcome.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(payload,indent=2,sort_keys=True))
+          PY
+
+      - name: Upload per-case A/B result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-four-public-${{ matrix.case_id }}
+          path: /tmp/pi-four-public-${{ matrix.case_id }}
+          if-no-files-found: error
+
+  aggregate:
+    needs: compare
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pi-four-public-*
+          path: /tmp/pi-four-public-all
+      - name: Aggregate four pairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pi-four-public-summary
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          rows=[]
+          for p in sorted(Path('/tmp/pi-four-public-all').rglob('outcome.json')):
+              rows.append(json.loads(p.read_text()))
+          valid=[r for r in rows if r.get('native',{}).get('validity',{}).get('valid_for_comparison') and r.get('tracecite',{}).get('validity',{}).get('valid_for_comparison')]
+          payload={
+              'schema_version':1,
+              'comparison':'same Pi coding agent + same model + same evidence; native tools vs forced TraceCite tools',
+              'cases':rows,
+              'valid_pair_count':len(valid),
+              'native_answer_successes':sum(bool(r.get('native',{}).get('answer_success')) for r in valid),
+              'tracecite_answer_successes':sum(bool(r.get('tracecite',{}).get('answer_success')) for r in valid),
+              'native_total_input_tokens':sum(int(r.get('native',{}).get('usage',{}).get('input_tokens') or 0) for r in valid),
+              'tracecite_total_input_tokens':sum(int(r.get('tracecite',{}).get('usage',{}).get('input_tokens') or 0) for r in valid),
+          }
+          (Path('/tmp/pi-four-public-summary')/'summary.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(payload,indent=2,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pi-four-public-summary
+          path: /tmp/pi-four-public-summary/summary.json
