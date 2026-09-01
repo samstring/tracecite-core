@@ -23,14 +23,16 @@
 // metadata: event.toolName === "bash" ? { opaque: true }
 // TRACECITE_PI_ACTIVITY
 //
-// Strict benchmark evidence boundary (enabled only with TRACECITE_BENCHMARK_MODE=tracecite):
-// native read/grep/find/ls/bash access to runtime evidence is blocked before execution.
+// Evidence guard:
+// - benchmark: TRACECITE_BENCHMARK_MODE=tracecite forces strict evidence isolation;
+// - product: an explicit user request such as "用 tracecite" / "use tracecite" activates
+//   the same native-evidence guard for that Pi agent run when an evidence root is configured.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import traceciteTools from "./pi_tracecite_extension_impl.ts";
-import strictEvidenceBoundary from "./pi_strict_evidence_boundary.ts";
+import traceciteEvidenceGuard from "./pi_strict_evidence_boundary.ts";
 
 export default function traceciteExtension(pi: ExtensionAPI) {
-  strictEvidenceBoundary(pi);
+  traceciteEvidenceGuard(pi);
   traceciteTools(pi);
 }
