@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/offline-retrieval-diversity-eval.yml
       - benchmarks/agent-investigation/offline_diversity_eval.py
+      - benchmarks/agent-investigation/benchmarking.py
       - src/tracecite/runtime/evidence_selection.py
       - pyproject.toml
   workflow_dispatch:
