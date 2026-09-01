@@ -1,2 +1,2 @@
-trigger: 2026-09-01 evidence coordinate validation
-validated_head: 7d6326cd56602e9eefab6355d968ddcb845aaa37
+trigger: 2026-09-01 sparse materialized evidence geometry validation
+validated_head: b83eb75143d58fbbd4ad6a31306b8e55b977bf1a
