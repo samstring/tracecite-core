@@ -96,6 +96,12 @@ function compact(text: string): string {
       ref: start > 0 ? `${source}:L${start}${end > start ? `-L${end}` : ""}` : undefined,
       uri: start > 0 ? undefined : row?.uri,
       preview: String(row?.label || "").slice(0, 420) || undefined,
+      match_line: row?.match_line,
+      match_end_line: row?.match_end_line,
+      segment_kind: row?.segment_kind,
+      expand_line: row?.expand_line,
+      expand_radius: row?.expand_radius,
+      position: row?.position,
     };
   }) : [];
   const sha256 = (() => {
