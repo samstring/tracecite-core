@@ -76,6 +76,25 @@ outcome = not_assessed
 
 because retrieval itself does not assess a hypothesis.
 
+### Search previews are not necessarily complete logical records
+
+A search row or Agent-facing `preview` is a retrieval projection around a match. It may expose only the matched line or a bounded summary and does not guarantee that the complete logical record is visible.
+
+This distinction matters for sources whose meaning is carried by multi-line structure, for example:
+
+- goroutine or thread dumps;
+- stack traces and native backtraces;
+- Python/Java tracebacks;
+- crash reports;
+- multi-line exceptions;
+- multi-line log records or protocol blocks.
+
+Do not assume that two similar one-line previews represent the same complete stack, state, or record shape. Likewise, do not infer what a stack is holding, waiting on, calling, or returning from when those facts are outside the visible preview.
+
+If the conclusion depends on the complete call chain, state, nested resource acquisition, surrounding frames, or another multi-line structure, materialize enough of the source record/range to observe that structure before comparing or concluding.
+
+This is a visibility rule, not a relevance rule: TraceCite is not saying that every matching record must be expanded or that a particular record is important. The Agent decides which records require full materialization for the unresolved question.
+
 ### Navigation-only information
 
 Some TraceCite outputs are deliberately only navigation landmarks. Examples include:
