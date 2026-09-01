@@ -3,10 +3,9 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from .agent_api import RetrievalResult
-from .evidence_coordinates import attach_source_line_coordinates
 
 
-_REPEAT_REF_FIELDS = ("uri", "source_path", "start_line", "end_line", "sha256")
+_REPEAT_REF_FIELDS = ("uri", "source_path", "start_line", "end_line", "sha256", "position")
 
 
 def matched_existing_evidence(
@@ -17,9 +16,9 @@ def matched_existing_evidence(
     """Return compact identities for canonical evidence already seen by the Agent.
 
     RetrievalSession novelty suppression deliberately removes repeated evidence
-    bodies from the default Agent projection.  A later, materially different
+    bodies from the default Agent projection. A later, materially different
     query can still match those old rows, so the transport must preserve which
-    old evidence matched without re-sending its text/preview.  This helper is
+    old evidence matched without re-sending its text/preview. This helper is
     purely mechanical: it reports overlap and makes no claim about relevance,
     importance, causality, or what the Agent should inspect next.
     """
@@ -62,27 +61,13 @@ def attach_matched_existing_evidence(
     *,
     limit: int = 50,
 ) -> dict[str, Any]:
-    """Project novelty, repeated refs, and objective source-line coordinates.
-
-    Coordinates are computed only among rows present in this response (new rows
-    plus repeated rows matched by the current request).  A line gap is a source
-    geometry fact, never a claim that two evidence rows are semantically related.
-    """
+    """Project novelty plus lightweight refs for current-query repeated matches."""
 
     payload = result.to_dict()
     matched = matched_existing_evidence(result, limit=limit)
-    new_rows = [
-        dict(item)
-        for item in payload.get("evidence") or []
-        if isinstance(item, Mapping)
-    ]
-    combined = attach_source_line_coordinates([*new_rows, *matched])
-    payload["evidence"] = combined[: len(new_rows)]
-
-    annotated_matched = combined[len(new_rows) :]
-    if annotated_matched:
+    if matched:
         data = dict(payload.get("data") or {})
-        data["matched_existing_evidence"] = [dict(item) for item in annotated_matched]
+        data["matched_existing_evidence"] = [dict(item) for item in matched]
         payload["data"] = data
     return payload
 
