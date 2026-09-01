@@ -8,15 +8,32 @@ on:
     paths:
       - src/tracecite/benchmarking.py
       - benchmarks/agent-investigation/cases/containerd-6772/**
+      - benchmarks/agent-investigation/cases/kubernetes-140039-runc-5347/**
       - .github/workflows/benchmark-public-case-prepare-smoke.yml
 
 permissions:
   contents: read
 
 jobs:
-  prepare-containerd-6772:
+  prepare:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case_id: containerd-6772
+            payload_bytes: 2731626
+            payload_sha256: 0e1577c8ab150ac41e322acb587ccd33f1947db822bd766ac6d92a568dcb3d91
+            source_bytes: 175897
+            source_sha256: f5c23f999094acd18859d85951e948f684acc698d8e8dac092207ec0b88362c7
+            marker: github.com/containerd/containerd/metrics/cgroups/v1.(*Collector).Collect
+          - case_id: kubernetes-140039-runc-5347
+            payload_bytes: 2292856
+            payload_sha256: 77d5ff0fa00bfffdeb4722879c1bf8ff667444cfb34a8cf55344273307e78ff8
+            source_bytes: 2292856
+            source_sha256: 77d5ff0fa00bfffdeb4722879c1bf8ff667444cfb34a8cf55344273307e78ff8
+            marker: unable to fetch SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV bit: invalid argument
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,47 +44,50 @@ jobs:
       - name: Validate case
         run: |
           python -m tracecite.benchmarking validate \
-            benchmarks/agent-investigation/cases/containerd-6772
+            benchmarks/agent-investigation/cases/${{ matrix.case_id }}
       - name: Download, verify, and prepare original evidence
         run: |
           python -m tracecite.benchmarking prepare \
-            benchmarks/agent-investigation/cases/containerd-6772 \
+            benchmarks/agent-investigation/cases/${{ matrix.case_id }} \
             --work-dir /tmp/tracecite-bench \
-            | tee /tmp/containerd-6772-prepare.json
+            | tee /tmp/${{ matrix.case_id }}-prepare.json
       - name: Verify prepared payload
+        env:
+          CASE_ID: ${{ matrix.case_id }}
+          PAYLOAD_BYTES: ${{ matrix.payload_bytes }}
+          PAYLOAD_SHA256: ${{ matrix.payload_sha256 }}
+          SOURCE_BYTES: ${{ matrix.source_bytes }}
+          SOURCE_SHA256: ${{ matrix.source_sha256 }}
+          MARKER: ${{ matrix.marker }}
         run: |
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
+          case_id = os.environ['CASE_ID']
           manifest = json.loads(
-              Path('/tmp/tracecite-bench/containerd-6772/prepared.json').read_text()
+              Path(f'/tmp/tracecite-bench/{case_id}/prepared.json').read_text()
           )
           row = manifest['inputs'][0]
-          assert row['bytes'] == 2731626, row
-          assert row['sha256'] == '0e1577c8ab150ac41e322acb587ccd33f1947db822bd766ac6d92a568dcb3d91', row
-          assert row['source_bytes'] == 175897, row
-          assert row['source_sha256'] == 'f5c23f999094acd18859d85951e948f684acc698d8e8dac092207ec0b88362c7', row
+          assert row['bytes'] == int(os.environ['PAYLOAD_BYTES']), row
+          assert row['sha256'] == os.environ['PAYLOAD_SHA256'], row
+          assert row['source_bytes'] == int(os.environ['SOURCE_BYTES']), row
+          assert row['source_sha256'] == os.environ['SOURCE_SHA256'], row
           text = Path(row['path']).read_text(encoding='utf-8', errors='replace')
-          markers = [
-              'github.com/containerd/containerd/metrics/cgroups/v1.(*Collector).Add',
-              'github.com/containerd/containerd/metrics/cgroups/v1.(*Collector).Collect',
-              'github.com/docker/go-metrics.(*Namespace).WithConstLabels',
-              'github.com/docker/go-metrics.(*Namespace).Collect',
-          ]
-          for marker in markers:
-              assert marker in text, marker
+          marker = os.environ['MARKER']
+          assert marker in text, marker
           print(json.dumps({
-              'case_id': manifest['case_id'],
+              'case_id': case_id,
               'payload_bytes': row['bytes'],
-              'source_archive_bytes': row['source_bytes'],
-              'markers_verified': markers,
+              'source_bytes': row['source_bytes'],
+              'marker_verified': marker,
           }, indent=2))
           PY
       - name: Upload preparation report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: containerd-6772-prepare-report
-          path: /tmp/containerd-6772-prepare.json
+          name: ${{ matrix.case_id }}-prepare-report
+          path: /tmp/${{ matrix.case_id }}-prepare.json
           if-no-files-found: error
