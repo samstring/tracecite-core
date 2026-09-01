@@ -1,2 +1,3 @@
-trigger: 2026-09-01 stability run 2 after preview guidance
-validated_head: b11bf27634e732d65bd98c1efc918307953e703b
+trigger: 2026-09-02 tracecite convergence stability round 1
+validated_head: b5b973e0f1aaac7be7bf8be58aac49a0064a2050
+skill_head: 93a07210d3d9268bfb4178aa8cc93b780fcdc450
