@@ -126,7 +126,7 @@ jobs:
             --thinking off --mode text --print \
             --session-dir "$RESULT/session" \
             --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
-            --tools read,bash,grep,find,ls,tracecite_search,tracecite_expand \
+            --tools tracecite_search,tracecite_expand \
             --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
             --no-prompt-templates --no-context-files \
             --system-prompt "$SYSTEM_PROMPT" "$REQUEST" \
