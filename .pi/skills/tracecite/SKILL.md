@@ -1,16 +1,38 @@
 ---
 name: tracecite
-description: Use TraceCite through its canonical Evidence Runtime operations. The Pi adapter exposes retrieve, materialize, replay, aggregate, traverse, and verify while preserving provenance, coverage, immutable source identity, RetrievalSession novelty, correlation safety, and Host-owned full-tool telemetry. TraceCite never chooses hypotheses, causal conclusions, evidence sufficiency, or stopping.
-compatibility: Requires the TraceCite Pi extension. Canonical Pi tools are tracecite_retrieve, tracecite_materialize, tracecite_replay, tracecite_aggregate, tracecite_traverse, and tracecite_verify. tracecite_search/tracecite_expand remain compatibility aliases only.
+description: Use TraceCite through its canonical Evidence Runtime operations. TraceCite finds, bounds, materializes, remembers, aggregates, traverses, and verifies evidence while preserving source provenance and immutable identity. It may compress or navigate large evidence sets, but it never decides hypotheses, causality, evidence sufficiency, root cause, or when the Agent should stop.
+compatibility: Requires the TraceCite Pi extension. Canonical Pi tools are tracecite_retrieve, tracecite_materialize, tracecite_replay, tracecite_aggregate, tracecite_traverse, and tracecite_verify. tracecite_search/tracecite_expand may be exposed as compatibility aliases by some Hosts.
 ---
 
 # TraceCite Evidence Runtime in Pi
 
-TraceCite supplies evidence mechanics. The Agent remains responsible for hypotheses, investigation order, causal reasoning, conclusions, evidence sufficiency, and when to stop.
+TraceCite is an evidence transport and evidence-memory layer for an Agent.
 
-The Pi adapter exposes the complete canonical Evidence Runtime surface. Adapter names are a Host mapping, not a second Core API.
+A useful mental model is:
 
-## Canonical Pi tools
+```text
+TraceCite = find evidence + preserve provenance + bound output + expose navigation + remember what was already exposed
+Agent     = decide what matters + compare evidence + form hypotheses + infer mechanisms + decide sufficiency + conclude
+```
+
+TraceCite can help the Agent see the evidence more clearly. It must not be treated as having already interpreted what the evidence means.
+
+The Agent remains responsible for:
+
+- which question is unresolved;
+- which source/query/entity/range to inspect;
+- which pieces of evidence should be compared;
+- whether two observations are related;
+- event ordering when ordering is not explicitly present in the evidence;
+- causal reasoning;
+- root-cause diagnosis;
+- evidence sufficiency;
+- the final answer;
+- when to stop.
+
+## Canonical operations
+
+The canonical Evidence Runtime surface is:
 
 ```text
 tracecite_retrieve      -> retrieve
@@ -21,151 +43,513 @@ tracecite_traverse      -> traverse
 tracecite_verify        -> verify
 ```
 
-Compatibility aliases remain available for older callers:
+Compatibility aliases may also be available:
 
 ```text
 tracecite_search        -> retrieve(QueryTarget(...))
 tracecite_expand        -> materialize(...) or replay(...)
 ```
 
-New integrations and benchmarks should use the six canonical tool names.
+A Host may expose only a subset or compatibility names. The evidence semantics described below still apply.
 
-## Controlled A/B evidence mode
+# Core evidence model
 
-Some Hosts, especially the native-vs-TraceCite A/B benchmark, intentionally require all evidence-content operations to go through TraceCite.
+## Evidence, navigation, and interpretation are different things
 
-When the Host exposes only TraceCite Evidence tools plus file-location helpers such as `find`/`ls`:
+TraceCite can return several kinds of information. Do not treat them as interchangeable.
 
-- use TraceCite for searching, reading/materializing, replaying, counting/grouping, traversal, and integrity verification;
-- do not attempt to bypass the controlled arm with shell pipelines, `grep`, `cat`, or native `read`;
-- the requirement applies only to the evidence-operation channel;
-- the Agent still chooses the hypothesis, query, entity, range, traversal seed, reasoning, sufficiency judgment, conclusion, and stopping point.
+### Materialized/raw Evidence
 
-This makes the benchmark a capability comparison, not a tool-adoption test.
+Source text that TraceCite actually materializes with exact provenance and line locations is evidence that the Agent may inspect and cite.
 
-## Convergence discipline
+Interpretation of that text remains the Agent's responsibility.
 
-TraceCite exposes mechanical novelty, raw-evidence frontier progress, and bounded Host checkpoints so the Agent can avoid wasting investigation steps. These signals do not choose a root cause or decide stopping for the Agent.
+### Search Evidence
 
-Before making a follow-up evidence call, keep one explicit unresolved question in mind and know what materially different evidence the next call is expected to add. Do not continue merely because another synonym, nearby keyword, aggregate, or replay can be tried.
+Search results are matched, line-addressable evidence observations. Search success means the requested retrieval matched or exposed evidence. It does not mean a proposition, hypothesis, or causal explanation was validated.
 
-Treat these as low-novelty or non-frontier signals:
+Transport operations normally use:
 
-- `status=no_match`;
-- `status=no_new_evidence`;
-- `coverage.new_evidence=0` with repeated evidence;
-- a materialization that exposes no unseen range or new text;
-- repeated `aggregate`, `replay`, or `verify` calls that derive or revisit information without expanding raw source-evidence coverage;
-- Host `agent_feedback.convergence_checkpoint.triggered=true`.
+```text
+outcome = not_assessed
+```
 
-The Host may trigger a checkpoint after repeated low-novelty operations, a burst of non-frontier analysis, or a long TraceCite investigation. When that happens, the next TraceCite evidence operation requires an `investigation_goal`.
+because retrieval itself does not assess a hypothesis.
 
-A valid `investigation_goal` should state both:
+### Navigation-only information
 
-1. the exact unresolved question that still matters to the task; and
-2. the materially different evidence expected from the next call.
+Some TraceCite outputs are deliberately only navigation landmarks. Examples include:
 
-Do not use generic goals such as "look for more evidence", "confirm the hypothesis", or a paraphrase of the previous search. A new goal should target a genuinely different source, component, entity, time region, error signature, relation, or unseen range.
+- bounded source samples;
+- `signal_hints`;
+- projected `navigation_hint` rows;
+- suggested bounded stack/context ranges.
 
-When the Host convergence checkpoint is triggered, reassess before another evidence operation:
+These say where the Agent may want to look. They are not a substitute for materializing the referenced source text.
 
-1. State the strongest conclusion currently supported by observed evidence.
-2. Identify the exact unresolved question that still matters to the task.
-3. Decide whether the supplied inputs actually contain the evidence class needed to resolve it.
-4. Continue only if the next operation targets a materially different evidence frontier or a necessary derived check.
-5. Do not continue by merely paraphrasing the same query, repeatedly materializing already-covered context, or chaining aggregates that do not change the evidence boundary.
-6. If the required deeper evidence is not present in the supplied inputs, stop that line of investigation and state the evidence boundary explicitly.
+If a conclusion depends on a navigation-only range, materialize the range before citing or reasoning from its body.
 
-A search miss is not the same as evidence insufficiency. One miss may justify a different retrieval strategy. Repeated low-novelty operations across the relevant source/component/time region are evidence that the current investigation direction is exhausted, not proof that the hypothesized event never happened.
+# Adaptive retrieval and why outputs can look different
 
-The Agent still owns the decision to continue, switch hypotheses, answer, or declare insufficient evidence. The Host checkpoint only exposes recent evidence progress and requires deliberate reassessment.
+TraceCite uses deterministic adaptive transport routing to prevent small sources from being unnecessarily compressed while keeping large/deep evidence bounded.
 
-## `tracecite_retrieve`
+The routing modes are transport choices, not semantic judgments:
 
-`tracecite_retrieve` performs caller-selected evidence retrieval.
+```text
+DIRECT  -> expose exact/raw evidence when it safely fits
+BOUNDED -> return bounded search/source evidence and navigation landmarks
+FOCUSED -> use tighter transport for deep/high-cardinality investigation
+```
 
-- With `query`, it performs QueryTarget retrieval; literal matching is default unless `regex=true`.
-- Without `query`, it performs SourceTarget inspection.
-- A match is an observation, not proof of causality.
-- `no_match` is a retrieval fact, not proof that an event never happened.
-- `new_evidence=0` means the operation exposed no new Evidence identity in the current RetrievalSession.
-- `matched_existing_evidence` identifies previously delivered Evidence matched by the current request without pretending it is new.
+The returned `data.routing` information explains transport cost/risk decisions. It does not rank causal importance.
 
-Use exact refs and returned source SHA-256 for later materialization/replay.
+## DIRECT
 
-## Source line ordering
+For a sufficiently small unseen local source, DIRECT may expose the complete line-addressable source rather than forcing the Agent through samples.
+
+For a safe DIRECT query, TraceCite may attach lossless line-addressable raw source text:
+
+```text
+data.direct_raw.fidelity = lossless_line_addressable
+```
+
+This is full-fidelity source output, not a semantic summary.
+
+A source is not repeatedly dumped simply because it is small. Once it has already participated in the investigation, later retrievals may be bounded unless the Agent explicitly materializes a range.
+
+## BOUNDED
+
+For a larger source, TraceCite may return a deterministic bounded sample or a bounded number of search matches.
+
+A bounded source sample is explicitly navigation-only. The Agent should use it to understand the shape of the source and choose ranges to materialize.
+
+Current default routing budgets include bounded caps such as a limited number of evidence rows and bounded per-row text. These are context-control limits, not evidence-importance thresholds, and policy/Host configuration may change them.
+
+## FOCUSED
+
+When the source or investigation becomes deep/high-cardinality, TraceCite may use a tighter focused representation or a descriptive survey of source structure/templates.
+
+Focused transport is intended to reduce repeated context growth. It does not mean the retained rows are the only relevant rows or that they are the most causally important rows.
+
+# Search visibility boundary
+
+## Returned search rows may be only a subset of all matches
+
+A search can match far more records than can safely be placed in model context.
+
+When fields such as:
+
+```text
+coverage.evidence_truncated = true
+coverage.truncated = true
+```
+
+are present, the visible rows are a bounded subset of the complete match set.
+
+Therefore:
+
+```text
+not visible in returned rows != not present in the source
+```
+
+Likewise, a small number of returned examples must not be interpreted as the total number of matching records unless the response explicitly establishes complete coverage.
+
+## `no_match` is a retrieval fact, not a global absence proof
+
+`status=no_match` means that particular retrieval request, with its exact query/filter/source semantics, produced no match.
+
+It does not automatically prove:
+
+- the event never happened;
+- another spelling/representation is absent;
+- another source contains no evidence;
+- a broader/narrower time or scope would also miss;
+- the current hypothesis is false.
+
+The Agent decides whether a different retrieval strategy is justified.
+
+# Signal hints and truncated-search navigation
+
+When a search is truncated, TraceCite may inspect the already-produced full matched-record artifact and retain a very small set of additional line-addressable navigation candidates.
+
+These are `signal_hints` / navigation hints. They remain outside formal `Evidence/new_evidence` until their source range is materialized.
+
+## How signal-hint selection works
+
+The current selector is deliberately diagnosis-free. It may use mechanical signals such as:
+
+- generic severity vocabulary such as fatal/error/timeout-like terms;
+- normalized structural signatures;
+- repeated structural clusters;
+- structural distinctiveness so rare shapes are not drowned by repeated common shapes;
+- optional Drain-style generalized templates for repeated plain-text log patterns;
+- strong stack syntax recognition;
+- bounded local source structure around an already-selected candidate.
+
+Volatile values such as IDs, addresses, counters, line numbers, UUIDs, or IP-like values may be normalized internally when building structural/template signatures.
+
+These mechanisms exist to preserve diversity under a bounded output budget. They do not establish semantic relevance or root-cause importance.
+
+Therefore:
+
+```text
+high severity hint      != root cause
+rare structural hint    != anomaly proven important
+large cluster_count     != causal importance
+Drain/template group    != same causal event
+selected hint           != TraceCite recommendation of a diagnosis
+```
+
+`cluster_count` is a mechanical frequency/grouping fact only.
+
+## Internal neighborhoods are not automatically visible Evidence
+
+TraceCite may temporarily inspect a bounded neighborhood around a candidate to compute a structural fingerprint. That internal neighborhood is not automatically returned to the Agent and must not be treated as observed Agent evidence.
+
+Only returned/materialized text is available for Agent reasoning.
+
+# Bounded segment navigation
+
+For selected navigation hints, TraceCite may turn a single matching line into a bounded source range that is easier for the Agent to materialize coherently.
+
+For strong stack-shaped text, the current implementation can detect a blank-delimited stack block around the match. The block is hard-bounded so it cannot become an unbounded context dump. If no strong stack block is recognized, TraceCite falls back to a small context neighborhood.
+
+Important distinction:
+
+```text
+match line     = the line/range that matched the retrieval candidate
+hint range     = the bounded source block suggested for materialization
+```
+
+The beginning of the hint range is not necessarily the matching line.
+
+For example:
+
+```text
+actual match:       L23115
+navigation range:   L23105-L23151
+```
+
+This means the match is inside a bounded context/stack segment. It does not mean L23105 itself matched or is more important.
+
+The Agent should materialize the suggested range and reason from the returned frames/text, not from the range boundary itself.
+
+# Source line ordering
 
 Returned refs and ranges such as `L123-L140` describe positions in the captured source output.
 
-- Within the same source file, a lower line number only means that line appears earlier in that file's output than a higher line number.
-- Line order is output order, not event-time order, execution order, happens-before, causal order, lock order, or proof that one action occurred before another.
-- Use line numbers to navigate, revisit, and compare nearby output context.
-- Do not infer a relationship merely because two ranges are close together or appear in a particular file order.
-- If the evidence itself provides timestamps, sequence numbers, trace/span IDs, thread/goroutine context, or another explicit ordering signal, the Agent may reason from those observed fields separately.
+Within the same source file:
 
-## `tracecite_materialize`
+```text
+L123 < L456
+```
 
-`tracecite_materialize` materializes exact bounded context around a caller-selected line/range.
+means only that L123 appears earlier than L456 in that file's captured/output ordering.
 
-- `radius` is bounded to `0..30`; use multiple deliberate ranges rather than requesting a larger invalid radius.
-- It preserves immutable source identity when a SHA-256 is supplied.
-- Previously covered immutable context may be suppressed rather than returned as fake new evidence.
-- Materialized text is evidence; any interpretation of that text remains the Agent's responsibility.
+Line order is not automatically:
 
-## `tracecite_replay`
+- event-time order;
+- execution order;
+- happens-before;
+- causal order;
+- lock acquisition order;
+- request order;
+- proof that one action occurred before another.
 
-`tracecite_replay` intentionally re-reads context already covered by the same immutable RetrievalSession.
+Use line numbers to:
 
-- SHA-256 is required.
-- Replay does not create new evidence or expand the raw evidence frontier.
-- Use replay when reconsidering old text rather than repeating searches and treating old output as new discovery.
+- cite exact output;
+- navigate and revisit source ranges;
+- inspect nearby output context;
+- understand the source's captured ordering.
 
-## `tracecite_aggregate`
+Do not infer a relationship merely because two ranges are close together or because one appears earlier in the file.
 
-`tracecite_aggregate` performs bounded deterministic `count`, `distinct`, or `group` operations over caller-selected local text matches.
+If the evidence itself contains explicit ordering/correlation fields such as timestamps, sequence numbers, trace/span IDs, request IDs, thread IDs, goroutine identities, or another source-defined ordering signal, the Agent may reason from those observed fields separately.
 
-- It returns mechanical values and source provenance.
-- It does not rank groups by causal importance.
-- It derives information from supplied evidence but does not expand raw source-evidence coverage by itself.
-- Do not chain aggregates merely to keep investigating after the relevant raw evidence is already covered.
-- For `group`, the Agent supplies the grouping regex.
+# Source identity, snapshots, and SHA-256
 
-## `tracecite_traverse`
+TraceCite distinguishes an evidence citation identity from the path used to make a later tool call.
 
-`tracecite_traverse` runs bounded deterministic provider traversal over caller-selected evidence IDs/entities.
+## Snapshot refs are citations, not necessarily file paths
 
-- The Pi bridge accepts a provider-shaped JSON fixture (`name`, `evidence[]`, optional `relations[]`) so the canonical provider traversal is genuinely executable from Pi.
-- The Agent selects seeds and limits.
-- Traversal follows mechanical identity/entity relationships only; it does not choose what should be investigated next.
+Search may snapshot source content to provide stable evidence provenance. A returned evidence URI/ref can therefore identify snapshot content rather than being a usable filesystem path.
 
-## `tracecite_verify`
+When the Pi projection supplies fields such as:
 
-`tracecite_verify` verifies a caller-selected evidence manifest mechanically.
+```text
+follow_up_file
+source_path
+sha256
+```
 
-- It verifies integrity/manifest facts.
-- It does not validate the Agent's causal conclusion or expand source-evidence coverage.
+use the explicit follow-up/source file argument for later TraceCite calls. Do not blindly pass a snapshot citation URI as a filesystem path.
 
-## RetrievalSession semantics
+## SHA-256 protects immutable source identity
 
-RetrievalSession is mechanical evidence memory only. It can track:
+When TraceCite returns a source SHA-256, reuse it for later materialization/replay when the tool surface supports it.
 
-- previously exposed Evidence identities;
-- immutable covered ranges;
-- bounded recent operations;
+The SHA ties the range to exact source content. If the file has changed, TraceCite can reject or avoid treating the new bytes as the same immutable evidence.
+
+This prevents an old `L123-L140` citation from silently being applied to different content at the same path.
+
+## Mutable files and source generations
+
+When an explicit immutable SHA is not supplied, RetrievalSession still performs mechanical source-lifecycle bookkeeping for range coverage.
+
+For the same filesystem object, append-only growth can remain in the same source generation so already-covered earlier ranges remain meaningful.
+
+Operations such as file replacement, truncation, or incompatible same-size modification create a new source generation instead of pretending the old coverage still applies.
+
+This is source identity/version bookkeeping only. It has no semantic meaning about the log contents.
+
+# `tracecite_retrieve`
+
+`tracecite_retrieve` performs caller-selected evidence retrieval.
+
+Typical target modes are:
+
+- QueryTarget: search one source for caller-selected text/regex criteria;
+- SourceTarget: inspect/probe/sample/survey a source depending on routing;
+- ProviderTarget: retrieve from an evidence provider by caller-selected identities/entities.
+
+Important semantics:
+
+- literal matching is the normal query default unless regex is explicitly selected;
+- a match is an observation, not proof of causality;
+- search output may be bounded/truncated;
+- routing and hint selection are transport mechanics;
+- `new_evidence` refers to evidence identity novelty inside the current RetrievalSession;
+- `matched_existing_evidence` identifies current matches whose evidence identity was already delivered earlier.
+
+`matched_existing_evidence` does not mean the Agent understood or used that evidence previously. It only means the same evidence identity was already exposed in this session.
+
+# `tracecite_materialize`
+
+`tracecite_materialize` reads exact bounded context around an Agent-selected source line/range.
+
+In the Pi surface, radius is intentionally bounded. Current compatibility tooling commonly limits radius to `0..30`.
+
+Use materialize when:
+
+- a search result needs more surrounding context;
+- a navigation hint must become actual source Evidence;
+- a stack/context range must be inspected;
+- a particular line must be cited with surrounding evidence.
+
+Materialized source text is evidence. TraceCite does not interpret it for the Agent.
+
+## Coverage-aware materialization
+
+RetrievalSession remembers immutable/source-generation line ranges already exposed.
+
+If the requested materialization is already fully covered, TraceCite may return:
+
+```text
+status = no_new_evidence
+new_text = ""
+```
+
+instead of duplicating the same body into model context.
+
+For partially overlapping materialization, TraceCite can expose only the unseen numbered lines in `new_text` and report `unseen_ranges`.
+
+This means:
+
+```text
+empty new_text != source range contains no text
+```
+
+It may simply mean that exact source-version range was already exposed earlier in the RetrievalSession.
+
+Fields such as:
+
+```text
+repeated_text_suppressed
+unseen_ranges
+source_version
+```
+
+should be read as mechanical session/coverage facts.
+
+# `tracecite_replay`
+
+`tracecite_replay` intentionally re-reads previously covered immutable evidence.
+
+Use replay when the Agent needs to reconsider exact old source text rather than pretending it is newly discovered evidence.
+
+Replay semantics:
+
+- immutable source identity/SHA is required where the interface specifies it;
+- replay does not create new evidence novelty;
+- replay does not expand the raw evidence frontier;
+- replay is useful for comparing previously seen evidence with a newly formed hypothesis or newly discovered evidence.
+
+# RetrievalSession semantics
+
+RetrievalSession is mechanical evidence memory, not reasoning memory.
+
+It can track facts such as:
+
+- evidence URIs/identities already exposed;
+- immutable/source-generation covered line ranges;
+- observed relation identities;
+- recent retrieval operations;
 - request fingerprints;
-- new/repeated/replay/no-match outcomes.
+- source observations/generations;
+- new/repeated/replay/no-match outcomes;
+- raw-line novelty/progress.
 
-It does not contain or infer hypotheses, root cause, evidence sufficiency, or stop recommendations.
+It does not store or infer:
 
-## Correlation and identity safety
+- the Agent's hypothesis;
+- root cause;
+- causal relationships;
+- whether an observation is important;
+- evidence sufficiency;
+- a stop recommendation.
 
-Correlation constraints are evidence-identity facts, not causal claims.
+## Evidence novelty and text novelty are different
 
-If `identifier_only_correlation_safe=false`, do not collapse distinct scopes using that identifier alone. Use the returned minimum safe correlation key when the Agent chooses to correlate those records.
+A result can involve several kinds of novelty:
 
-## Host tool activity
+- new evidence identity;
+- repeated evidence identity;
+- newly exposed source lines;
+- newly observed provider relations.
 
-The Pi extension observes actual Host tool calls and records categories such as:
+Do not collapse all of these into one semantic idea of "new information".
+
+For example, a request can match an old Evidence identity while still exposing previously unseen source lines, or can return no new body because the requested range was already covered.
+
+## `no_new_evidence`
+
+`status=no_new_evidence` is a session-level mechanical result.
+
+It means this operation did not expand the currently tracked evidence frontier under the relevant identity/range rules.
+
+It does not mean:
+
+- no evidence exists;
+- the matched evidence is irrelevant;
+- the current hypothesis is correct or incorrect;
+- the Agent should necessarily stop.
+
+# `tracecite_aggregate`
+
+`tracecite_aggregate` performs bounded deterministic derived operations such as:
+
+- `count`;
+- `distinct`;
+- `group`.
+
+The Agent supplies the source/query/grouping rule.
+
+Aggregate output is a mechanical derived fact over the requested scope. It does not itself expand raw source coverage and does not rank groups by causal importance.
+
+Examples of safe interpretation:
+
+```text
+count=57              -> 57 records matched the specified aggregate scope
+12 distinct values    -> 12 mechanically distinct values were observed in that scope
+```
+
+Unsafe interpretation:
+
+```text
+largest group -> root cause
+most frequent -> most important
+rare group    -> causal anomaly
+```
+
+Those require Agent reasoning and additional evidence.
+
+# `tracecite_traverse`
+
+`tracecite_traverse` performs bounded traversal over provider-supplied Evidence identities/entities/relations using caller-selected seeds and limits.
+
+Traversal follows relationships that are present in the provider/evidence graph. It does not invent a causal relationship merely because two Evidence items are reachable.
+
+Provider relation/traversal semantics are only as strong as the relation type and provenance actually supplied by the provider.
+
+The Agent remains responsible for deciding whether a traversed relation matters to the task.
+
+# Correlation and identity safety
+
+TraceCite may mechanically detect that an identifier appears inside scoped entities and warn when identifier-only correlation would be unsafe.
+
+Examples include fields such as:
+
+```text
+identifier_only_correlation_safe = false
+minimum safe correlation key
+scope_uniqueness_unverified
+```
+
+These are evidence-identity constraints, not causal claims.
+
+Do not collapse records from different scopes merely because they share a short/common identifier when TraceCite reports that identifier-only correlation is unsafe.
+
+TraceCite may expose an actionable `missing_evidence` item or suggested uniqueness-check query when scope uniqueness remains unverified. This means an identity/correlation fact is unresolved. It does not mean the overall diagnosis is insufficient or that the suggested query must be followed.
+
+# `tracecite_verify`
+
+`tracecite_verify` performs mechanical integrity/manifest verification for caller-selected Evidence.
+
+Verification can establish things such as source/evidence manifest integrity. It does not verify the truth of the Agent's causal conclusion.
+
+Therefore:
+
+```text
+Evidence integrity verified != diagnosis verified
+```
+
+Verify also does not expand source evidence coverage by itself.
+
+# Evidence support boundary
+
+When explaining findings, distinguish observed source facts from Agent inference.
+
+A useful conceptual separation is:
+
+```text
+supported              -> directly established by observed evidence
+inference_supported    -> reasoned from observed evidence, but not literally stated
+unsupported_from_log   -> requires evidence not present in supplied sources
+```
+
+If a claim is an inference, qualify it.
+
+If a deeper upstream cause or corrective fix would require source code, component-internal logs, telemetry, metrics, traces, or another artifact that is not supplied, state that evidence boundary rather than repeatedly searching the same source for proof that cannot exist there.
+
+# Convergence and repeated investigation
+
+TraceCite exposes mechanical novelty/progress so the Agent can notice when an investigation is looping. A Host may also expose a convergence checkpoint.
+
+Low-novelty/non-frontier signals include:
+
+- `status=no_match` after repeated equivalent retrieval directions;
+- `status=no_new_evidence`;
+- zero raw-line novelty;
+- repeated materialization of already-covered context;
+- repeated aggregate/replay/verify calls that do not expand raw evidence;
+- repeated searches returning mostly previously exposed evidence;
+- Host `agent_feedback.convergence_checkpoint.triggered=true`.
+
+Before a follow-up evidence call, keep an explicit unresolved question in mind and know what materially different evidence the next call is expected to add.
+
+If a Host convergence checkpoint requires `investigation_goal`, state both:
+
+1. the exact unresolved question that still matters; and
+2. the materially different evidence expected from the next operation.
+
+Do not use generic goals such as "look for more evidence" or "confirm the hypothesis".
+
+A checkpoint is a request for deliberate reassessment, not a TraceCite decision that the Agent must stop.
+
+# Host tool activity and controlled evidence mode
+
+The Pi extension can observe actual Host tool activity for trajectory/benchmark telemetry. Categories can include:
 
 - canonical TraceCite tools -> `tracecite_evidence`;
 - `grep` / `find` -> `native_search`;
@@ -173,31 +557,58 @@ The Pi extension observes actual Host tool calls and records categories such as:
 - `bash` -> `opaque_shell`;
 - `ls` -> `native_other`.
 
-Host activity is trajectory telemetry only. It is not evidence sufficiency or a stop recommendation.
+Host activity telemetry is not source evidence and is not an evidence-sufficiency or root-cause signal.
 
-## Evidence support boundary
+In a controlled native-vs-TraceCite A/B mode, the Host may intentionally require all evidence-content operations to go through TraceCite while leaving file-location helpers available.
 
-Evaluation may distinguish:
+When that mode is active:
 
-- `supported`;
-- `inference_supported`;
-- `unsupported_from_log`.
+- use TraceCite for evidence search, materialization/replay, aggregation, traversal, and verification;
+- do not bypass the controlled evidence channel with `grep`, `cat`, shell pipelines, or native `read` against the evidence files;
+- still use Agent reasoning normally;
+- still choose hypotheses, queries, ranges, comparisons, conclusions, and stopping independently.
 
-If a claim is an inference, qualify it. If supplied evidence does not establish a deeper cause or fix, state that boundary rather than presenting outside knowledge as observed fact.
+The controlled mode is a capability comparison, not an instruction to trust TraceCite's retrieval order as a diagnosis.
 
-When a deeper upstream cause or corrective fix would require source code, internal component logs, telemetry, or another artifact that is not present, say so directly instead of repeatedly searching the same supplied evidence for confirmation that cannot exist there.
+# What TraceCite mechanics do NOT imply
 
-## What TraceCite does not decide
+Keep these distinctions explicit:
 
-TraceCite does not decide:
+```text
+search match                  != causal proof
+search rank                   != causal importance
+signal hint                   != diagnosis recommendation
+navigation range              != matched line
+cluster_count                 != importance
+structural similarity         != same root cause
+Drain/template membership     != same event
+same identifier               != safe correlation
+same file / nearby lines      != related events
+file line order               != event-time order
+status=ok                     != hypothesis supported
+status=no_match               != event globally absent
+status=no_new_evidence        != no useful evidence exists
+coverage suppression          != empty source text
+verified evidence integrity   != verified diagnosis
+routing mode                  != semantic importance
+```
 
-- which hypothesis to form;
-- which query, source, entity, range, or traversal seed to choose;
-- which sibling is important;
-- whether identity ambiguity is causal;
-- what the root cause is;
-- whether evidence is sufficient;
-- what final answer to give;
-- when to stop.
+# Recommended Agent investigation loop
 
-Those decisions remain with the Agent, including in the forced TraceCite A/B arm.
+A good TraceCite investigation remains Agent-driven:
+
+```text
+1. State the unresolved question.
+2. Retrieve evidence targeted at that question.
+3. Check whether the result is complete, truncated, repeated, or navigation-only.
+4. Materialize any hint/range whose actual body matters.
+5. Record the local observed fact from the materialized evidence.
+6. Compare that fact with previously established evidence when useful.
+7. Distinguish observation from inference.
+8. Choose the next retrieval only if it can add materially different evidence.
+9. Stop or state the evidence boundary when the supplied artifacts cannot resolve the remaining question.
+```
+
+TraceCite's job is to make the evidence recoverable, bounded, line-addressable, and provenance-preserving.
+
+The Agent's job is to understand what that evidence means.
