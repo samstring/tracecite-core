@@ -178,6 +178,77 @@ def _file_access_identity_evidence(
     }
 
 
+def _navigation_hint_evidence(
+    requested: Path,
+    payload: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Project Core navigation hints without promoting them to source Evidence.
+
+    Truncated searches may identify rare/high-signal record structures outside
+    the inline first-N result. They are only coordinates: Pi receives the source
+    path, immutable digest and line range, then must materialize that range with
+    TraceCite before using its contents as evidence.
+    """
+
+    if not requested.is_file():
+        return []
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        return []
+    hints = data.get("signal_hints")
+    if not isinstance(hints, list):
+        return []
+
+    source_path = str(requested.expanduser().resolve())
+    digest = _payload_sha256(payload, requested)
+    name = Path(source_path).name
+    pointers: list[dict[str, Any]] = []
+    for row in hints:
+        if not isinstance(row, Mapping):
+            continue
+        start = row.get("line")
+        end = row.get("end_line")
+        if not isinstance(start, int) or isinstance(start, bool) or start < 1:
+            continue
+        if not isinstance(end, int) or isinstance(end, bool) or end < start:
+            end = start
+        severity = row.get("severity")
+        severity_value = int(severity) if isinstance(severity, int) and not isinstance(severity, bool) else 0
+        count = row.get("count")
+        count_value = int(count) if isinstance(count, int) and not isinstance(count, bool) else 1
+        kind = "high_signal" if severity_value > 0 else "structural_diversity"
+        preview = str(row.get("label") or "").strip()[:240]
+        line_ref = f"L{start}" if end == start else f"L{start}-L{end}"
+        label = [
+            f"navigation_hint={kind}",
+            f"source={name}",
+            f"follow_up_file={source_path}",
+            f"range={line_ref}",
+            f"cluster_count={count_value}",
+        ]
+        if severity_value:
+            label.append(f"severity={severity_value}")
+        if preview:
+            label.append(f"preview={preview}")
+        label.append("materialize this range with TraceCite before citing")
+        pointers.append(
+            {
+                "uri": (
+                    f"tracecite-navigation://sha256/{digest}/{line_ref}"
+                    if digest
+                    else f"tracecite-navigation://path/{name}/{line_ref}"
+                ),
+                "source_path": source_path,
+                "sha256": digest or None,
+                "start_line": start,
+                "end_line": end,
+                "label": " ".join(label),
+                "metadata_only": True,
+            }
+        )
+    return pointers
+
+
 def _append_identity_evidence(payload: dict[str, Any], rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
@@ -216,12 +287,16 @@ def _retrieve(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[
             if isinstance(data, dict):
                 data["source_identity_projection"] = True
     elif requested.is_file():
+        navigation = _navigation_hint_evidence(requested, payload)
+        _append_identity_evidence(payload, navigation)
         access = _file_access_identity_evidence(requested, payload)
         if access is not None:
             _append_identity_evidence(payload, [access])
             data = payload.setdefault("data", {})
             if isinstance(data, dict):
                 data["follow_up_access_file"] = access["source_path"]
+                if navigation:
+                    data["navigation_hint_projection"] = len(navigation)
 
     return payload
 
