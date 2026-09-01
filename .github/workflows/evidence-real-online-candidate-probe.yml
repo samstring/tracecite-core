@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - experiment/evidence-intelligence
+      - bench/add-four-public-cases
     paths:
       - benchmarks/agent-investigation/probe_real_online_evidence.py
       - benchmarks/agent-investigation/real-online-candidate-probes.json
