@@ -6,6 +6,8 @@ on:
       - test/tracecite-mode-containerd
     paths:
       - .github/workflows/pi-tracecite-mode-containerd-smoke.yml
+      - benchmarks/agent-investigation/pi_tracecite_bridge.py
+      - tests/test_pi_source_identity_projection.py
 
 permissions:
   contents: read
@@ -46,7 +48,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pytest -q tests/test_pi_four_public_strict_boundary.py
+          python -m pytest -q \
+            tests/test_pi_four_public_strict_boundary.py \
+            tests/test_pi_source_identity_projection.py
 
       - name: Configure GMI model
         shell: bash
