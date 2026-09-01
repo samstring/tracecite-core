@@ -22,18 +22,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - case_id: containerd-6772
+          - case_id: "containerd-6772"
             payload_bytes: 2731626
-            payload_sha256: 0e1577c8ab150ac41e322acb587ccd33f1947db822bd766ac6d92a568dcb3d91
+            payload_sha256: "0e1577c8ab150ac41e322acb587ccd33f1947db822bd766ac6d92a568dcb3d91"
             source_bytes: 175897
-            source_sha256: f5c23f999094acd18859d85951e948f684acc698d8e8dac092207ec0b88362c7
-            marker: github.com/containerd/containerd/metrics/cgroups/v1.(*Collector).Collect
-          - case_id: kubernetes-140039-runc-5347
+            source_sha256: "f5c23f999094acd18859d85951e948f684acc698d8e8dac092207ec0b88362c7"
+            marker: "github.com/containerd/containerd/metrics/cgroups/v1.(*Collector).Collect"
+          - case_id: "kubernetes-140039-runc-5347"
             payload_bytes: 2292856
-            payload_sha256: 77d5ff0fa00bfffdeb4722879c1bf8ff667444cfb34a8cf55344273307e78ff8
+            payload_sha256: "77d5ff0fa00bfffdeb4722879c1bf8ff667444cfb34a8cf55344273307e78ff8"
             source_bytes: 2292856
-            source_sha256: 77d5ff0fa00bfffdeb4722879c1bf8ff667444cfb34a8cf55344273307e78ff8
-            marker: unable to fetch SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV bit: invalid argument
+            source_sha256: "77d5ff0fa00bfffdeb4722879c1bf8ff667444cfb34a8cf55344273307e78ff8"
+            marker: "unable to fetch SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV bit: invalid argument"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
