@@ -43,10 +43,62 @@ def _session_store(path: str) -> RetrievalSessionStore:
     return store
 
 
+def _directory_source_identity_evidence(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project SourceTarget directory results as metadata-only evidence pointers.
+
+    Core already returns source path/size/SHA-256 under data.sources. Pi's compact
+    projection preserves top-level evidence pointers, so mirror only immutable
+    source identity here. No source text is copied into the pointer.
+    """
+
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        return []
+    rows = data.get("sources")
+    if not isinstance(rows, list):
+        return []
+
+    pointers: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        source_path = str(row.get("path") or "").strip()
+        if not source_path:
+            continue
+        digest = str(row.get("sha256") or "").strip().lower()
+        size = row.get("size")
+        segmenter = str(row.get("segmenter") or "").strip()
+        name = Path(source_path).name
+
+        label = [f"source={name}"]
+        if isinstance(size, int) and not isinstance(size, bool):
+            label.append(f"bytes={size}")
+        if digest:
+            label.append(f"sha256={digest}")
+        if segmenter:
+            label.append(f"segmenter={segmenter}")
+
+        pointers.append(
+            {
+                "uri": (
+                    f"tracecite-source://sha256/{digest}"
+                    if digest
+                    else f"tracecite-source://path/{name}"
+                ),
+                "source_path": source_path,
+                "sha256": digest or None,
+                "label": " ".join(label),
+                "metadata_only": True,
+            }
+        )
+    return pointers
+
+
 def _retrieve(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[str, Any]:
+    requested = Path(args.file)
     if args.query:
         target = QueryTarget(
-            Path(args.file),
+            requested,
             args.query,
             regex=bool(args.regex),
             snapshot=True,
@@ -54,12 +106,29 @@ def _retrieve(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[
         )
     else:
         target = SourceTarget(
-            Path(args.file),
+            requested,
             glob=args.glob,
             recursive=bool(args.recursive),
         )
     result = retrieve(EvidenceRequest(target), session=session)
-    return attach_matched_existing_evidence(result)
+    payload = attach_matched_existing_evidence(result)
+
+    # A strict evidence guard can intentionally block native ls/find inside the
+    # evidence root. When the caller inspects a directory SourceTarget, preserve
+    # Core's source identities so the Agent can discover which source to query
+    # next without gaining direct access to source content.
+    if not args.query and requested.is_dir():
+        identities = _directory_source_identity_evidence(payload)
+        if identities:
+            existing = payload.get("evidence")
+            payload["evidence"] = (
+                [*existing, *identities] if isinstance(existing, list) else identities
+            )
+            data = payload.setdefault("data", {})
+            if isinstance(data, dict):
+                data["source_identity_projection"] = True
+
+    return payload
 
 
 def _range_target(args: argparse.Namespace) -> RangeTarget:
