@@ -1,57 +1,72 @@
-<svg role="img" viewBox="0 0 680 240" width="100%" xmlns="http://www.w3.org/2000/svg">
+<svg role="img" viewBox="0 0 1040 520" width="100%" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#666" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
-  <title>TraceCite Core Execution Flow</title>
-  <desc>Data flows from Source through Segment, Match, Filter, Fold, Events to Run</desc>
+  <title>TraceCite Agent Evidence Runtime Architecture</title>
+  <desc>Raw evidence flows through Evidence Core, Evidence Runtime and Integrations to external agents. Domain extensions contribute facts and capabilities. Agents own hypotheses, causal reasoning, sufficiency and stopping.</desc>
   <style>
     text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .title { font-size: 18px; font-weight: 650; fill: #1f2328; }
+    .label { font-size: 14px; font-weight: 600; fill: #1f2328; }
+    .small { font-size: 11px; fill: #57606a; }
+    .tiny { font-size: 10px; fill: #57606a; }
   </style>
 
-  <rect x="20" y="15" width="640" height="215" rx="16" fill="#F1EFE8" stroke="#D3D1C7" stroke-width="0.5"/>
+  <rect x="18" y="16" width="1004" height="488" rx="18" fill="#fafafa" stroke="#d0d7de"/>
+  <text x="48" y="50" class="title">TraceCite — Agent owns reasoning; TraceCite owns evidence</text>
 
-  <!-- Row 1 -->
-  <rect x="40" y="50" width="118" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
-  <text x="99" y="68" text-anchor="middle" font-size="13" fill="#0C447C" font-weight="500">Source</text>
-  <text x="99" y="84" text-anchor="middle" font-size="11" fill="#378ADD" font-weight="400">file/archive/stream</text>
+  <rect x="48" y="98" width="150" height="112" rx="10" fill="#f6f8fa" stroke="#8c959f"/>
+  <text x="123" y="124" text-anchor="middle" class="label">Raw Sources</text>
+  <text x="123" y="148" text-anchor="middle" class="small">files / archives</text>
+  <text x="123" y="166" text-anchor="middle" class="small">logs / traces</text>
+  <text x="123" y="184" text-anchor="middle" class="small">streams / APIs</text>
 
-  <line x1="166" y1="76" x2="198" y2="76" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
+  <line x1="198" y1="154" x2="235" y2="154" stroke="#666" stroke-width="1.4" marker-end="url(#arrow)"/>
 
-  <rect x="206" y="50" width="118" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
-  <text x="265" y="68" text-anchor="middle" font-size="13" fill="#0C447C" font-weight="500">Segment</text>
-  <text x="265" y="84" text-anchor="middle" font-size="11" fill="#378ADD" font-weight="400">split into records</text>
+  <rect x="243" y="86" width="190" height="136" rx="10" fill="#ddf4ff" stroke="#218bff"/>
+  <text x="338" y="114" text-anchor="middle" class="label">Evidence Core</text>
+  <text x="338" y="139" text-anchor="middle" class="small">source / version identity</text>
+  <text x="338" y="158" text-anchor="middle" class="small">snapshot / provenance</text>
+  <text x="338" y="177" text-anchor="middle" class="small">Evidence / Manifest</text>
+  <text x="338" y="196" text-anchor="middle" class="small">integrity / verify</text>
 
-  <line x1="332" y1="76" x2="364" y2="76" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
+  <line x1="433" y1="154" x2="470" y2="154" stroke="#666" stroke-width="1.4" marker-end="url(#arrow)"/>
 
-  <rect x="372" y="50" width="118" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
-  <text x="431" y="68" text-anchor="middle" font-size="13" fill="#0C447C" font-weight="500">Match</text>
-  <text x="431" y="84" text-anchor="middle" font-size="11" fill="#378ADD" font-weight="400">fastest engine</text>
+  <rect x="478" y="72" width="236" height="164" rx="10" fill="#dafbe1" stroke="#2da44e"/>
+  <text x="596" y="102" text-anchor="middle" class="label">Evidence Runtime</text>
+  <text x="596" y="127" text-anchor="middle" class="small">retrieve / materialize / replay</text>
+  <text x="596" y="146" text-anchor="middle" class="small">aggregate / traverse</text>
+  <text x="596" y="165" text-anchor="middle" class="small">RetrievalSession</text>
+  <text x="596" y="184" text-anchor="middle" class="small">bounded selection / Coverage</text>
+  <text x="596" y="203" text-anchor="middle" class="small">identity / correlation safety</text>
+  <text x="596" y="222" text-anchor="middle" class="tiny">InvestigationState: optional coordination only</text>
 
-  <line x1="498" y1="76" x2="530" y2="76" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
+  <line x1="714" y1="154" x2="751" y2="154" stroke="#666" stroke-width="1.4" marker-end="url(#arrow)"/>
 
-  <rect x="538" y="50" width="118" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
-  <text x="597" y="68" text-anchor="middle" font-size="13" fill="#0C447C" font-weight="500">Filter</text>
-  <text x="597" y="84" text-anchor="middle" font-size="11" fill="#378ADD" font-weight="400">time/PID scope</text>
+  <rect x="759" y="86" width="222" height="136" rx="10" fill="#fff8c5" stroke="#bf8700"/>
+  <text x="870" y="114" text-anchor="middle" class="label">Integrations / Host</text>
+  <text x="870" y="139" text-anchor="middle" class="small">bounded projection</text>
+  <text x="870" y="158" text-anchor="middle" class="small">Evidence Ledger</text>
+  <text x="870" y="177" text-anchor="middle" class="small">Context Engine</text>
+  <text x="870" y="196" text-anchor="middle" class="small">CLI / tool adapters</text>
 
-  <!-- Arrow: Filter → Fold -->
-  <polyline points="597,102 597,128 265,128 265,144" fill="none" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
+  <line x1="870" y1="222" x2="870" y2="272" stroke="#666" stroke-width="1.4" marker-end="url(#arrow)"/>
 
-  <!-- Row 2 -->
-  <rect x="206" y="156" width="118" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
-  <text x="265" y="174" text-anchor="middle" font-size="13" fill="#085041" font-weight="500">Fold</text>
-  <text x="265" y="190" text-anchor="middle" font-size="11" fill="#1D9E75" font-weight="400">group similar</text>
+  <rect x="705" y="281" width="330" height="106" rx="10" fill="#fbefff" stroke="#8250df"/>
+  <text x="870" y="308" text-anchor="middle" class="label">External Agent</text>
+  <text x="870" y="333" text-anchor="middle" class="small">Pi · Codex · Cursor · MCP/custom</text>
+  <text x="870" y="355" text-anchor="middle" class="small">hypothesis · causal reasoning · sufficiency</text>
+  <text x="870" y="374" text-anchor="middle" class="small">final answer · stop decision</text>
 
-  <line x1="332" y1="182" x2="364" y2="182" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
+  <rect x="267" y="294" width="308" height="91" rx="10" fill="#fff1e5" stroke="#bc6f00"/>
+  <text x="421" y="321" text-anchor="middle" class="label">Domain Extensions</text>
+  <text x="421" y="346" text-anchor="middle" class="small">Mobile · CI · third-party</text>
+  <text x="421" y="367" text-anchor="middle" class="small">domain facts / capabilities only</text>
+  <line x1="421" y1="294" x2="421" y2="247" stroke="#666" stroke-width="1.4" marker-end="url(#arrow)"/>
 
-  <rect x="372" y="156" width="118" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
-  <text x="431" y="174" text-anchor="middle" font-size="13" fill="#085041" font-weight="500">Events</text>
-  <text x="431" y="190" text-anchor="middle" font-size="11" fill="#1D9E75" font-weight="400">structured output</text>
-
-  <line x1="498" y1="182" x2="530" y2="182" stroke="#888780" stroke-width="1.2" marker-end="url(#a)"/>
-
-  <rect x="538" y="156" width="118" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
-  <text x="597" y="174" text-anchor="middle" font-size="13" fill="#085041" font-weight="500">Run</text>
-  <text x="597" y="190" text-anchor="middle" font-size="11" fill="#1D9E75" font-weight="400">freeze + verify</text>
+  <rect x="48" y="424" width="933" height="52" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="514" y="447" text-anchor="middle" class="small">Canonical evidence stays recoverable. Bounded views may omit repeated bodies only with explicit Coverage/recovery.</text>
+  <text x="514" y="466" text-anchor="middle" class="small">Runtime reports mechanical acquisition facts; it does not choose the root cause or tell the Agent to stop.</text>
 </svg>

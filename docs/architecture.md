@@ -1,283 +1,241 @@
-# TraceCite Architecture
+# TraceCite architecture
 
-Status: normative  
-Scope: the TraceCite distribution, official domain extensions, and Agent/CLI/MCP host adapters
+[简体中文](architecture.zh-CN.md)
 
-This document is the top-level architecture contract. Agent integration, extension, knowledge-governance, and validation documents must preserve these boundaries. Planned capabilities must not be presented as implemented behavior.
+Status: **Normative / Current** for `feature_for_agent`, official extensions, and Agent/CLI/MCP/custom host adapters. Updated for the validated CA258 baseline.
 
-## 1. Product definition
+> **The Agent thinks and decides; TraceCite owns evidence.**
 
-TraceCite is an **evidence-driven investigation framework for external agents**:
+This is the top-level living architecture contract. `PROJECT_GUARDRAILS.md` and this document take precedence over old experiment/handoff notes; ADRs and migrations preserve historical decisions/transitions.
 
-- The Agent understands the problem, explores freely, forms hypotheses, selects tests, and interprets results.
-- TraceCite records investigation state, performs deterministic data operations, enforces budgets, produces traceable Evidence, and governs Knowledge lifecycle.
-- Domain Extensions provide Mobile, CI, backend, database, and other data adapters and semantics.
-- Agent/CLI/MCP adapters project Runtime capabilities into host-specific surfaces; they do not define domain facts.
+## 1. Product boundary
 
-The governing principle is:
+The Agent owns:
 
-> Constrain conclusions, not exploration.
+- problem/scope interpretation;
+- hypotheses and investigation direction;
+- causal reasoning and competing explanations;
+- evidence sufficiency;
+- final answer and qualification;
+- the stop decision.
 
-TraceCite is neither an embedded autonomous LLM agent nor a mandatory command funnel for every investigation.
+TraceCite owns deterministic evidence mechanics:
 
-## 2. Architectural invariants
+- source/version and evidence identity;
+- acquisition, snapshot, provenance, Coverage, and integrity;
+- RetrievalSession seen/repeated/covered-range memory;
+- exact materialization and explicit replay;
+- deterministic aggregation and caller-scoped traversal;
+- bounded evidence projection/selection with recovery;
+- optional InvestigationState coordination metadata;
+- extension/trust contracts.
 
-The following constraints require an ADR, versioned migration, and validation to change:
+TraceCite Runtime must not expose `root_cause_confidence`, `evidence_sufficient`, `next_best_query`, or `stop_recommended` as runtime truth.
 
-1. Core provides generic, deterministic, reproducible Evidence mechanics and contains no device, product, company, application, or business knowledge.
-2. Agents may choose any safe exploration strategy. A final Finding identifies its Hypothesis, Evidence, Coverage, limitations, and stop reason.
-3. `status` is execution state; `outcome` is epistemic state. They remain separate.
-4. Zero matches, incomplete Coverage, missing Evidence, and execution failure do not prove absence; they default to `unknown`.
-5. Citable Evidence points to an immutable snapshot and range, or to an integrity-verified Manifest.
-6. Agent conclusions cannot promote themselves to trusted Knowledge or independently verify themselves.
-7. Extensions provide domain facts and capabilities; Runtime retains execution, budget, Evidence, verification, safety, stopping, and Agent-context control.
-8. Core never imports Runtime or domains; Runtime never imports a concrete domain. Domain packages depend only on public TraceCite contracts.
-9. Bounded, sampled, approximate, or truncated operations expose Coverage explicitly.
-10. Canonical Result/Evidence is separate from Agent-facing views. Transport compression, token policy, seen state, and context deltas are not Domain Extension responsibilities.
-11. The top-level Extension Protocol is kept stable; new domain features prefer independent versioned capabilities instead of new top-level `register_xxx` methods.
-12. A new main-package capability should serve at least two domains; otherwise it remains in a domain extension.
+## 2. Architecture invariants
+
+1. Core is generic/deterministic and contains no device/product/company/application/domain knowledge.
+2. Core does not import Runtime or concrete domain packages.
+3. Runtime may depend on Core; Runtime does not import concrete domain packages.
+4. Extensions depend only on public TraceCite contracts and contribute domain facts/capabilities, not Agent reasoning policy.
+5. Canonical Evidence/Result stays recoverable when the Agent-facing view is bounded/deduplicated.
+6. Lossy/bounded operations expose Coverage, truncation/omission, or equivalent recovery/boundary facts.
+7. `status` (execution) and epistemic `outcome` stay separate.
+8. Zero matches, incomplete Coverage, missing evidence, source changes, and provider failure do not prove real-world absence.
+9. Search matches are observations, not automatically causal proof.
+10. RetrievalSession owns mechanical evidence-session memory; never hypotheses/root cause/sufficiency/stopping.
+11. Host tool telemetry is not canonical Evidence.
+12. Agent conclusions cannot validate themselves or auto-promote to trusted Knowledge.
+13. Extension Protocol stays small; domain growth happens through versioned capabilities.
+14. Public evidence/schema changes require migration notes/tests; long-lived architectural trade-offs require an ADR.
+15. Efficiency changes are accepted only after correctness/support/provenance/recoverability remain acceptable.
 
 ## 3. Logical architecture
 
 ```text
-User problem
-    |
-    v
-Agent Host
-understanding, reasoning, next-step decisions, user interaction
-    |
-    v
-Agent / Integration Projection
-CLI, MCP, Codex/Claude/ChatGPT and other hosts
-    |
-    v
-Investigation Runtime  <---->  Knowledge Registry
-state, budgets, safety, stopping       proposals, review, versions, expiry
-    |
-    v
-Evidence Core
-Source, Segmenter, Sample, Survey, Filter, Snapshot, Evidence, Manifest, Verify
-    |
-    v
-Evidence Store
-frozen inputs, filtered artifacts, events, reports, manifests
+                                  Domain Extensions
+                              Mobile / CI / third-party
+                                        |
+                                        v
+Raw Sources -> Evidence Core -> Evidence Runtime -> Integrations -> Agent Host
+               |                |                  |              |
+               |                |                  |              +-- Pi
+               |                |                  |              +-- Codex
+               |                |                  |              +-- Cursor
+               |                |                  |              +-- MCP/custom
+               |                |                  |
+               |                |                  +-- projection / Ledger / Context
+               |                |
+               |                +-- RetrievalSession
+               |                +-- bounded evidence selection
+               |                +-- identity/correlation safety
+               |                +-- aggregate / traverse
+               |                +-- InvestigationState (optional)
+               |
+               +-- source/version identity
+               +-- snapshot / provenance / manifest / verify
 
-Stable TraceCite Extension Protocol
-    ^
-    |
-Domain Extensions
-Mobile / CI / Backend / Third-party
+Agent owns: hypothesis -> causal reasoning -> sufficiency -> answer -> stop
 ```
 
-Extensions exchange stable contracts and capabilities with Runtime rather than Runtime implementation objects. The current implementation may internally adapt a `ScenarioCapability` to `ScenarioRuntime`; `ScenarioRuntime` is not the long-term public extension boundary.
+![Architecture overview](../architecture.svg)
 
-### 3.1 Agent Host
+## 4. Layer ownership
 
-The host turns natural language into Problem and Scope; chooses direct reads, sampling, survey, search, Scenario, or domain capabilities; creates falsifiable Hypotheses and Tests; seeks supporting and contradicting evidence; and retains `unknown` when evidence is insufficient. Agent reasoning is not independent Evidence.
+### `tracecite_core` — Evidence Core
 
-### 3.2 Investigation Runtime
+Owns domain-neutral source descriptors, immutable source/version identity, segmentation/filtering/snapshotting, Evidence pointers/ranges, manifests, and deterministic verification. It does not decide importance, causality, or sufficiency.
 
-There is one generic investigation runtime. It:
+### `tracecite.runtime` — Evidence Runtime
 
-- persists versioned `InvestigationState`;
-- links Executions to Problem, Hypothesis, Test, and Finding;
-- enforces budgets, safety, authorization, and stopping policy;
-- invokes installed domain capabilities;
-- preserves canonical results while maintaining state needed for bounded host projections.
+Owns canonical evidence mechanics, including RetrievalSession, bounded routing/selection, novelty/repetition/Coverage/acquisition-end facts, identity/correlation safety, deterministic aggregation/traversal, and optional InvestigationState coordination.
 
-Domains no longer define system behavior through “one Runtime per domain.” `ScenarioCapability` supplies domain profile, preset/subscenario resolution, and related hooks to the generic Runtime. The current `ScenarioRuntime` type is an internal adaptation mechanism.
+Runtime may report mechanical facts such as:
 
-### 3.3 Evidence Core
+```text
+new_evidence = 0
+repeated_evidence > 0
+frontier_exhausted = true
+budget_limit_reached = true
+source_changed = true
+```
 
-`tracecite_core` is the standard-library-only stable Evidence kernel. It resolves and freezes input, streams segmentation/sample/survey/filter operations, creates hash-addressed pointers, manages artifacts and manifests, and verifies integrity. It does not understand domain concepts such as white screens, hangs, or failed builds and does not decide root cause.
+Those facts are not stop/sufficiency advice.
 
-### 3.4 Knowledge Registry
+### `tracecite.integrations` — transport / host integration
 
-The registry manages Knowledge Candidate proposal, independent-case verification, review, promotion, versioning, and expiry. See [Knowledge governance](knowledge-governance.md). Trusted Knowledge may recommend future Hypotheses, Tests, Presets, or Scenarios; it never replaces current Evidence.
+Owns Agent-facing projection, Evidence Ledger/recovery, Context Engine/delta, capability/profile negotiation, CLI presentation, and host adapters. Pi/Codex/Cursor/MCP/custom hosts must share canonical Evidence/Coverage semantics.
 
-### 3.5 Domain Extensions
+### `tracecite.extension` — domain capability contract
 
-Domain Extensions contain domain data and semantics. Mobile is an official extension, not a Core special case. The TraceCite Extension Protocol is declarative:
+Extensions provide domain source parsing, events, scenario/assertion/report capabilities, and domain Agent capabilities through public contracts. They do not own model-specific token policy, RetrievalSession seen-state, root-cause ranking, or stopping policy.
 
-- `ExtensionManifest` identifies the extension, domain, version, and protocol version.
-- `TraceCiteExtension` contains a Manifest and capability list.
-- capabilities are independently versioned, currently including `core.plugins`, `agent.capability`, `runtime.assertion`, `runtime.report`, and `runtime.scenario`.
-- stable domain values include `EvidenceRef`, `Coverage`, `DomainEvent`, `SourceDescriptor`, `SourceCursor`, `SourceChunk`, and `CapabilityResult`.
+### `tracecite.knowledge` — reviewed reusable knowledge
 
-A DomainEvent describes facts. It does not contain question-specific relevance, token priority, or root-cause verdicts. See the [Extension contract](extension-contract.md).
+Knowledge is downstream of evidence-backed findings and requires independent validation/review/version/expiry. Current-incident Evidence is never replaced by stored Knowledge.
 
-## 4. Investigation model
+## 5. Canonical Evidence API
 
-| Concept | Meaning | Required relation |
+Long-term semantics converge on six mechanical primitives:
+
+- `retrieve`: caller-selected source/scope/predicate -> bounded Evidence + Coverage + Provenance + novelty/repetition.
+- `materialize`: exact context for a caller-selected immutable source/version range/ref.
+- `replay`: deliberate re-read of old immutable evidence; novelty remains zero.
+- `aggregate`: deterministic caller-selected count/distinct/group operations; not causal ranking.
+- `traverse`: mechanical traversal under caller-selected seed/scope/direction/limits; not investigation planning.
+- `verify`: integrity/source-version/Manifest/exact-evidence verification; not validation of an Agent causal claim.
+
+`probe`, `search`, `expand`, and `expand-many` are convenience CLI/adapter surfaces. They must reduce to canonical semantics and must not own a separate session/reasoning model.
+
+## 6. RetrievalSession: single mechanical evidence-memory owner
+
+RetrievalSession owns:
+
+```text
+session id / revision
+seen evidence/result identities
+covered immutable source-version ranges
+source generations/observations
+recent retrieval operations
+request fingerprints
+repeated-evidence accounting
+replay state
+```
+
+Required repeated-evidence behavior:
+
+```text
+query A -> body E
+query B -> same E again
+
+new_evidence = 0
+repeated_evidence > 0
+matched_existing_evidence = [E ref]
+```
+
+The current query's relevance is preserved without automatically resending E's body. Explicit materialize/replay is the recall path. RetrievalSession never stores the Agent's hypothesis, proof, sufficiency, or stop decision.
+
+## 7. Selection, routing, identity safety
+
+Routing/selection is transport only. It may use source size/version, output/context limits, covered ranges, repeated-output ratio, and bounded lexical/structural diversity. Lossy selection requires explicit omission/truncation and recoverability.
+
+Selection is never equivalent to “most causal,” “most likely root cause,” or “next best entity.”
+
+Correlation constraints are deterministic identity-safety facts. Do not collapse timelines from an unsafe identifier, nearby address values, or filename proximity unless supplied evidence establishes the relation.
+
+## 8. Agent / Host boundary
+
+A Host may own model/tool/context/wall-time budgets, tool exposure, prompts, native-tool telemetry, and optional mechanical checkpoints. A checkpoint may report activity/budget facts and ask the Agent to reconsider continue-vs-answer; it must not claim evidence is sufficient or choose the root cause.
+
+Current repository integrations:
+
+- Pi: bounded prompt + `.pi/skills/tracecite/SKILL.md` + Pi evidence adapter.
+- Codex/OpenAI-compatible: root `AGENTS.md` + `.agents/skills/tracecite-investigate/SKILL.md`.
+- Cursor: `.cursor/rules/tracecite-investigation.mdc`.
+
+See [Agent integration](agent-integration.md).
+
+## 9. Context Engine / Evidence Ledger
+
+Canonical Results are recoverable first; only then may the Agent-facing view omit bodies already seen by a stable host context. Omission must be explicit and recoverable, and delta is used only when it is actually smaller.
+
+Context state is transport memory, not Evidence truth and not InvestigationState. Different context IDs do not share seen-state; unaddressable evidence is not silently deduplicated.
+
+See [Context Engine](context-engine.md).
+
+## 10. InvestigationState and Knowledge
+
+InvestigationState is optional coordination metadata for problem/scope/hypothesis/test/finding/notes/audit links and explicit user/Agent stop reasons. It is not required for evidence retrieval and is not the source of truth for novelty/Coverage/sufficiency.
+
+Knowledge lifecycle:
+
+```text
+Evidence-backed Finding -> Candidate -> independent validation -> review -> versioned Knowledge -> expiry/revalidation
+```
+
+See [Knowledge governance](knowledge-governance.md).
+
+## 11. Correctness and benchmark validity
+
+Efficiency is evaluated only after correctness/support/provenance/recoverability gates. Formal Agent benchmarks separate `task_result` from `run_validity`; provider 429/quota/outage/harness failure is infrastructure-invalid, not a model/product loss.
+
+See [Benchmark results](benchmark-results.md).
+
+## 12. Dependency direction
+
+```text
+tracecite_core
+     ^
+     |
+tracecite.runtime
+     ^
+     |
++----+------------------+
+|                       |
+tracecite.extension   tracecite.integrations
+|                       |
+Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
+```
+
+No domain package may become a required dependency of Core or Runtime.
+
+## 13. Implementation status
+
+| Capability | Status | Current baseline |
 |---|---|---|
-| Problem | The user's actual question, not necessarily a query string | Scope |
-| Scope | Source, subject, time, permission, and budget boundaries | Problem |
-| Observation | Observable fact without causal interpretation | Source or Evidence |
-| DomainEvent | Structured domain fact supplied by an Extension | EvidenceRef / Source |
-| Hypothesis | Falsifiable statement | Problem |
-| Test | Concrete plan to evaluate a Hypothesis | Hypothesis |
-| Strategy | Execution method used by a Test | Test |
-| Evidence | Reviewable, addressable evidence | Test, source, digest |
-| Coverage | Coverage, omission, sampling, approximation, and truncation | Test / Evidence / Capability |
-| Finding | `supported`, `contradicted`, or `unknown` judgment | Evidence, Coverage |
-| Knowledge Candidate | Reusable proposal extracted from a Finding | Investigation, Evidence |
-| Knowledge | Independently validated and reviewed versioned knowledge | Candidate, review record |
+| Evidence Core: source/version, snapshot, provenance, manifest, verify | Implemented | `feature_for_agent` |
+| Canonical Evidence semantics: retrieve/materialize/replay/aggregate/traverse/verify | Implemented | Runtime + compatibility wrappers |
+| RetrievalSession seen/repeated/range/replay memory | Implemented | CA258 baseline |
+| Bounded evidence selection, Coverage, identity/correlation safety | Implemented | CA258 baseline |
+| Evidence Ledger + Context Engine / cross-turn delta | Implemented | `tracecite.integrations` |
+| Pi bounded investigation integration | Implemented | Validated A/B adapter + `.pi` skill |
+| Codex/OpenAI-compatible repository skill integration | Implemented | `AGENTS.md` + `.agents/skills` |
+| Cursor project-rule integration | Implemented | `.cursor/rules/tracecite-investigation.mdc` |
+| Extension Protocol / domain capability contracts | Implemented | Public extension layer |
+| MCP / other host adapters as a single packaged universal integration | Partially implemented | Host-specific adapters evolve separately |
 
-DomainEvent/Observation and Finding stay separate. “`/home` returned HTTP 504 at 10:30:04” is a fact; “the 504 caused the white screen” remains a Hypothesis/Finding requiring evidence.
+## 14. Documentation / governance rule
 
-## 5. Generic investigation protocol
+Architecture-boundary changes must update both `architecture.md` and `architecture.zh-CN.md` in the same change. Incompatible architecture changes require an ADR; public schema/API changes require migration notes and tests.
 
-```text
-Problem + Scope
-      |
-      v
-Orient -----> Explore
-                 |
-                 v
-             Hypothesis
-                 |
-                 v
-               Test
-                 |
-                 v
-       Evidence + Coverage
-                 |
-                 v
-              Finding
-                 |
-                 v
-             Stop reason
-                 |
-                 +----> optional Knowledge Candidate -> Review -> Knowledge
-```
-
-### 5.1 Required steps
-
-A deliverable investigation must define Problem and Scope, create at least one falsifiable Hypothesis, define a Test including possible contradiction, inspect Evidence and Coverage, create a bounded Finding, and record a stop reason. Orient and Explore are cognitive requirements, not mandatory commands. Small static input may be read directly; large or unfamiliar input should use bounded tools.
-
-### 5.2 Conditional strategies
-
-| Strategy | Use when | Not required when |
-|---|---|---|
-| `probe` | Multiple/large sources, unknown format or time coverage | Small known input |
-| `sample/peek` | A small amount of raw context is useful | A strong anchor already exists |
-| `survey` | Input is unfamiliar and lacks a reliable first query | Error code, stack, request ID, or event is known |
-| `search` / `grep` | A Test has a temporary literal/regex predicate | A domain capability yields better evidence |
-| `preset` | A versioned reusable filter exists | One-off query |
-| `expand` | A pointer lacks context | Existing evidence is sufficient |
-| Scenario | Reproduction, assertions, regression, or deliverable artifact is needed | Exploration has not converged |
-| `verify` | A final result depends on a Scenario Manifest | No Scenario result is cited |
-
-### 5.3 Adaptive routing
-
-```text
-small, static, safe full read
-    -> direct read -> freeze key Evidence as needed
-
-known error code, stack, time, or request ID
-    -> Hypothesis -> search/domain capability -> expand
-
-large or unfamiliar input
-    -> probe -> optional sample/survey -> competing Hypotheses -> separate Tests
-```
-
-Survey and DomainEvents produce observations; they do not automatically select root cause.
-
-## 6. Strategy, Preset, Scenario, and Knowledge
-
-```text
-Hypothesis
-└── Test
-    └── Strategy
-        ├── direct read / sample / survey
-        ├── grep / search
-        ├── preset
-        ├── extension capability
-        └── Scenario
-
-Knowledge
-└── recommends Hypotheses, Tests, Presets, or Scenarios within applicability
-```
-
-A Scenario is a repeatable test recipe, not a domain Runtime. Extensions may provide domain parsing/context via `ScenarioCapability`; the generic Runtime owns execution, budgets, Evidence, and safety.
-
-## 7. InvestigationState contract (v1 implemented)
-
-`InvestigationState` is the versioned cross-tool investigation document. It records Problem, Scope, Observation, Hypothesis, Test, Execution, Finding, stop reason, Knowledge Candidate, and reusable SourceSession state. Its persisted schema version is independent from the Extension Protocol version.
-
-Tools remain independently callable and opt into bounded recording when an investigation path is supplied. Bounded read-only Summary, Timeline, and Compare views support recovery and audit without replaying raw Evidence. See [Investigation summary](investigation-summary.md) and [Timeline/compare](investigation-compare.md).
-
-## 8. Context and execution budgets
-
-Progressive disclosure is a base strategy:
-
-```text
-metadata -> bounded sample/survey -> EvidencePointer -> on-demand expand -> full Artifact
-```
-
-Canonical Evidence and Results remain complete and recoverable. Agent-facing projections may compress them but must retain required Coverage, truncation signals, and recovery paths. Runtime/Integration provides budgets, Agent profiles, compact projection, Evidence Ledger, `expand-many`, bounded Seen Evidence, and persistent cross-turn Context Delta. The Context Engine stores transport memory separately from InvestigationState and applies delta only after the canonical Result is recoverable. See [Context Engine](context-engine.md).
-
-Representative Evidence grouping and semantic compaction remain later Runtime/Integration optimizations and do not enter the Extension Protocol.
-
-Token reduction must never hide missing Evidence, approximation, parsing failure, or Coverage gaps.
-
-## 9. Knowledge lifecycle
-
-```text
-Observation / DomainEvent
-  -> Evidence-backed Finding
-  -> Knowledge Candidate
-  -> Independent validation
-  -> Review
-  -> Versioned Knowledge
-```
-
-An Agent cannot self-promote Knowledge. See [Knowledge governance](knowledge-governance.md).
-
-## 10. Extensibility
-
-The main package supplies mechanisms; domains supply facts and semantics:
-
-| Main-package public contract | Domain examples |
-|---|---|
-| TraceCite Extension Protocol | Mobile, CI, Backend Extension |
-| Core Plugin Capability | Source, Segmenter, Preprocessor, Event Transformer bundles |
-| Agent Capability | device queries, CI status queries, domain read/action tools |
-| Scenario Capability | Mobile/CI profile, preset, scenario resolver |
-| Assertion / Report Capability | domain assertions and reporting |
-| DomainEvent / EvidenceRef / Coverage | Mobile crash/network, CI build/test facts |
-
-`ScenarioRuntime` is a current internal Runtime adapter, not a long-term public Extension capability. Concepts interpretable only by one domain remain in that extension; only cross-domain invariants enter the main package.
-
-## 11. Implementation status
-
-| Capability | Status |
-|---|---|
-| Source, Segmenter, Filter, Snapshot, Evidence, Manifest, Verify | implemented |
-| `probe`, `sample/peek`, `survey`, `search`, `expand`, `run`, `verify` | implemented |
-| InvestigationState, budgets, SourceSession, Summary, Timeline, Compare | implemented |
-| Knowledge Governance and explicit migration | implemented |
-| Agent profile, compact projection, Evidence Ledger, `expand-many` | implemented |
-| Agent Capability Registry and live safety gates | implemented |
-| Declarative Extension Protocol and internal Scenario adaptation | implemented |
-| Mobile Extension integration | implemented |
-| Context Engine: Seen Evidence, cross-turn dedupe, Context Delta | implemented |
-| Representative Evidence grouping / semantic compaction | planned |
-| MCP adapter on Runtime/Context APIs | implemented |
-| Mobile device and CI cross-domain validation | partially implemented: automated Mobile real-log/matrix validation exists; real-device and a separate CI-domain extension validation remain |
-
-The contract → Context Engine → Mobile → MCP migration sequence is complete on the refactor branches. Remaining validation priorities are real Agent-host/token benchmarks, real-device Mobile acceptance, and a second independent domain such as CI before generalizing additional domain concepts into the main package.
-
-## 12. Architecture evolution and maintenance
-
-### 12.1 Architectural changes
-
-The following require synchronized updates to this document and its Chinese counterpart: dependency direction; public investigation concepts or state transitions; Extension Protocol or capability versioning; Canonical Result / Agent View, token, safety, snapshot, integrity, and trust boundaries; and implementation-status changes.
-
-### 12.2 Maintenance requirements
-
-1. Architecture changes update `architecture.md` and `architecture.zh-CN.md` in the same PR.
-2. Incompatible or long-lived trade-offs require an ADR.
-3. Schema or public API changes require version strategy, migration guidance, and tests.
-4. Domain-boundary changes ultimately require at least two domain cases; otherwise they remain domain capabilities.
-5. Keep the top-level Extension Protocol stable; prefer optional independently versioned capabilities over expanding the top-level API.
+Current documentation map: [docs/README.md](README.md).

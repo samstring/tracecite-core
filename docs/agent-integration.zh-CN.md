@@ -2,311 +2,213 @@
 
 [English](agent-integration.md) | **简体中文**
 
-本文面向 Codex、Claude、ChatGPT、自研 Agent 或任何可调用 CLI/Python Tool 的 Agent Host。
+状态：`feature_for_agent` / CA258 基线的当前 Host 接入契约。
 
-TraceCite 是 **Evidence/Context Gateway**，不是内置 LLM Agent。Domain Extension 通过 Extension Protocol v2 声明能力；Agent 只消费通用 Runtime 和 Integration 暴露的工具，不需要理解 Mobile/CI 的内部实现。
+TraceCite 是 **Evidence Runtime**，不是自治调查 Agent。Host 把确定性的 TraceCite Evidence 能力暴露给外部 Agent；Agent 负责假设、调查顺序、因果推理、证据是否足够、最终答案和停止时机。
 
-## 0. 定位：网关，不是 grep 替代品
-
-TraceCite 控制什么进入 Agent 上下文，同时把完整可审计结果留在磁盘：
+## 1. Host Contract
 
 ```text
-raw source
-  -> frozen/canonical evidence
-  -> bounded Agent projection
-  -> Agent
+raw evidence
+    -> TraceCite Core/Runtime
+    -> bounded Evidence + Coverage + Provenance
+    -> host adapter
+    -> Agent
 ```
 
-相对 `grep | head`，TraceCite 的优势是可复现 EvidencePointer、Coverage、`unknown` 语义、完整性校验和跨工具 InvestigationState。Canonical JSON 不保证比熟练 grep 更省 token；省上下文依赖 Agent profile、compact projection、Ledger、批量展开和 Context Engine。
+Host 可以拥有 tool telemetry、model/context budget、native tool access 和 policy prompt，但 Host telemetry 不是 canonical Evidence。
 
-CLI 的保守默认仍是列式 Agent JSON：
+TraceCite 负责：
 
-```bash
-tracecite search app.log "pattern" --no-snapshot \
-  --agent-profile agent --ledger-dir /tmp/ledger --lightweight
-```
+- source/version 和 evidence identity；
+- provenance 与精确 materialization；
+- Coverage、truncation、omission、missing-evidence、source-change 等机械事实；
+- RetrievalSession 的 seen/repeated/covered-range memory；
+- 显式 replay；
+- 确定性的 aggregate/traverse；
+- bounded evidence projection 与恢复路径；
+- 完整性验证。
 
-Agent profile 默认限制 evidence 数、单行字符和输出字符。完整 canonical Result 不因投影而改变。若 Host 明确支持状态历史、批量展开或 TCF，应由 Host capability negotiation 选择更紧凑的 transport，见下文。
+TraceCite **不负责**：
 
-## 1. 接入前提
+- Hypothesis 或因果结论；
+- root-cause likelihood / ranking；
+- evidence sufficiency；
+- 下一步应该调查什么；
+- 建议 Agent 停止。
 
-- Python 3.10+。
-- 安装 `tracecite`。
-- 对输入有只读权限，对 TraceCite 工作目录有写权限。
-- 领域能力通过独立 Extension 包提供，例如 `tracecite-mobile`。
-- 第三方 Extension 必须显式加载；`import tracecite` 不自动执行它们。
+## 2. Canonical Evidence 语义
 
-```bash
-python -m pip install tracecite
-tracecite --version
-```
+长期 Evidence API 收敛为六类机械原语：
 
-## 2. Agent 工具表面
+| 原语 | 语义 |
+|---|---|
+| `retrieve` | Caller 指定 target/scope/predicate -> Evidence + Coverage + Provenance + novelty |
+| `materialize` | 精确展开不可变 source/version range |
+| `replay` | 显式重读已经见过的 Evidence，不把它伪装成“新证据” |
+| `aggregate` | 确定性的 count/distinct/group 等操作 |
+| `traverse` | 在 caller 指定 seed/scope/limit 下做机械遍历 |
+| `verify` | integrity/source-version/Manifest/Evidence 验证 |
 
-| 工具 | Agent 要回答的问题 | 认识语义 |
-|---|---|---|
-| `probe` | 输入有哪些 source、格式和范围？ | `not_assessed` |
-| `sample` / `peek` | 少量原始语境是什么？ | `not_assessed` |
-| `survey` | 陌生输入有哪些有界观察？ | `not_assessed` |
-| `search` | 当前谓词有哪些 Evidence？ | 命中可 `supported`；零命中仍可能 `unknown` |
-| `expand` / `expand-many` | 关键 Evidence 前后发生什么？ | 只证明返回上下文 |
-| `run` | Scenario 断言在当前 Coverage 下是否成立？ | 由断言和覆盖决定 |
-| `verify` | Manifest/Artifact 是否完整？ | 完整性判断 |
-| `investigation` | 创建/更新/摘要/比较/结束调查 | 状态协调，不替代 Evidence |
-| `extension` | 显式加载/查看领域扩展 | 不产生诊断结论 |
+CLI/Host 可以暴露 `probe`、`search`、`expand`、`expand-many` 等便利名字；这些 wrapper 不拥有第二套 Evidence 或 stopping 语义。
 
-准确参数以 `tracecite <command> --help` 为准。
+## 3. 所有 Agent 都应遵守的 Evidence 规则
 
-Extension Protocol v2 采用声明式 `TraceCiteExtension`。Agent Host 不应直接调用 Extension 内部 registry；显式加载后，领域 `AgentCapability` 进入通用 capability surface，`ScenarioCapability` 被 Runtime 消费。
+1. Incident 事实只能来自 supplied artifacts，除非用户明确授权外部来源。
+2. 每次继续 retrieval 前，先明确一个未闭合的 material claim，以及会改变它的 discriminator。
+3. 优先获取能支持/反驳该 claim 的最小代表性证据。
+4. Material factual claim 尽量引用精确 materialized line/range。
+5. Search match 是 Observation，不自动等于 causal proof。
+6. No-match 是 retrieval fact，不自动等于真实世界不存在。
+7. Truncation、missing evidence、Coverage 不完整、source change 必须显式保留。
+8. 复用已知 ref/range；真的需要重新考虑旧证据时使用 replay。
+9. 用户要求的最小 causal proof 已闭合后，不做 evidence census 或确认性搜索。
+10. 是否足够、何时停止由 Agent 决定，不由 TraceCite Runtime 决定。
 
-## 3. 推荐调查循环
+## 4. Pi
+
+### 已验证方法
+
+仓库正式 Pi A/B 使用：
+
+- `.pi/skills/tracecite/SKILL.md`；
+- `benchmarks/agent-investigation/pi_tracecite_extension.ts`；
+- TraceCite arm 只暴露 `tracecite_search` 和 `tracecite_expand`；
+- bounded system prompt。
+
+已验证 Base Prompt：
 
 ```text
-probe
-  |
-有明确锚点？ ---- yes -> Hypothesis
-  | no
-  -> sample/peek 或 survey
-  -> 竞争 Hypothesis
-  |
-search / domain capability
-  |
-检查 status + outcome + coverage + missing_evidence
-  |
-expand / expand-many 关键 Evidence
-  |
-Finding: supported / contradicted / unknown
-  |
-记录 stop reason
-  |
-需要复现时 run Scenario -> verify Manifest
+You are a coding agent investigating supplied runtime evidence. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims.
 ```
 
-### 第一步：探测输入
+TraceCite 追加：
+
+```text
+Follow the user's explicit request to use TraceCite. All runtime-evidence content must be obtained through TraceCite tools; do not use native file-access tools for the evidence.
+```
+
+仓库内复现方式：
+
+```bash
+BASE_PROMPT='You are a coding agent investigating supplied runtime evidence. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims.'
+TRACE_PROMPT="$BASE_PROMPT Follow the user's explicit request to use TraceCite. All runtime-evidence content must be obtained through TraceCite tools; do not use native file-access tools for the evidence."
+
+pi \
+  --extension ./benchmarks/agent-investigation/pi_tracecite_extension.ts \
+  --tools tracecite_search,tracecite_expand \
+  --no-skills --skill ./.pi/skills/tracecite/SKILL.md \
+  --no-prompt-templates --no-context-files \
+  --system-prompt "$TRACE_PROMPT" \
+  "用 tracecite 分析这个问题。${QUESTION}"
+```
+
+Benchmark extension 是 Adapter，不是新的 Evidence 层。生产 Pi Host 可以把同样的 canonical Evidence 语义包装成独立 adapter。
+
+## 5. Codex / OpenAI-compatible Agent
+
+长期生效的仓库工程约束放在根目录 `AGENTS.md`。可复用的 Evidence 调查工作流放在：
+
+```text
+.agents/skills/tracecite-investigate/SKILL.md
+```
+
+这样 `AGENTS.md` 保持短而稳定，详细 Evidence API / trust semantics 只在相关任务需要时进入上下文。
+
+推荐请求：
+
+```text
+Use $tracecite-investigate to investigate <problem> from the supplied evidence.
+Keep retrieval bounded. Cite exact materialized evidence for material factual claims.
+Do not fill evidence gaps with external knowledge; qualify unsupported parts explicitly.
+```
+
+Codex 可以直接通过 shell 调 TraceCite CLI：
 
 ```bash
 tracecite probe ./logs --glob "*.log" --recursive
+tracecite search app.log "<discriminator>" --snapshot \
+  --agent-profile stateful-index \
+  --ledger-dir .tracecite/ledger \
+  --context-id incident-42
+tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
 ```
 
-先读 source 元数据、大小、哈希、segmenter 和时间范围，不要把完整目录送入模型。
+输入很小、已经有界时直接 read 仍然合理；TraceCite 主要解决的是 evidence volume、provenance、重复上下文和跨 source correlation 带来的成本与可信问题。
 
-### 第二步：概览陌生输入
+## 6. Cursor
+
+仓库提供 Project Rule：
+
+```text
+.cursor/rules/tracecite-investigation.mdc
+```
+
+该 Rule 使用 `alwaysApply: false`，用于 logs、traces、support bundle、crash report 和 root-cause 调查。Cursor 可以按 relevance 自动应用，也可以由用户在 Agent 中显式引用。
+
+推荐请求：
+
+```text
+Use the TraceCite investigation rule for this incident.
+Investigate only from the supplied evidence, keep retrieval bounded,
+and cite exact evidence ranges for the causal claims in the final answer.
+```
+
+Cursor 与 Codex 使用同一套 CLI/Runtime 语义，不创建 Cursor 专属的 Evidence / Coverage / correctness 模型。
+
+## 7. CLI transport 与 Context Engine
+
+一次性调用：
 
 ```bash
-tracecite sample app.log --strategy head-tail --count 10 --max-chars 8000 --snapshot
-tracecite survey app.log --snapshot --max-templates 20 --samples-per-template 2
+tracecite search app.log "timeout" --snapshot
 ```
 
-Sample/Survey 只能产生 Observation，不能自动判断根因。必须检查 Coverage 和省略/解析信号。
-
-### 第三步：搜索一个明确假设
-
-```bash
-tracecite search app.log "network timeout" --snapshot --last 10m
-```
-
-需要正则时显式使用 `--regex`。`search` 默认冻结 source；Evidence 行号和摘要指向冻结副本。
-
-Agent 紧凑投影：
-
-```bash
-tracecite search app.log "timeout" --snapshot --compact
-tracecite search app.log "timeout" --snapshot --max-output-chars 12000
-```
-
-`--compact` 和输出预算只改变 Agent-facing projection，不修改 canonical Result、缓存、InvestigationState、snapshot 或 Artifact。
-
-使用 Evidence Ledger：
+有状态 Host 建议把 Ledger 与稳定的 host-owned context ID 配对：
 
 ```bash
 tracecite search app.log "timeout" --snapshot \
-  --ledger-dir /tmp/tracecite-ledger
+  --agent-profile stateful-index \
+  --ledger-dir .tracecite/ledger \
+  --context-id incident-42
 ```
 
-Ledger 内容寻址且展开前重新校验摘要。
+Canonical Result 必须先可通过 Ledger 恢复，再允许 Context Delta 省略本轮已经见过的 Evidence body。省略必须显式，并保持恢复入口。
 
-### 为一次分析选择一个 Agent 传输 Profile
-
-| Profile | 适用 Host | 传输 |
-|---|---|---|
-| `agent` | 默认 CLI / 普通 Host | 有界列式 JSON |
-| `portable-json` | 任意 Host | 列式 JSON |
-| `strict-json` | 强制 JSON Host | 列式 JSON |
-| `stateful-index` | 有会话历史与批量工具 | Ledger id + 列式 JSON + 已读历史优化 |
-| `frame` | 明确支持 TCF | Ledger id + TCF frame |
-
-CLI 不猜测 Host 能力，因此 `--agent-profile` 仍应显式选择上述 profile。`auto` 是 Host/Python 层的 capability negotiation，而不是一个没有能力输入的 CLI 开关。
-
-Host 可以使用公开 Integration API 做协商：
-
-```python
-from tracecite.integrations import AgentCapabilities, select_agent_profile
-
-profile = select_agent_profile(
-    "auto",
-    AgentCapabilities(
-        stateful_history=True,
-        batch_expand=True,
-        text_frame=True,
-    ),
-)
-assert profile.name == "frame"
-```
-
-`auto` 的安全顺序是：
-
-```text
-Host 明确支持 text_frame
-        -> frame
-否则支持 stateful_history + batch_expand
-        -> stateful-index
-否则
-        -> agent JSON
-```
-
-也就是说，不声明 `text_frame` 的 Host 永远不会意外收到 TCF。公开真实日志 transport smoke 显示 `frame` 在保留 Coverage / recovery 语义的同时可以显著减少结构开销，但这不是“所有查询都比 rg 更省”的承诺；完整数据见 `benchmarks/agent-investigation/README.md`。
-
-不要为了领域扩展改变 profile；profile 是 Integration/Host concern。
-
-### 第四步：展开关键证据
+从 Ledger 一次恢复多条 exact range：
 
 ```bash
-tracecite expand SNAPSHOT_PATH START_LINE \
-  --end-line END_LINE --before 5 --after 10 \
-  --expected-sha256 SHA256
+tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
 ```
 
-多条 Evidence 优先：
+详见 [Context Engine](context-engine.zh-CN.md)。
 
-```bash
-tracecite expand-many /tmp/tracecite-ledger RESULT_ID \
-  '#L120' '#L188-L190' --before 3 --after 3 \
-  --agent-profile stateful-index
-```
+## 8. Result 解释
 
-`expand-many` 会验证 Ledger 和 snapshot 摘要，并合并同次调用中重叠/相邻窗口。Context Engine 会继续处理跨轮 Seen Evidence；这些能力属于 Runtime/Integration，不属于 Domain Extension。
-
-### 第五步：记录调查并执行/复验 Scenario
-
-InvestigationState 保存 Problem、Scope、Hypothesis、Test、Execution、Finding、Coverage 和 stop reason。Summary/Timeline/Compare 是有界协调视图，不读取 Evidence 正文，也不会自动诊断。
-
-### 第六步：执行及复验 Scenario
-
-```bash
-tracecite run scenario.json
-tracecite verify .tracecite/runs/<run-id>/manifest.json
-```
-
-Scenario 是测试配方。Extension Protocol v2 的 `ScenarioCapability` 提供领域解析能力；通用 Runtime 保留执行、预算、安全和 Evidence 控制。
-
-## 4. Result JSON 契约
-
-正常工具调用使用版本化 Result envelope。关键原则：
+执行状态和认识状态必须分开：
 
 ```text
-status  = 执行是否成功
-outcome = Evidence 对命题支持什么
+status  = operation 是否成功执行
+outcome = 返回 Evidence 对命题支持什么
 ```
 
-Agent 必须检查：
+Agent 必须同时检查 Coverage / warnings / missing-evidence，不能因为一次成功的 zero-match 就推出全局不存在。
 
-- `evidence`
-- `coverage`
-- `missing_evidence`
-- `warnings`
-- `verification`
-- `error`
+## 9. Extension
 
-有界 Agent projection 发生截断时必须显式暴露恢复信息；不能把被截断的视图当成完整 canonical Result。
+Domain Extension 通过公开 TraceCite contract 提供领域事实/能力；不得拥有 model-specific token policy、seen-evidence state、root-cause conclusion 或 Agent stopping policy。
 
-## 5. EvidencePointer 契约
+详见 [Extension Contract](extension-contract.md)。
 
-最终引用应使用可复查 Evidence 指针及摘要/范围；需要上下文时调用 `expand`，不要绕过摘要检查直接把变化中的 live source 当成同一 Evidence。
+## 10. Agent Host Benchmark
 
-Extension 内部可以使用稳定的 `EvidenceRef` 描述领域事实；Agent-facing 短 ID 或完整 URI 是 Runtime/Integration 的表示，不是领域 Contract。
+评估 Agent Host 时：
 
-## 6. CLI 退出码
+- paired 条件使用相同 base prompt/model；
+- 记录准确 model/tool/usage；
+- task result 与 run validity 分开；
+- Provider 429/quota/outage 不当成产品失败；
+- 先评 answer quality/Evidence boundary，再评效率；
+- 保留 raw scorer output，并记录 scorer limitation。
 
-- `0`：结构化执行完成，包括 `ok`、合法零命中或部分结果。
-- `1`：结构化执行错误。
-- `2`：CLI 参数错误。
-
-退出码不能替代 `status/outcome/coverage` 判断。
-
-## 7. Python API
-
-Python Host 应依赖 `tracecite` / `tracecite.runtime` / `tracecite.extension` / `tracecite.integrations` 的公开符号，不导入领域包的内部模块或 Runtime registry。
-
-领域扩展的 v2 入口：
-
-```python
-from tracecite.extension import load_extensions, list_extensions
-
-load_extensions(strict=True)
-print(list_extensions())
-```
-
-传输能力协商使用 `tracecite.integrations.AgentCapabilities` 和 `select_agent_profile`；不要根据模型名称硬编码 profile。
-
-如果 Host 需要 Scenario，当前可通过公开 host helper 解析已安装的 scenario adapter；这只是当前集成桥，不应成为新的领域依赖方向。
-
-## 8. 领域扩展
-
-v2 扩展通过 `TraceCiteExtension` 声明 `ExtensionManifest + capabilities`。完整开发规则见 [Extension Contract v2](extension-contract.md)。
-
-领域扩展应该提供：
-
-- Source/解析/Event 等领域事实能力。
-- Agent query/action capability 及安全声明。
-- Scenario/Assertion/Report 等领域能力。
-- EvidenceRef 与 Coverage。
-
-领域扩展不应该提供：
-
-- LLM-specific ContextPack。
-- token 排序策略。
-- Seen Evidence 状态。
-- MCP tool schema。
-- root-cause 结论或自动 Knowledge promotion。
-
-v1 扩展迁移见 [迁移说明](migrations/extension-protocol-v2.zh-CN.md)。
-
-## 9. Agent 安全与判断规则
-
-1. Evidence 不自动等于完整 Truth。
-2. `status=ok` 不等于 `outcome=supported`。
-3. 零命中、Coverage 缺口和 missing evidence 不能证明事件不存在。
-4. Sample/Survey/DomainEvent 不自动成为 Finding。
-5. Snapshot/Manifest 摘要失败时停止引用对应 Evidence。
-6. 未授权不启用 live source 或 live action。
-7. 第三方 Extension 仅显式加载。
-8. Agent 结论不能自我验证或自动晋升 Knowledge。
-9. InvestigationState 是协调元数据，不是原始 Evidence。
-10. 最终报告区分 hypothesis、support、contradiction、unknown 和 missing evidence。
-
-## 10. 可复制的测试 Prompt
-
-```text
-你要使用 TraceCite 调查指定输入。TraceCite 是 Evidence 工具，不是结论生成器。
-
-1. 先定义 Problem 和 Scope。
-2. 输入未知或很大时先 probe；必要时用 sample/survey 建立语境。
-3. 写出可证伪 Hypothesis，并说明可能的反证。
-4. 使用 search 或已加载的领域 capability 获取有界 Evidence。
-5. 检查 status、outcome、coverage、missing_evidence。
-6. 对关键 Evidence 使用 expand/expand-many 并校验摘要。
-7. 只有 Evidence + Coverage 足够时形成 supported/contradicted；否则保持 unknown。
-8. 记录 stop reason，并给出下一步安全查询。
-```
-
-## 11. 最小验收标准
-
-- [ ] 能用 `probe -> search -> expand` 完成一次可追溯调查。
-- [ ] 能解析 Result schema，而不是从人类文案猜状态。
-- [ ] 能区分 `status`、`outcome`、Coverage 和 missing evidence。
-- [ ] 能验证 Evidence digest/Manifest。
-- [ ] 能使用 InvestigationState 保存 Hypothesis/Test/Finding/stop reason。
-- [ ] 能显式加载 Extension Protocol v2 扩展，并通过通用 capability surface 调用领域能力。
-- [ ] Host 能按声明能力选择传输 profile，且不支持 TCF 时不会收到 frame。
-- [ ] 不直接依赖 Domain Extension 内部 Runtime/registry。
-- [ ] 不把 Agent context/token 策略写回领域 Contract。
+当前正式结果见 [Agent 对比数据](benchmark-results.zh-CN.md)。
