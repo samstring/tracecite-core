@@ -58,6 +58,30 @@ def test_skill_prioritizes_proof_compression_without_runtime_policy() -> None:
     assert "exclude equivalent waiters" not in runtime
 
 
+def test_skill_role_admission_rejects_waiter_group_as_holder() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Role-admission hard gate" in skill
+    assert "every member of a cited group" in skill
+    assert "It cannot establish that \"another worker\" in that same group holds X" in skill
+    assert "keep the identity `bounded_unknown`" in skill
+    assert "Role-admission hard gate" not in runtime
+    assert "another worker" not in runtime
+
+
+def test_skill_has_mechanism_first_transport_budget_without_runtime_policy() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Mechanism-first transport budget" in skill
+    assert "first evidence call must target a mechanism discriminator" in skill
+    assert "max_evidence <= 12" in skill
+    assert "radius <= 16" in skill
+    assert "no more than **16 evidence calls**" in skill
+    assert "downstream symptom/lifecycle searches are prohibited" in skill
+    assert "Mechanism-first transport budget" not in runtime
+    assert "16 evidence calls" not in runtime
+
+
 def test_skill_forces_mechanism_first_and_bounds_downstream_state() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     assert "mechanism / required causal edges" in skill
