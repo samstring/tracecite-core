@@ -1,7 +1,7 @@
-trigger: 2026-09-02 adaptive stopping voi diagnostic retry 2
+trigger: 2026-09-02 adaptive stopping q-delta-t call gate v2
 tracecite_only_tools: true
 runtime_agent_steering: false
 correctness_gate: true
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: true
+adaptive_stopping_skill: q-delta-t
