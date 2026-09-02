@@ -14,7 +14,7 @@ Immediately before answering, delete or qualify every material sentence that is 
 
 1. **Waiter != holder.** `blocked at acquire(X)`, `lockSlow(X)`, `RLock(X)`, or queued `Lock(X)` proves only `waits X`. Multiple waiters or lock exclusivity never identify a holder.
 2. **A claimed current hold needs current-ownership proof.** Earlier acquisition, source-line progress, an active caller frame, a remembered `defer Unlock`, or assumed lock scope does not prove the resource is still held at the observed block. If continued ownership is not represented by supplied evidence, mark it `bounded_unknown`.
-3. **Deadlock/cycle/lock-order inversion requires two independently supported current edges:** `holds A -> waits B` and `holds B -> waits A`. If either edge lacks current-holder proof, do not establish a cycle; report only the supported blocking/contention and the missing edge as unknown.
+3. **Deadlock/cycle/lock-order inversion requires two independently supported current edges:** `holds A -> waits B` and `holds B -> waits A`. If either edge lacks current-holder proof, do not establish a cycle; report only the supported blocking/contention and the missing edge as unknown. **Do not use the words deadlock, cycle, cyclic wait, lock-order inversion, or AB-BA in the final conclusion unless both current edges are present in the proof ledger with supplied-evidence basis.** A logically necessary but unobserved holder is not a supported second edge.
 4. **Do not manufacture identity.** Pointer proximity, guessed struct layout, helper names, or model-known source code cannot establish object/request/process identity.
 5. **Chronology conservation.** If supplied evidence shows a request blocked before stage S, do not say that same blocked attempt caused or repeatedly executed stages after S unless supplied evidence independently shows that later stage for that attempt.
 6. **Artifact lifecycle boundary.** An in-process goroutine snapshot does not by itself prove that a shim/process was forked, where an external process is waiting, whether an RPC/reply/registration completed, what a retry created, whether cleanup/reaping is blocked, or why restart recovers. Omit those claims unless directly represented in supplied evidence.
@@ -44,6 +44,7 @@ blocked at acquire(X) -> waits X
 blocked at acquire(X) -/-> holds X
 passed acquire(Y) -/-> currently holds Y
 active caller frame -/-> current ownership
+unobserved holder -/-> supported holder edge
 blocked before S -/-> same attempt reached stage after S
 ```
 
@@ -69,6 +70,8 @@ Transport limits per investigation:
 - **target total evidence calls: <= 12; absolute ceiling: 16**
 - after two consecutive non-advancing calls for the same claim, mark it `bounded_unknown`
 - never use extra calls to confirm an already closed claim
+
+Every TraceCite result may include a mechanical `tracecite_host_activity_summary.total_tool_calls`. Treat that number as the authoritative running evidence-call count. **Before issuing another TraceCite call, if the latest observed total is 16 or greater, do not call a tool again.** Resolve remaining claims as `bounded_unknown`, run the final gate, and answer. Do not estimate or restart the count from memory.
 
 At 16 evidence calls, stop retrieval unconditionally, resolve remaining claims as `bounded_unknown`, run the final gate, and answer.
 
