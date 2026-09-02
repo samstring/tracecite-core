@@ -10,6 +10,10 @@ For diagnosis/root-cause work, build the **smallest causal proof that answers th
 
 **Non-negotiable proof compression:** a representative blocked at `acquire(X)` may only support `waits X`; it must never be relabeled as a holder/owner of X in the final answer. Once one representative closes each required causal role, exclude equivalent waiters from both further investigation and final prose. In-process stack/FIFO/ttrpc presence cannot support external process lifecycle, restart, cleanup, reaping, or orphan claims; omit those claims rather than complete the story speculatively.
 
+**Two-resource mechanism closure:** when supplied evidence shows blocking on two nested synchronization resources, do not collapse the diagnosis to a one-lock contention/starvation theory until both possible directions have been normalized. For each resource, distinguish (a) a representative stopped at its acquisition from (b) a representative of the same execution path already past that acquisition and blocked deeper. Only (b), backed by supplied evidence that the earlier acquisition precedes the deeper block, may support `holds X -> waits Y`. A blocked `RLock` does not prove a writer currently holds the RWMutex; it proves only that the reader waits there. Before naming deadlock/cycle, require two supported opposing hold/wait edges. Before naming mere contention/starvation instead, explicitly verify that no supplied representative closes the missing opposing edge. Do not use model-known lock semantics or source ordering that was not supplied as evidence to manufacture either conclusion.
+
+**Artifact-boundary final answer:** every sentence about a process/shim/child, an RPC being sent or not sent, retry behavior, restart recovery, cleanup, reaping, or an external lifecycle stage must have its own supplied-artifact basis. If it does not, delete that sentence. A correct answer may stop at the in-process blocked task/start path even when the field symptom mentions an external process.
+
 Before EVERY TraceCite call, identify internally:
 
 ```text
