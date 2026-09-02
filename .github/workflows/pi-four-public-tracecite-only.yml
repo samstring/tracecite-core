@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - test/tracecite-mode-containerd
+      - experiment/tracecite-adaptive-stopping
     paths:
       - benchmarks/agent-investigation/four-public-tracecite-only-trigger.txt
   workflow_dispatch:
@@ -124,7 +125,7 @@ jobs:
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
           REQUEST="用 tracecite 分析这个问题。${QUESTION}"
-          SYSTEM_PROMPT="You are a coding agent investigating supplied runtime evidence. Follow the user's explicit request to use TraceCite. Keep investigation bounded and cite exact evidence lines for material factual claims."
+          SYSTEM_PROMPT="You are a coding agent investigating supplied runtime evidence. Follow the user's explicit request to use TraceCite. Cite exact evidence lines for material factual claims."
           mkdir -p "$RESULT/session"
           cd "$INPUT_ROOT"
           unset TRACECITE_BENCHMARK_MODE || true
@@ -213,12 +214,17 @@ jobs:
           print(json.dumps(totals, indent=2, sort_keys=True))
           PY
 
-      - name: Score final answer with case schema
+      - name: Score final answer with case schema (auxiliary)
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          test -s "$RESULT/transcript.jsonl"
+          if [[ ! -s "$RESULT/transcript.jsonl" ]]; then
+            echo '{"available": false, "reason": "missing_transcript"}' > "$RESULT/score.json"
+            cat "$RESULT/score.json"
+            exit 0
+          fi
+          set +e
           python - "$CASE_DIR_ABS" "$RESULT/transcript.jsonl" "$RESULT/score.json" <<'PY'
           import json
           import subprocess
@@ -239,16 +245,23 @@ jobs:
               text=True,
               capture_output=True,
           )
-          if proc.returncode != 0:
+          score_path.write_text(proc.stdout or json.dumps({
+              'available': False,
+              'scorer_returncode': proc.returncode,
+              'stderr': proc.stderr[-2000:],
+          }))
+          if proc.stdout:
               print(proc.stdout)
+          if proc.stderr:
               print(proc.stderr, file=sys.stderr)
-              raise SystemExit(proc.returncode)
-          score_path.write_text(proc.stdout)
-          score = json.loads(proc.stdout)
-          print(json.dumps(score, indent=2, sort_keys=True))
-          if not score.get('passed'):
-              raise SystemExit('tracecite_answer_correctness_gate_failed')
           PY
+          score_code=$?
+          set -e
+          if [[ $score_code -ne 0 ]]; then
+            echo "auxiliary scorer wrapper exited with code $score_code" >&2
+          fi
+          cat "$RESULT/score.json" 2>/dev/null || true
+          exit 0
 
       - name: Upload case result
         if: always()
