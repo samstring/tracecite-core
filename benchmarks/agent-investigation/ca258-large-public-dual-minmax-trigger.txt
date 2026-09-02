@@ -1,0 +1,5 @@
+run=2026-09-02-ca258-large-public-1
+cases=longhorn-7843,harvester-6253
+protocol=native-bounded-vs-tracecite-bounded
+baseline=ca258365bcf83d6ff260945984e59f4efb9821d7
+repeats=gmi1,gmi2
