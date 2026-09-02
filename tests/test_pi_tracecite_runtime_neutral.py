@@ -56,7 +56,7 @@ def test_skill_requires_two_independent_opposing_edges() -> None:
     assert "holds B -> waits A" in skill
     assert "report only the supported blocking/contention and the missing edge as unknown" in skill
     assert "Do not use the words deadlock, cycle, cyclic wait, lock-order inversion, or AB-BA" in skill
-    assert "but not an unobserved holder, waiter census, pointer proximity, queued-reader/writer semantics, or guessed lock scope" in skill
+    assert "but not an unobserved holder, waiter census, pointer proximity, queued-reader/writer semantics, guessed lock scope, or progress-past-acquire reasoning" in skill
     assert "Repeated waits on one resource establish contention only, not an opposing causal path" in skill
     assert "unobserved holder -/-> supported holder edge" in skill
     assert "Deadlock/cycle/lock-order inversion" not in runtime
