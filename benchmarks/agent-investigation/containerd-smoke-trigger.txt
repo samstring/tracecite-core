@@ -1,12 +1,12 @@
-trigger: 2026-09-02 two-resource-role-closure diagnostic
+trigger: 2026-09-02 role-admission-transport-budget diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause
 correctness_gate: auxiliary_only
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: two-resource-role-closure
+adaptive_stopping_skill: role-admission-transport-budget
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: opposing-edge-role-closure-and-artifact-lifecycle-boundary
+diagnostic_focus: waiter-role-admission-mechanism-first-bounded-transport-and-artifact-lifecycle-boundary
 agent_timeout_seconds: 900
