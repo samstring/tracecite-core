@@ -33,7 +33,7 @@
       "id": "join-blocks-renderer-shutdown",
       "patterns": [
         "(destructor|destroy|shutdown|close).{0,220}(join|worker).{0,220}(block|wait|freeze|hang|terminate)",
-        "_worker_thread\.join.{0,220}(block|wait|freeze|hang|terminate)"
+        "_worker_thread[.]join.{0,220}(block|wait|freeze|hang|terminate)"
       ]
     },
     {
