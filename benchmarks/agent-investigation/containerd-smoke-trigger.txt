@@ -1,12 +1,12 @@
-trigger: 2026-09-03 single-resource-cycle-admission diagnostic
+trigger: 2026-09-03 holder-identity-and-symptom-boundary diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause-plus-final-evidence-discipline
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: opposing-edge-proof-plus-terminal-count
+adaptive_stopping_skill: holder-identity-symptom-boundary-plus-terminal-count
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: reject-single-resource-contention-as-cycle-and-stop-at-mechanical-ceiling
+diagnostic_focus: reject-hidden-holder-and-symptom-completion-at-terminal-count
 agent_timeout_seconds: 900
