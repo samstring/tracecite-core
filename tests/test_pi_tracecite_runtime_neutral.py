@@ -21,6 +21,19 @@ def test_tracecite_runtime_returns_evidence_without_investigation_policy() -> No
     assert 'content: [{ type: "text" as const, text }]' in text
 
 
+def test_agent_projection_keeps_only_bounded_mechanical_metadata() -> None:
+    text = IMPL.read_text(encoding="utf-8")
+
+    # Large unmatched token/sample surveys are useful internally but should not
+    # be repeated into every Agent turn. Novelty and bounded coverage remain.
+    assert "function compactCoverage" in text
+    assert "function compactProgress" in text
+    assert "function compactMatchedExisting" in text
+    assert '"unmatched"' not in text
+    assert '"consecutive_no_growth"' in text
+    assert "neutralPreview" in text
+
+
 def test_skill_layer_can_own_usage_guidance() -> None:
     text = SKILL.read_text(encoding="utf-8")
 
