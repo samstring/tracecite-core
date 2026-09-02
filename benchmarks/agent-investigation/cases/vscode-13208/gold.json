@@ -11,7 +11,7 @@
       "id": "standalone-error-message",
       "patterns": [
         "(standalone|complete).{0,120}(error|message|sentence)",
-        "new Error.{0,160}(direct|localized|nls\.localize|message)"
+        "new Error.{0,160}(direct|localized|nls[.]localize|message)"
       ]
     },
     {
@@ -25,13 +25,13 @@
       "id": "uppercase-script",
       "patterns": [
         "(uppercase|capital).{0,80}(S|script)",
-        "Script '\\{0\\}' failed with exit code \\{1\\}"
+        "Script '[{]0[}]' failed with exit code [{]1[}]"
       ]
     },
     {
       "id": "placeholder-meaning",
       "patterns": [
-        "\\{0\\}.{0,100}(script|script name).{0,180}\\{1\\}.{0,100}(exit code|code)",
+        "[{]0[}].{0,100}(script|script name).{0,180}[{]1[}].{0,100}(exit code|code)",
         "first placeholder.{0,100}(script|name).{0,180}second.{0,100}(exit code|code)"
       ]
     }
