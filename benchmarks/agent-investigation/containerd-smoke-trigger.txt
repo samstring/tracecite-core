@@ -1,12 +1,12 @@
-trigger: 2026-09-02 current-hold-proof diagnostic after guard sync
+trigger: 2026-09-02 chronology-boundary diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause
-correctness_gate: auxiliary_only
+correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: current-hold-proof
+adaptive_stopping_skill: chronology-artifact-boundary-hard-gate
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: require-current-hold-proof-and-bound-external-lifecycle
+diagnostic_focus: prevent-post-block-lifecycle-story-and-enforce-16-call-hard-stop
 agent_timeout_seconds: 900
