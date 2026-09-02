@@ -1,0 +1,8 @@
+Source: isolated Windows timing reproduction used during the investigation.
+
+A loop repeatedly executes:
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+Under normal wall-clock progression, each wait returns in about 500 ms.
+If the Windows system clock is moved backwards while one of these waits is active, that wait can remain blocked far longer than 500 ms, approximately reflecting the backwards clock adjustment.
+Using the WinAPI Sleep call for the same millisecond duration does not show the same clock-adjustment behavior.
