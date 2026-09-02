@@ -55,6 +55,9 @@ def test_skill_requires_two_independent_opposing_edges() -> None:
     assert "holds A -> waits B" in skill
     assert "holds B -> waits A" in skill
     assert "report only the supported blocking/contention and the missing edge as unknown" in skill
+    assert "Do not use the words deadlock, cycle, cyclic wait, lock-order inversion, or AB-BA" in skill
+    assert "A logically necessary but unobserved holder is not a supported second edge" in skill
+    assert "unobserved holder -/-> supported holder edge" in skill
     assert "Deadlock/cycle/lock-order inversion" not in runtime
     assert "bounded_unknown" not in runtime
 
@@ -132,6 +135,9 @@ def test_skill_bounds_transport_and_synonym_loops() -> None:
     assert "target total evidence calls: <= 12; absolute ceiling: 16" in skill
     assert "after two consecutive non-advancing calls for the same claim" in skill
     assert "Use one strongest representative per causal role" in skill
+    assert "tracecite_host_activity_summary.total_tool_calls" in skill
+    assert "if the latest observed total is 16 or greater, do not call a tool again" in skill
+    assert "Do not estimate or restart the count from memory" in skill
     assert "absolute ceiling: 16" not in runtime
 
 
