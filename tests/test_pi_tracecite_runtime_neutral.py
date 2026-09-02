@@ -57,6 +57,20 @@ def test_skill_owns_monotonic_causal_proof_policy_not_runtime() -> None:
     assert "bounded_unknown" not in runtime
 
 
+def test_skill_enforces_user_supplied_evidence_boundary() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+
+    assert "# Evidence boundary" in skill
+    assert "model memory          == supplied evidence" in skill
+    assert "implementation details remembered from training" in skill
+    assert "cannot close a claim" in skill
+    assert "Do not narrate invented source code" in skill
+
+    assert "implementation details remembered from training" not in runtime
+    assert "model memory" not in runtime
+
+
 def test_every_tracecite_call_must_target_open_proof_claim() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
@@ -80,7 +94,7 @@ def test_supported_inference_uses_phase_contrast_instead_of_holder_census() -> N
     assert "stack B has progressed past that acquisition into a nested call" in skill
     assert "A paired phase contrast is causal evidence" in skill
     assert "do not infer ownership from a waiter alone" in skill
-    assert "do not search for more holders or equivalent stacks" in skill
+    assert "do not search for more holders" in skill
 
 
 def test_raw_pointer_proximity_is_not_resource_identity() -> None:
@@ -104,7 +118,7 @@ def test_synchronization_cycle_can_close_with_supported_inference() -> None:
 
     assert "waiting at `Lock`, `RLock`" in skill
     assert "does NOT mean that resource is held" in skill
-    assert "phase contrast or source/context establishes progression" in skill
+    assert "phase contrast or supplied context establishes progression" in skill
     assert "a lock-order cycle requires both opposing wait-for edges" in skill
     assert "path A: holds A -> waits B" in skill
     assert "path B: holds B -> waits A" in skill
@@ -113,6 +127,14 @@ def test_synchronization_cycle_can_close_with_supported_inference() -> None:
     assert "opposing wait-for edges" not in runtime
     assert "deadlock proof" not in runtime
     assert "phase contrast" not in runtime
+
+
+def test_skill_rejects_symptom_census_as_default_investigation() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+
+    assert "directly distinguishes candidate mechanisms over symptom census" in skill
+    assert "MUST NOT be collected unless the user's requested conclusion materially depends on the count" in skill
+    assert "Do not census unrelated shim/logger/fifo/syscall stacks" in skill
 
 
 def test_artifact_boundary_prevents_downstream_lifecycle_census() -> None:
@@ -131,7 +153,7 @@ def test_closed_proof_forces_final_answer_and_blocks_new_story() -> None:
     assert "the NEXT assistant action MUST be the final answer" in skill
     assert "Final causal claims MUST be a subset of closed proof claims" in skill
     assert "Do not introduce new causal, lifecycle, cleanup, restart, kernel" in skill
-    assert "Write only closed proof claims into the final causal story" in skill
+    assert '"complete picture"' in skill
 
     assert "NEXT assistant action MUST be the final answer" not in runtime
     assert "closed proof claims" not in runtime
