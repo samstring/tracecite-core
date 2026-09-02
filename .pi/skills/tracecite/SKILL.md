@@ -4,16 +4,15 @@ description: Use TraceCite as bounded evidence transport and mechanical evidence
 compatibility: Requires the TraceCite Pi extension. tracecite_search/tracecite_expand may be exposed as compatibility aliases for retrieval/materialization.
 ---
 
-# TraceCite role
+# Evidence boundary
 
-```text
-TraceCite = retrieve + materialize + provenance + mechanical evidence memory
-Agent     = interpret + infer + maintain proof state + decide sufficiency + stop
-```
+TraceCite retrieves and materializes evidence. The Agent interprets it.
 
-Runtime never chooses hypotheses, causal importance, root cause, investigation direction, or stopping. Token saving never overrides correctness.
+Respect the evidence scope in the user's request. When the user limits the investigation to supplied artifacts, implementation details remembered from training, guessed source code, web knowledge, likely fixes, inferred struct layout, or unstated lifecycle behavior are NOT evidence.
 
-Every TraceCite call MUST target one material causal claim whose status is `unresolved` or `contradicted`, or materialize an already-identified range needed to settle that claim. Claim identity is semantic, not query wording. If no such claim exists, do not call TraceCite.
+A remembered or plausible implementation detail may suggest a hypothesis, but it cannot close a claim and MUST NOT create a new investigation branch unless supplied evidence exposes a concrete discriminator for that claim.
+
+Do not narrate invented source code or fill an unseen critical section with plausible I/O, cleanup, kernel, process, or lifecycle behavior.
 
 # Monotonic Causal Proof Ledger
 
@@ -35,7 +34,7 @@ A root-cause proof is sufficient when the minimum mechanism/causal edges and imp
 
 # Supported inference and phase contrast
 
-A claim may close as `supported_inference` when observed execution paths, ordering, source/context, or state transitions establish the claim strongly enough for the requested conclusion and no observed evidence contradicts it.
+A claim may close as `supported_inference` when supplied execution paths, ordering, source/context, or state transitions establish the claim strongly enough for the requested conclusion and no supplied evidence contradicts it.
 
 For snapshot stacks, use **phase contrast** before searching for an invisible holder or historical state. Two representative stacks can prove ordering even when neither prints `held=true`:
 
@@ -47,26 +46,31 @@ same function / same acquisition phase:
 => stack B is evidence that the acquisition succeeded before the nested block.
 ```
 
-When the acquisition boundary and later nested phase are established by the supplied stack/source context, the corresponding outer hold may CLOSE as `supported_inference`. Do not continue searching for a direct holder merely because the snapshot cannot display historical ownership explicitly. A paired phase contrast is causal evidence; evidence need not come from a single stack.
+When the acquisition boundary and later nested phase are established by supplied stack/context, the corresponding outer hold may CLOSE as `supported_inference`. Do not continue searching for a direct holder merely because the snapshot cannot display historical ownership explicitly. A paired phase contrast is causal evidence; evidence need not come from a single stack.
+
+For a nested stack, a caller below the blocked callee is direct evidence that execution entered that caller before reaching the blocked callee. Use that observed call ordering; do not invent unseen statements inside either function.
 
 Do not require direct observation of historical or latent state when sufficient execution-order evidence already supports it. Conversely, do not infer ownership from a waiter alone.
 
 Do not treat:
 
 ```text
-not visible now      == never happened
-present in call path == currently held/active
-file/line order      == global happens-before/event time
-search match         == causal proof
-frequency/rank       == causal importance
+not visible now       == never happened
+present in call path  == currently held/active
+file/line order       == global happens-before/event time
+search match          == causal proof
+frequency/rank        == causal importance
 nearby pointer values == same object/field identity
+model memory          == supplied evidence
 ```
 
-Raw-address proximity or guessed struct layout is not proof of resource identity unless supplied evidence/source context establishes that mapping.
+Raw-address proximity or guessed struct layout is not proof of resource identity unless supplied evidence establishes that mapping.
 
 State an inferred conclusion as inference/conclusion rather than pretending it was directly observed.
 
-# Claim-driven evidence acquisition
+# Claim-driven TraceCite use
+
+Every TraceCite call MUST target one material causal claim whose status is `unresolved` or `contradicted`, or materialize an already-identified range needed to settle that claim. Claim identity is semantic, not query wording. If no such claim exists, do not call TraceCite.
 
 For one `unresolved` or `contradicted` claim:
 
@@ -77,6 +81,8 @@ For one `unresolved` or `contradicted` claim:
 4. Update the claim status.
 5. Stop querying that claim once it is observed, supported_inference, or bounded_unknown.
 ```
+
+Prefer evidence that directly distinguishes candidate mechanisms over symptom census. Counts of equivalent waiters, shims, requests, goroutines, errors, or repeated stacks are secondary and MUST NOT be collected unless the user's requested conclusion materially depends on the count.
 
 Use one strongest representative evidence instance per distinct causal role. More equivalent matches, waiters, stacks, counts, adjacent ranges, or synonyms do not strengthen a closed claim.
 
@@ -89,7 +95,7 @@ If two consecutive attempts for the SAME unresolved claim produce no discriminat
 For blocking/contention/deadlock claims:
 
 - waiting at `Lock`, `RLock`, semaphore acquire, condition wait, channel receive/send, or equivalent does NOT mean that resource is held;
-- an outer hold may close as `supported_inference` when phase contrast or source/context establishes progression past the outer acquisition into a nested blocked call;
+- an outer hold may close as `supported_inference` when phase contrast or supplied context establishes progression past the outer acquisition into a nested blocked call;
 - a lock-order cycle requires both opposing wait-for edges, each `observed` or `supported_inference`.
 
 For a candidate cycle, explicitly reduce the proof to:
@@ -100,7 +106,7 @@ path B: holds B -> waits A
 impact: requested operation blocked by the cycle
 ```
 
-One blocked lock, one edge, a hotspot, or many waiters is not a deadlock proof. Once both required opposing edges and the impact are closed, do not search for more holders or equivalent stacks unless new evidence contradicts an edge.
+One blocked lock, one edge, a hotspot, or many waiters is not a deadlock proof. Once both required opposing edges and the impact are closed, do not search for more holders, addresses, waiters, timing counts, or unrelated subsystems unless new supplied evidence contradicts an edge.
 
 # Artifact boundary and downstream impact
 
@@ -108,7 +114,7 @@ Prove only the part of the causal chain represented by the supplied artifact. If
 
 Do not open new claims merely to reconstruct hidden lifecycle, process, cleanup, kernel, or I/O behavior outside the artifact. Do not census unrelated shim/logger/fifo/syscall stacks just to make a downstream story sound complete.
 
-# Evidence correctness and token discipline
+# Evidence mechanics
 
 - In TraceCite-only mode, do not retry blocked native evidence tools.
 - Reuse known evidence refs, ranges, source paths, source SHAs, and immutable source identities.
@@ -126,6 +132,8 @@ Stop when every material claim required to answer the user's question is `observ
 
 When this condition becomes true, the NEXT assistant action MUST be the final answer. No verification turn, reassurance search, broader census, or new investigation is allowed before answering.
 
+Saying or concluding "enough", "complete picture", "confirmed", "crystal clear", "compile my analysis", or equivalent is a terminal commitment. The next action MUST be the final answer unless newly materialized evidence has contradicted a closed claim.
+
 Every material causal statement in the final answer MUST correspond to a closed claim in the Causal Proof Ledger:
 
 ```text
@@ -140,26 +148,21 @@ Final causal claims MUST be a subset of closed proof claims. Do not introduce ne
 
 For root-cause questions, lead with one compact sentence naming the failure mechanism/class and affected subsystem/component, then give only the minimum causal chain and impact needed to support it.
 
-# RetrievalSession boundary
+# Runtime boundary
 
-RetrievalSession may remember evidence identities, ranges, request fingerprints, source generations, novelty, coverage, and repeated evidence. It does not know hypotheses, causality, importance, proof claims, root cause, sufficiency, or stopping.
-
-# Controlled TraceCite-only mode
-
-A Host may expose only TraceCite evidence operations. This changes the evidence channel, not the reasoning owner.
+TraceCite Runtime may remember evidence identities, ranges, request fingerprints, source generations, novelty, coverage, structural diversity, and repeated evidence. It does not know hypotheses, causality, importance, proof claims, root cause, sufficiency, or stopping.
 
 # Agent loop
 
 ```text
-1. Define the minimum material causal claims.
-2. Pick one unresolved/contradicted claim.
-3. Retrieve only evidence that can change that claim.
-4. Materialize the minimum representative stacks/context.
-5. Use competing-path or phase contrast to close inferable ordering/ownership.
-6. Close it as observed/supported_inference, contradict it, or bound it.
-7. Never reopen a closed claim without material contradictory evidence.
-8. When all required claims are closed, answer immediately.
-9. Write only closed proof claims into the final causal story.
+1. Respect the user's evidence boundary.
+2. Define the minimum material causal claims before broad exploration.
+3. Pick one unresolved/contradicted claim.
+4. Retrieve only evidence that can change that claim.
+5. Materialize the minimum representative stacks/context.
+6. Use competing-path or phase contrast to close inferable ordering/ownership.
+7. Close it as observed/supported_inference, contradict it, or bound it.
+8. Never reopen a closed claim without new contradictory supplied evidence.
+9. When all required claims are closed, answer immediately.
+10. Write only closed proof claims into the final causal story.
 ```
-
-TraceCite makes evidence recoverable, bounded, line-addressable, provenance-preserving, diverse, and mechanically non-redundant. The Agent maintains the causal proof and decides when it is complete.
