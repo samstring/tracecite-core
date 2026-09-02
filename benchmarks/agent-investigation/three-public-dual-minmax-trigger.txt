@@ -1,0 +1,3 @@
+trigger: 2026-09-02T19:16+08:00
+cases: moby-35310, vscode-41136, vscode-13208
+purpose: two-slot Native vs TraceCite comparison
