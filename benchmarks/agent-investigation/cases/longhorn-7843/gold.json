@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "case_id": "longhorn-7843",
+  "confirmed_by": [
+    "https://github.com/longhorn/longhorn/issues/7843",
+    "https://github.com/longhorn/longhorn-manager/pull/2550",
+    "https://github.com/longhorn/longhorn-instance-manager/pull/392"
+  ],
+  "summary": "Longhorn correctly detects the read-only filesystem and requests a remount by deleting the workload pod, but on a single node the replacement pod can begin NodePublishVolume before the old pod has completed NodeUnpublishVolume. The old read-only pod mount therefore still participates in the same-node mount topology while the new pod is published. The CSI log shows the replacement publish observing the global staging mount as read-only/corrupt before the previous pod mount is unpublished. Recreating pods without waiting for the old mount to be cleaned up thus preserves the read-only state and triggers repeated remount/requeue churn rather than recovery.",
+  "required_concepts": [
+    {"id":"readonly-detected-remount-requested","patterns":["read[- ]only.{0,160}(request|remount|delete)","(request remount|requested remount).{0,180}read[- ]only"]},
+    {"id":"new-publish-before-old-unpublish","patterns":["NodePublishVolume.{0,240}(before|earlier|precedes).{0,240}NodeUnpublishVolume","(new|replacement).{0,120}(pod|publish).{0,240}(old|previous).{0,120}(pod|unpublish|cleanup)"]},
+    {"id":"same-node-stale-readonly-mount","patterns":["same[- ]node.{0,220}(read[- ]only|mount|globalmount)","(old|previous|stale).{0,160}(mount|pod mount).{0,200}(read[- ]only|ro|globalmount)"]},
+    {"id":"globalmount-still-readonly","patterns":["globalmount.{0,180}(read[- ]only|corrupt|ro)","read[- ]only file system.{0,240}(globalmount|staging)"]}
+  ],
+  "evidence_markers": [
+    "Deleted pod test-deployment-754dd9fc66-qsggd so that Kubernetes will handle remounting volume pvc-12b01b25-0f09-4f88-8a76-96a8bce90a41",
+    "read-only file system"
+  ],
+  "thresholds": {"concept_recall":0.75,"evidence_marker_recall":1.0},
+  "leak_terms": ["previous pod still under terminating","old pod mount is there and ro","same-node pod recreation preserves the read-only mount"]
+}
