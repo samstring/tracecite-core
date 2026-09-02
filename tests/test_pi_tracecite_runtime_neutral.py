@@ -36,139 +36,126 @@ def test_path_errors_expose_only_configured_source_inventory() -> None:
     assert "next_source" not in text
 
 
-def test_skill_has_hard_pre_call_proof_gate() -> None:
+def test_skill_has_semantic_waiter_holder_gate_without_runtime_policy() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-    assert "Highest-priority execution contract" in skill
-    assert "Before EVERY TraceCite call" in skill
-    assert "claim: the one unresolved/contradicted material causal fact" in skill
-    assert "discriminator: the concrete result that would change that claim" in skill
-    assert "do not call TraceCite; answer now" in skill
-    assert "discriminator" not in runtime
+    assert "Highest-priority semantic invariants" in skill
+    assert "A waiter is never a holder" in skill
+    assert "blocked at acquire(X)" in skill
+    assert "waits X" in skill
+    assert "Multiple waiters on X do not prove a holder identity" in skill
+    assert "A waiter is never a holder" not in runtime
+    assert "blocked at acquire(X)" not in runtime
 
 
-def test_skill_prioritizes_proof_compression_without_runtime_policy() -> None:
+def test_skill_requires_two_independent_opposing_edges() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-    assert "Non-negotiable proof compression" in skill
-    assert "may only support `waits X`" in skill
-    assert "exclude equivalent waiters from both further investigation and final prose" in skill
-    assert "omit those claims rather than complete the story speculatively" in skill
-    assert "Non-negotiable proof compression" not in runtime
-    assert "exclude equivalent waiters" not in runtime
+    assert "Deadlock/cycle requires two independently supported opposing edges" in skill
+    assert "EDGE A: holds A -> waits B" in skill
+    assert "EDGE B: holds B -> waits A" in skill
+    assert "mark the missing edge `bounded_unknown`" in skill
+    assert "Deadlock/cycle requires" not in runtime
+    assert "bounded_unknown" not in runtime
 
 
-def test_skill_role_admission_rejects_waiter_group_as_holder() -> None:
+def test_skill_rejects_exclusivity_and_rlock_as_holder_proof() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    assert "Do not use lock exclusivity as evidence of holder identity" in skill
+    assert "only one worker can be inside" in skill
+    assert "Blocked `RLock` proves a reader is waiting" in skill
+    assert "does not by itself prove which reader/writer holds the lock" in skill
+
+
+def test_skill_enforces_artifact_lifecycle_boundary() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-    assert "Role-admission hard gate" in skill
-    assert "every member of a cited group" in skill
-    assert "It cannot establish that \"another worker\" in that same group holds X" in skill
-    assert "keep the identity `bounded_unknown`" in skill
-    assert "Role-admission hard gate" not in runtime
-    assert "another worker" not in runtime
+    assert "Stay inside the artifact lifecycle boundary" in skill
+    assert "does not by itself prove that a shim/process was forked" in skill
+    assert "whether cleanup/reaping is blocked" in skill
+    assert "why restart recovers" in skill
+    assert "artifact lifecycle boundary" not in runtime
 
 
-def test_skill_has_mechanism_first_transport_budget_without_runtime_policy() -> None:
+def test_skill_has_mandatory_final_answer_filter() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-    assert "Mechanism-first transport budget" in skill
-    assert "first evidence call must target a mechanism discriminator" in skill
-    assert "max_evidence <= 12" in skill
-    assert "radius <= 16" in skill
-    assert "no more than **16 evidence calls**" in skill
-    assert "downstream symptom/lifecycle searches are prohibited" in skill
-    assert "Mechanism-first transport budget" not in runtime
-    assert "16 evidence calls" not in runtime
+    assert "Mandatory final-answer proof filter" in skill
+    assert "without making another TraceCite call" in skill
+    assert "Does it promote a waiter into a holder?" in skill
+    assert "Does it claim a cycle without two concrete opposing holds->waits edges?" in skill
+    assert "delete or qualify that sentence" in skill
+    assert "Mandatory final-answer proof filter" not in runtime
 
 
-def test_skill_forces_mechanism_first_and_bounds_downstream_state() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-    assert "mechanism / required causal edges" in skill
-    assert "Do **not** investigate downstream symptoms while mechanism edges are unresolved" in skill
-    assert "requested downstream consequence only to the artifact boundary" in skill
-    assert "Do not search broadly for external process state after this boundary is known" in skill
-    assert "In-process stack evidence alone does not prove process creation state" in skill
-
-
-def test_skill_bounds_tracecite_transport_requests() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-    assert "request at most **12** inline evidence items" in skill
-    assert "normally use radius **<= 16**" in skill
-    assert "one strongest representative instance per distinct causal role" in skill
-    assert "Counts and equivalent stacks are not additional proof" in skill
-
-
-def test_skill_owns_monotonic_proof_not_runtime() -> None:
+def test_skill_owns_minimum_causal_proof_ledger_not_runtime() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-    assert "Monotonic causal proof ledger" in skill
+    assert "Minimum causal proof ledger" in skill
     assert "supported_inference" in skill
     assert "bounded_unknown" in skill
-    assert "MUST NOT reopen" in skill
+    assert "Do not reopen a closed claim for reassurance" in skill
     assert "supported_inference" not in runtime
     assert "bounded_unknown" not in runtime
 
 
-def test_skill_normalizes_blocking_before_cycle_claim() -> None:
+def test_skill_normalizes_blocking_and_execution_phase() -> None:
     skill = SKILL.read_text(encoding="utf-8")
-    runtime = IMPL.read_text(encoding="utf-8")
     assert "blocked at acquire(X) -> waits X" in skill
     assert "blocked at acquire(X) -/-> holds X" in skill
-    assert "one representative stops at acquire(X)" in skill
-    assert "another representative of the same path/function is already past acquire(X)" in skill
-    assert "A deadlock/lock-order inversion requires both opposing edges" in skill
-    assert "blocked at acquire(X)" not in runtime
+    assert "Stack textual order is not acquisition order" in skill
+    assert "execution-phase evidence" in skill
 
 
-def test_skill_orients_blocked_stacks_by_execution_phase_not_frame_order() -> None:
+def test_skill_rejects_pointer_identity_invention() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    assert "Do not manufacture object identity" in skill
+    assert "Nearby pointer values, address offsets, guessed struct layout" in skill
+    assert "Only supplied evidence may establish identity" in skill
+
+
+def test_skill_has_pre_call_claim_discriminator_gate() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-    assert "Stack-frame orientation is not acquisition order" in skill
-    assert "currently blocked acquisition is commonly printed above its callers" in skill
-    assert "Derive lock order only from execution-phase evidence" in skill
-    assert "holds A -> waits B" in skill
-    assert "Never downgrade two proven opposing hold/wait edges to mere contention" in skill
-    assert "blocked acquiring X must not be named as the current holder/owner of X" in skill
-    assert "Stack-frame orientation is not acquisition order" not in runtime
+    assert "Before every TraceCite call identify internally" in skill
+    assert "claim: the single unresolved or contradicted material fact" in skill
+    assert "discriminator: the concrete result that would change that claim" in skill
+    assert "If either cannot be named, do not call TraceCite; answer" in skill
+    assert "discriminator" not in runtime
 
 
-def test_skill_rejects_pointer_arithmetic_and_search_absence_as_proof() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-    assert "nearby pointer values == same object/field identity" in skill
-    assert "absence of a match    == global absence" in skill
-    assert "Do not use numeric address proximity to establish object/field identity" in skill
-    assert "guessed struct layout" in skill
-
-
-def test_same_semantic_claim_cannot_escape_by_synonym() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-    assert "Claim identity is semantic, not query wording" in skill
-    assert "After two consecutive non-advancing attempts for the SAME semantic claim" in skill
-    assert "stop reformulating synonyms" in skill
-
-
-def test_new_hints_do_not_expand_proof_scope() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-    assert "does NOT create a new claim by itself" in skill
-    assert "Do not run independent searches for multiple alternative stories" in skill
-    assert "otherwise reassess proof state first" in skill
-
-
-def test_closed_proof_forces_compact_final_answer() -> None:
+def test_skill_bounds_transport_and_synonym_loops() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-    assert "the **NEXT assistant action MUST be the final answer**" in skill
+    assert "`tracecite_search`: `max_evidence <= 12`" in skill
+    assert "`tracecite_expand`: normally `radius <= 16`" in skill
+    assert "default total evidence-call budget: **16 calls**" in skill
+    assert "after two consecutive non-advancing attempts for the same claim" in skill
+    assert "one strongest representative per distinct causal role" in skill
+    assert "16 calls" not in runtime
+
+
+def test_skill_orders_mechanism_before_direct_impact_and_lifecycle() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    assert "mechanism / required causal edges" in skill
+    assert "direct impact visible in supplied evidence" in skill
+    assert "requested downstream consequence only to the artifact boundary" in skill
+
+
+def test_closed_proof_forces_next_action_final_answer() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Stop rule" in skill
+    assert "next assistant action must be the final answer" in skill
+    assert "No confirmatory search, census, symptom sweep, or lifecycle completion" in skill
     assert "terminal commitment" in skill
-    assert "Every material causal statement in the final answer MUST be a closed proof claim" in skill
-    assert "the minimum competing causal paths/edges" in skill
-    assert "only the strongest representative evidence citations" in skill
-    assert "NEXT assistant action MUST be the final answer" not in runtime
+    assert "next assistant action must be the final answer" not in runtime
 
 
 def test_runtime_remains_mechanical() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "Runtime boundary" in skill
-    assert "It does not know hypotheses, causality, proof claims, root cause, sufficiency, or stopping" in skill
+    assert "Runtime must remain diagnosis-neutral" in skill
+    assert "it does not know hypotheses, causality, proof claims, root cause, sufficiency, or stopping" in skill
     assert "proof claims" not in runtime
