@@ -34,6 +34,18 @@ def test_agent_projection_keeps_only_bounded_mechanical_metadata() -> None:
     assert "neutralPreview" in text
 
 
+def test_path_errors_expose_only_configured_source_inventory() -> None:
+    text = IMPL.read_text(encoding="utf-8")
+
+    # A bad caller path may expose the finite Host-configured evidence inventory
+    # as neutral capability metadata. It must not add a recommended source/query.
+    assert "function availableSources" in text
+    assert "TRACECITE_EVIDENCE_FILES" in text
+    assert "available_sources: sources" in text
+    assert "recommended_source" not in text
+    assert "next_source" not in text
+
+
 def test_skill_layer_can_own_usage_guidance() -> None:
     text = SKILL.read_text(encoding="utf-8")
 
