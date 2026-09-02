@@ -1,11 +1,11 @@
-trigger: 2026-09-02 normalized-synchronization-proof diagnostic
+trigger: 2026-09-02 proof-scope-lock diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 correctness_gate: auxiliary_only
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: normalized-blocking-proof-monotonic-ledger
+adaptive_stopping_skill: normalized-blocking-proof-scope-lock
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: semantic-correctness-waiter-holder-normalization-token-efficiency
+diagnostic_focus: semantic-correctness-proof-scope-downstream-boundary-token-efficiency
 agent_timeout_seconds: 900
