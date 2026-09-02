@@ -24,8 +24,6 @@ def test_tracecite_runtime_returns_evidence_without_investigation_policy() -> No
 def test_agent_projection_keeps_only_bounded_mechanical_metadata() -> None:
     text = IMPL.read_text(encoding="utf-8")
 
-    # Large unmatched token/sample surveys are useful internally but should not
-    # be repeated into every Agent turn. Novelty and bounded coverage remain.
     assert "function compactCoverage" in text
     assert "function compactProgress" in text
     assert "function compactMatchedExisting" in text
@@ -37,8 +35,6 @@ def test_agent_projection_keeps_only_bounded_mechanical_metadata() -> None:
 def test_path_errors_expose_only_configured_source_inventory() -> None:
     text = IMPL.read_text(encoding="utf-8")
 
-    # A bad caller path may expose the finite Host-configured evidence inventory
-    # as neutral capability metadata. It must not add a recommended source/query.
     assert "function availableSources" in text
     assert "TRACECITE_EVIDENCE_FILES" in text
     assert "available_sources: sources" in text
@@ -75,11 +71,11 @@ def test_skill_terminal_transition_prevents_post_closure_meta_loop() -> None:
     assert "no intermediate verification/meta-planning turn" in skill
     assert "do not repeatedly retry adjacent lines" in skill
     assert "failure mechanism/class and the affected subsystem or component" in skill
+    assert "A terminal declaration is a commitment" in skill
 
-    # Semantic stopping and answer-shaping remain Agent/skill policy, never
-    # TraceCite runtime policy.
     assert "Terminal answer transition" not in runtime
     assert "failure mechanism/class" not in runtime
+    assert "terminal declaration" not in runtime
 
 
 def test_skill_interprets_synchronization_stacks_without_runtime_steering() -> None:
@@ -91,11 +87,11 @@ def test_skill_interprets_synchronization_stacks_without_runtime_steering() -> N
     assert "minimal wait-for graph" in skill
     assert "representative evidence over exhaustive census" in skill
     assert "one strongest representative stack" in skill
+    assert "A missing cycle edge keeps the root-cause obligation open" in skill
 
-    # The runtime remains semantic-neutral; lock ownership and causal closure are
-    # Agent/skill interpretation, not evidence-tool policy.
     assert "minimal wait-for graph" not in runtime
     assert "representative evidence over exhaustive census" not in runtime
+    assert "missing cycle edge" not in runtime
 
 
 def test_skill_final_answer_stays_within_supplied_evidence() -> None:
