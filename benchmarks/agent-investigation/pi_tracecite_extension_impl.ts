@@ -71,6 +71,15 @@ async function bridge(args: string[], cwd: string, signal?: AbortSignal): Promis
   }
 }
 
+function availableSources(): string[] | undefined {
+  const configured = String(process.env.TRACECITE_EVIDENCE_FILES || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const unique = Array.from(new Set(configured)).slice(0, 50);
+  return unique.length ? unique : undefined;
+}
+
 function neutralPreview(value: unknown): string | undefined {
   let text = String(value || "").trim();
   if (!text) return undefined;
@@ -153,12 +162,14 @@ function compact(text: string): string {
       .filter((v: string) => /^[0-9a-f]{64}$/.test(v))));
     return values.length === 1 ? values[0] : p.sha256;
   })();
+  const sources = p.status === "error" ? availableSources() : undefined;
 
   if (["search", "retrieve", "probe"].includes(operation)) {
     return JSON.stringify({
       operation: "retrieve",
       status: p.status,
       evidence,
+      available_sources: sources,
       source_sha256: sha256,
       matched_existing_evidence: compactMatchedExisting(data.matched_existing_evidence),
       coverage: compactCoverage(p.coverage),
@@ -173,6 +184,7 @@ function compact(text: string): string {
       operation: operation === "replay" ? "replay" : "materialize",
       status: p.status,
       evidence,
+      available_sources: sources,
       source_sha256: sha256,
       coverage: compactCoverage(p.coverage),
       progress: compactProgress(data.progress),
