@@ -71,13 +71,71 @@ async function bridge(args: string[], cwd: string, signal?: AbortSignal): Promis
   }
 }
 
+function neutralPreview(value: unknown): string | undefined {
+  let text = String(value || "").trim();
+  if (!text) return undefined;
+  for (const phrase of [
+    "use access_file for later TraceCite calls",
+    "snapshot refs are citations, not file paths",
+    "reuse follow_up_file for later TraceCite calls",
+    "materialize this range with TraceCite before citing",
+  ]) {
+    text = text.replace(phrase, "").replace(/\s+/g, " ").trim();
+  }
+  return text.slice(0, 300) || undefined;
+}
+
+function compactCoverage(value: any): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const keys = [
+    "files", "scoped_lines", "match_records", "match_lines",
+    "evidence_returned", "evidence_truncated", "signal_hints_returned",
+    "context_start_line", "context_end_line", "truncated",
+    "new_evidence", "repeated_evidence",
+  ];
+  const result: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (value[key] !== undefined && value[key] !== null) result[key] = value[key];
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+function compactProgress(value: any): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const result: Record<string, unknown> = {};
+  const delta = value.delta && typeof value.delta === "object" ? value.delta : undefined;
+  if (delta) {
+    const smallDelta: Record<string, unknown> = {};
+    for (const key of ["new_evidence", "new_lines", "grew"]) {
+      if (delta[key] !== undefined && delta[key] !== null) smallDelta[key] = delta[key];
+    }
+    if (Object.keys(smallDelta).length) result.delta = smallDelta;
+  }
+  for (const key of [
+    "seen_evidence", "seen_lines", "coverage_status", "source_complete",
+    "frontier_exhausted", "scope_exhausted", "consecutive_no_growth",
+  ]) {
+    if (value[key] !== undefined && value[key] !== null) result[key] = value[key];
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+function compactMatchedExisting(value: any): Array<Record<string, number>> | undefined {
+  if (!Array.isArray(value) || !value.length) return undefined;
+  const rows = value.map((row: any) => {
+    const start = Number(row?.start_line || 0);
+    const end = Number(row?.end_line || start || 0);
+    return end > start ? { start_line: start, end_line: end } : { start_line: start };
+  }).filter((row: any) => row.start_line > 0);
+  return rows.length ? rows : undefined;
+}
+
 function compact(text: string): string {
   let p: any;
   try { p = JSON.parse(text); } catch { return text; }
   if (!p || typeof p !== "object") return text;
 
   const data = p.data && typeof p.data === "object" ? p.data : {};
-  const coverage = p.coverage && typeof p.coverage === "object" ? p.coverage : {};
   const operation = String(p.operation || "");
   const evidence = Array.isArray(p.evidence) ? p.evidence.map((row: any) => {
     const start = Number(row?.start_line || 0);
@@ -86,7 +144,7 @@ function compact(text: string): string {
     return {
       ref: start > 0 ? `${source}:L${start}${end > start ? `-L${end}` : ""}` : undefined,
       uri: start > 0 ? undefined : row?.uri,
-      preview: String(row?.label || "").slice(0, 420) || undefined,
+      preview: neutralPreview(row?.label),
     };
   }) : [];
   const sha256 = (() => {
@@ -102,9 +160,9 @@ function compact(text: string): string {
       status: p.status,
       evidence,
       source_sha256: sha256,
-      matched_existing_evidence: data.matched_existing_evidence,
-      coverage,
-      progress: data.progress,
+      matched_existing_evidence: compactMatchedExisting(data.matched_existing_evidence),
+      coverage: compactCoverage(p.coverage),
+      progress: compactProgress(data.progress),
       correlation_constraints: data.correlation_constraints,
       missing_evidence: p.missing_evidence,
       acquisition_end_reason: data.acquisition_end_reason,
@@ -116,8 +174,8 @@ function compact(text: string): string {
       status: p.status,
       evidence,
       source_sha256: sha256,
-      coverage,
-      progress: data.progress,
+      coverage: compactCoverage(p.coverage),
+      progress: compactProgress(data.progress),
       text: data.new_text !== undefined ? data.new_text : data.text,
       replayed: Boolean(data.replayed || operation === "replay") || undefined,
       unseen_ranges: data.unseen_ranges,
@@ -129,20 +187,22 @@ function compact(text: string): string {
   if (operation === "aggregate") {
     return JSON.stringify({
       operation, status: p.status, source: p.source, source_sha256: sha256,
-      query: p.query, regex: p.regex, aggregate: p.aggregate, data, coverage,
+      query: p.query, regex: p.regex, aggregate: p.aggregate, data,
+      coverage: compactCoverage(p.coverage),
     });
   }
   if (operation === "traverse") {
     return JSON.stringify({
-      operation, status: p.status, stop_reason: p.stop_reason, coverage: p.coverage,
-      progress: p.progress, trace: p.trace, diagnostics: p.diagnostics, graph: p.graph,
+      operation, status: p.status, stop_reason: p.stop_reason,
+      coverage: compactCoverage(p.coverage), progress: compactProgress(p.progress),
+      trace: p.trace, diagnostics: p.diagnostics, graph: p.graph,
       grouping: p.grouping, reduction: p.reduction,
       acquisition_end_reason: p.acquisition_end_reason,
     });
   }
   if (operation === "verify") {
     return JSON.stringify({
-      operation, status: p.status, coverage: p.coverage,
+      operation, status: p.status, coverage: compactCoverage(p.coverage),
       verification: p.verification, data, error: p.error,
     });
   }
