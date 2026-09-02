@@ -96,3 +96,16 @@ def test_skill_interprets_synchronization_stacks_without_runtime_steering() -> N
     # Agent/skill interpretation, not evidence-tool policy.
     assert "minimal wait-for graph" not in runtime
     assert "representative evidence over exhaustive census" not in runtime
+
+
+def test_skill_final_answer_stays_within_supplied_evidence() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+
+    assert "Final-answer evidence discipline" in skill
+    assert "hidden process-management behavior" in skill
+    assert "omit unsupported lifecycle extrapolation" in skill
+    assert "A correct root-cause answer is preferable" in skill
+
+    assert "Final-answer evidence discipline" not in runtime
+    assert "hidden process-management behavior" not in runtime
