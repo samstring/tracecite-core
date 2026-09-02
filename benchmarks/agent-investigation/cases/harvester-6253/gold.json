@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "harvester-6253",
+  "confirmed_by": ["https://github.com/harvester/harvester/issues/6253"],
+  "summary": "The upgrade is blocked by stale Cluster API Machine resources left from old/failed custom-node provisioning attempts. The named Machine was created in November 2023, remains in phase Provisioning with no healthy node reference and is still waiting for its agent/initial plan, while the August 2024 Rancher planner continues to reconcile it together with two other obsolete custom machines and repeatedly reports an invalid previous join server. The admission webhook therefore sees the still-present Machine object as not running and rejects the upgrade. Removing the obsolete Machine definitions clears the original blocker.",
+  "required_concepts": [
+    {"id":"webhook-rejects-nonrunning-machine","patterns":["validator\\.harvesterhci\\.io.{0,180}machine.{0,100}custom-318894c86e3c.{0,120}not running","webhook.{0,160}(not running|custom-318894c86e3c)"]},
+    {"id":"stale-old-machine-object","patterns":["(stale|obsolete|old|leftover|orphan).{0,180}(Machine|custom-318894c86e3c)","2023-11-11.{0,220}(2024|Provisioning|custom-318894c86e3c)"]},
+    {"id":"machine-stuck-provisioning","patterns":["phase.{0,40}Provisioning","WaitingForNodeRef|waiting for agent to check in|infrastructureReady.{0,40}false"]},
+    {"id":"rancher-still-reconciles-obsolete-machines","patterns":["waiting.{0,80}configuring worker node.{0,160}custom-318894c86e3c","previous join server.{0,120}not valid.{0,160}custom-318894c86e3c|custom-318894c86e3c.{0,180}previous join server.{0,120}not valid"]}
+  ],
+  "evidence_markers": [
+    "admission webhook \"validator.harvesterhci.io\" denied the request: machine fleet-local/custom-318894c86e3c is not running",
+    "phase: Provisioning"
+  ],
+  "thresholds": {"concept_recall":0.75,"evidence_marker_recall":1.0},
+  "leak_terms": ["they just needed deleting","fixed by removing the machine definitions","stale Cluster API Machine resources left from old provisioning attempts"]
+}
