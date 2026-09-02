@@ -1,11 +1,11 @@
-trigger: 2026-09-02 monotonic-causal-proof diagnostic
+trigger: 2026-09-02 phase-contrast-causal-closure diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 correctness_gate: auxiliary_only
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: monotonic-causal-proof-ledger
+adaptive_stopping_skill: monotonic-causal-proof-phase-contrast
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: semantic-correctness-token-efficiency-proof-monotonicity
+diagnostic_focus: semantic-correctness-token-efficiency-phase-contrast
 agent_timeout_seconds: 900
