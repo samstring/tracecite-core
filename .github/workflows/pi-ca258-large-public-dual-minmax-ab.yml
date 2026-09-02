@@ -1,0 +1,248 @@
+name: Pi CA258 Large Public Dual MinMax A/B
+
+on:
+  push:
+    branches:
+      - experiment/tracecite-ca258-large-public-cases
+    paths:
+      - benchmarks/agent-investigation/ca258-large-public-dual-minmax-trigger.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-ca258-large-public-dual-minmax-ab
+  cancel-in-progress: false
+
+jobs:
+  model-run:
+    name: ${{ matrix.model_slot }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        model_slot: [gmi1, gmi2]
+    env:
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      BENCH_MODEL: ${{ matrix.model_slot == 'gmi1' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+      BENCH_API_KEY: ${{ matrix.model_slot == 'gmi1' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-ca258-large-${{ matrix.model_slot }}
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      RESULT_ROOT: /tmp/pi-ca258-large-public-dual-minmax/${{ matrix.model_slot }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BENCH_MODEL"
+          test -n "$BENCH_API_KEY"
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev,diversity]"
+          python -m pytest -q \
+            tests/test_pi_four_public_strict_boundary.py \
+            tests/test_pi_tracecite_runtime_neutral.py \
+            tests/test_session_novelty_regressions.py
+
+      - name: Configure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PI_CODING_AGENT_DIR" "$RESULT_ROOT"
+          printf '%s\n' "$BENCH_MODEL" > "$RESULT_ROOT/model.txt"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Run large cases native vs TraceCite
+        shell: bash
+        run: |
+          set -u
+          cases=(
+            longhorn-7843
+            harvester-6253
+          )
+          BASE_PROMPT="You are a coding agent investigating supplied runtime evidence. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims."
+
+          for case_id in "${cases[@]}"; do
+            echo "===== case=$case_id model=$BENCH_MODEL ====="
+            CASE_DIR="$GITHUB_WORKSPACE/benchmarks/agent-investigation/cases/$case_id"
+            CASE_RESULT="$RESULT_ROOT/$case_id"
+            PREP="$CASE_RESULT/prepared"
+            rm -rf "$CASE_RESULT"
+            mkdir -p "$PREP"
+
+            python -m tracecite.benchmarking validate "$CASE_DIR" > "$CASE_RESULT/validate.json" || exit 2
+            python -m tracecite.benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$CASE_RESULT/prepare.json" || exit 2
+            PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+            test -n "$PREPARED" || exit 2
+
+            eval "$(python - "$PREPARED" <<'PY'
+          import json, os, shlex, sys
+          from pathlib import Path
+          data=json.loads(Path(sys.argv[1]).read_text())
+          files=[Path(x['path']).resolve() for x in data['inputs']]
+          common=Path(os.path.commonpath([str(p.parent) for p in files])).resolve()
+          print('INPUT_ROOT='+shlex.quote(str(common)))
+          print('QUESTION_FILE='+shlex.quote(str(Path(data['question']).resolve())))
+          print('INPUT_FILES='+shlex.quote(','.join(p.name for p in files)))
+          PY
+            )"
+            QUESTION="$(cat "$QUESTION_FILE")"
+
+            mkdir -p "$CASE_RESULT/native-session"
+            cd "$INPUT_ROOT"
+            NATIVE_PROMPT="$BASE_PROMPT Use only evidence from files in the current working directory and do not use external knowledge."
+            set +e
+            timeout -k 30s 900s pi \
+              --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
+              --thinking off --mode text --print \
+              --session-dir "$CASE_RESULT/native-session" \
+              --tools read,bash,grep,find,ls \
+              --no-extensions --no-skills --no-prompt-templates --no-context-files \
+              --system-prompt "$NATIVE_PROMPT" "$QUESTION" \
+              > "$CASE_RESULT/native-answer.md" 2> "$CASE_RESULT/native-stderr.log"
+            native_code=$?
+            set -e
+            echo "$native_code" > "$CASE_RESULT/native-exit.txt"
+
+            sleep 30
+
+            mkdir -p "$CASE_RESULT/tracecite-session"
+            cd "$INPUT_ROOT"
+            unset TRACECITE_BENCHMARK_MODE || true
+            unset TRACECITE_MODE || true
+            export TRACECITE_EVIDENCE_ROOT="$INPUT_ROOT"
+            export TRACECITE_EVIDENCE_FILES="$INPUT_FILES"
+            export TRACECITE_LOG_ACCESS_ACTIVITY="$CASE_RESULT/tracecite-runtime-evidence-access.jsonl"
+            export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$CASE_RESULT/tracecite-blocked-native-evidence-attempts.jsonl"
+            TRACE_PROMPT="$BASE_PROMPT Follow the user's explicit request to use TraceCite. All runtime-evidence content must be obtained through TraceCite tools; do not use native file-access tools for the evidence."
+            TRACE_REQUEST="用 tracecite 分析这个问题。${QUESTION}"
+            set +e
+            timeout -k 30s 900s pi \
+              --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
+              --thinking off --mode text --print \
+              --session-dir "$CASE_RESULT/tracecite-session" \
+              --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+              --tools tracecite_search,tracecite_expand \
+              --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+              --no-prompt-templates --no-context-files \
+              --system-prompt "$TRACE_PROMPT" "$TRACE_REQUEST" \
+              > "$CASE_RESULT/tracecite-answer.md" 2> "$CASE_RESULT/tracecite-stderr.log"
+            trace_code=$?
+            set -e
+            echo "$trace_code" > "$CASE_RESULT/tracecite-exit.txt"
+
+            cd "$GITHUB_WORKSPACE"
+            for arm in native tracecite; do
+              SESSION="$(find "$CASE_RESULT/${arm}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+              ANSWER="$CASE_RESULT/${arm}-answer.md"
+              if [[ -n "$SESSION" && -f "$ANSWER" ]]; then
+                python benchmarks/agent-investigation/pi_session_to_transcript.py \
+                  "$SESSION" "$ANSWER" "$CASE_RESULT/${arm}-transcript.jsonl" \
+                  --mode "pi-${arm}" --model "$BENCH_MODEL" || true
+                python - "$CASE_DIR" "$CASE_RESULT/${arm}-transcript.jsonl" "$CASE_RESULT/${arm}-score.json" <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+          case_dir=Path(sys.argv[1]); transcript=Path(sys.argv[2]); out=Path(sys.argv[3])
+          gold=json.loads((case_dir/'gold.json').read_text())
+          module='tracecite.root_cause_benchmarking' if 'root_cause_schema_version' in gold else 'tracecite.benchmarking'
+          p=subprocess.run([sys.executable,'-m',module,'score',str(case_dir),str(transcript)],text=True,capture_output=True)
+          out.write_text(p.stdout or json.dumps({'available':False,'returncode':p.returncode,'stderr':p.stderr[-2000:]}))
+          PY
+                python - "$CASE_RESULT/${arm}-transcript.jsonl" "$CASE_RESULT/${arm}-usage.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          totals={'input_tokens':0,'output_tokens':0,'cache_read_tokens':0,'model_calls':0,'tool_calls':0}
+          p=Path(sys.argv[1])
+          if p.is_file():
+            for line in p.read_text(errors='replace').splitlines():
+              try: e=json.loads(line)
+              except Exception: continue
+              if e.get('type')=='model':
+                u=e.get('usage') or {}
+                totals['input_tokens']+=int(u.get('input_tokens') or 0)
+                totals['output_tokens']+=int(u.get('output_tokens') or 0)
+                totals['cache_read_tokens']+=int(u.get('cache_read_input_tokens') or u.get('cached_input_tokens') or 0)
+                totals['model_calls']+=1
+              elif e.get('type')=='tool': totals['tool_calls']+=1
+          Path(sys.argv[2]).write_text(json.dumps(totals,indent=2,sort_keys=True)+'\n')
+          PY
+              fi
+            done
+
+            trace_calls=0
+            blocked=0
+            [[ -f "$CASE_RESULT/tracecite-runtime-evidence-access.jsonl" ]] && trace_calls="$(grep -cve '^$' "$CASE_RESULT/tracecite-runtime-evidence-access.jsonl" || true)"
+            [[ -f "$CASE_RESULT/tracecite-blocked-native-evidence-attempts.jsonl" ]] && blocked="$(grep -cve '^$' "$CASE_RESULT/tracecite-blocked-native-evidence-attempts.jsonl" || true)"
+            printf '{"tracecite_evidence_calls":%s,"blocked_native_attempts":%s}\n' "$trace_calls" "$blocked" > "$CASE_RESULT/channel.json"
+          done
+
+      - name: Build summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['RESULT_ROOT'])
+          rows=[]
+          for case in ['longhorn-7843','harvester-6253']:
+            cr=root/case
+            for arm in ['native','tracecite']:
+              def read_json(name):
+                p=cr/name
+                try: return json.loads(p.read_text()) if p.is_file() else {}
+                except Exception: return {}
+              def read_int(name):
+                p=cr/name
+                try: return int(p.read_text().strip())
+                except Exception: return None
+              score=read_json(f'{arm}-score.json')
+              q=score.get('quality') if isinstance(score.get('quality'),dict) else {}
+              usage=read_json(f'{arm}-usage.json')
+              rows.append({'case':case,'arm':arm,'exit':read_int(f'{arm}-exit.txt'),'score_passed':score.get('passed'),'quality':q,'usage':usage})
+          (root/'summary.json').write_text(json.dumps({'model':(root/'model.txt').read_text().strip(),'rows':rows},indent=2,ensure_ascii=False)+'\n')
+          PY
+          cat "$RESULT_ROOT/summary.json"
+
+      - name: Upload model results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ca258-large-public-dual-minmax-${{ matrix.model_slot }}
+          path: ${{ env.RESULT_ROOT }}
+          if-no-files-found: error
+          retention-days: 14
