@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "gitea-35925",
+  "confirmed_by": [
+    "https://github.com/go-gitea/gitea/issues/35925",
+    "https://github.com/go-gitea/gitea/issues/35925#issuecomment-3521597210"
+  ],
+  "summary": "The Actions view path reads all remaining lines of an expanded step (`length := step.LogLength - cursor.Cursor`) in one `actions.ReadLogs` call, then materializes every row as a `ViewStepLogLine`, stores the slice in `ViewResponse.Logs.StepsLog`, and JSON-serializes the whole response. A million-line highly repetitive log may be small on compressed storage, but expansion creates roughly one million Go objects/strings plus slice, decoder and JSON-encoding overhead, so memory and response size can grow many times beyond the stored/compressed log. The missing bound/truncation on the expanded-step response is the key defect.",
+  "required_concepts": [
+    {"id":"reads-all-remaining-expanded-step","patterns":["step\\.LogLength.{0,80}cursor\\.Cursor","(all|entire|remaining).{0,160}(expanded|step).{0,120}(log|lines|rows)"]},
+    {"id":"materializes-every-log-row","patterns":["ViewStepLogLine|logLines.{0,160}append","(each|every|all).{0,120}(row|line).{0,160}(struct|object|memory|material)"]},
+    {"id":"whole-response-json-serialization","patterns":["StepsLog.{0,160}(JSON|response|marshal|serial)","ctx\\.JSON|json.{0,120}(marshal|serial)"]},
+    {"id":"compression-does-not-bound-expanded-memory","patterns":["compress.{0,180}(memory|RAM|expanded|uncompress|JSON)","repetitive.{0,180}(compress|memory|payload|objects)"]}
+  ],
+  "evidence_markers": ["length := step.LogLength - cursor.Cursor","This is a long message, always the same."],
+  "thresholds": {"concept_recall":0.75,"evidence_marker_recall":1.0},
+  "leak_terms": ["stores all visible step logs in a large structure","only truncating seems feasible","missing bound/truncation on the expanded-step response"]
+}
