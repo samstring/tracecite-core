@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "case_id": "vscode-13208",
+  "confirmed_by": [
+    "https://github.com/microsoft/vscode/issues/13208",
+    "https://github.com/microsoft/vscode/commit/ac837a1d9cc6b8934a0ebc04d01df03ce79e9099"
+  ],
+  "summary": "The lowercase initial is a capitalization mistake, not evidence that the localized string is the second half of another sentence. The call site directly constructs a new Error from nls.localize when a script exits nonzero and there is no stderr text. Nothing is prepended to the localized message. The first placeholder is the script name and the second is the process exit code, so the rendered result is a standalone error such as 'Script X failed with exit code N' and should begin with an uppercase S.",
+  "required_concepts": [
+    {
+      "id": "standalone-error-message",
+      "patterns": [
+        "(standalone|complete).{0,120}(error|message|sentence)",
+        "new Error.{0,160}(direct|localized|nls\.localize|message)"
+      ]
+    },
+    {
+      "id": "not-a-continuation",
+      "patterns": [
+        "(not|isn't|is not).{0,100}(continuation|second part|fragment|preceded|larger sentence)",
+        "nothing.{0,100}(prepend|before|prefix)"
+      ]
+    },
+    {
+      "id": "uppercase-script",
+      "patterns": [
+        "(uppercase|capital).{0,80}(S|script)",
+        "Script '\\{0\\}' failed with exit code \\{1\\}"
+      ]
+    },
+    {
+      "id": "placeholder-meaning",
+      "patterns": [
+        "\\{0\\}.{0,100}(script|script name).{0,180}\\{1\\}.{0,100}(exit code|code)",
+        "first placeholder.{0,100}(script|name).{0,180}second.{0,100}(exit code|code)"
+      ]
+    }
+  ],
+  "evidence_markers": [
+    "mac.terminal.script.failed",
+    "script '{0}' failed with exit code {1}",
+    "e(new Error(nls.localize("
+  ],
+  "thresholds": {
+    "concept_recall": 0.75,
+    "evidence_marker_recall": 1.0
+  },
+  "leak_terms": [
+    "Make s in \"script\" upper case",
+    "I changed it to be upper"
+  ]
+}
