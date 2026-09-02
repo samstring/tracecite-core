@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "id": "vscode-41136",
+  "title": "Renderer freezes after moving the Windows system clock backwards",
+  "source_issue": "https://github.com/microsoft/vscode/issues/41136",
+  "fix_reference": "https://github.com/gabime/spdlog/pull/610",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "reproduction",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/0e5d847cecda9cb518157f9a5de947a87647abfe/benchmarks/agent-investigation/cases/vscode-41136/reproduction.txt",
+      "filename": "reproduction.txt",
+      "sha256": "5a97f503a7d58d9b248ab72a6d3dedf0b945dc14be75189d46cdd50a01efda36",
+      "required": true
+    },
+    {
+      "id": "pre-fix-async-logger-source",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/0e5d847cecda9cb518157f9a5de947a87647abfe/benchmarks/agent-investigation/cases/vscode-41136/async_log_helper_pre_fix.h",
+      "filename": "async_log_helper_pre_fix.h",
+      "sha256": "4ee9aaaf36b3df5be8f690f5423c4fbe9b54645a61a2ffe612749069120d16c8",
+      "required": true
+    },
+    {
+      "id": "windows-timing-reproduction",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/0e5d847cecda9cb518157f9a5de947a87647abfe/benchmarks/agent-investigation/cases/vscode-41136/windows-timing-repro.txt",
+      "filename": "windows-timing-repro.txt",
+      "sha256": "e713dad568e0909658737247b61491161956404238c64526384a9eff8df22858",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "microsoft/vscode + gabime/spdlog",
+    "issue_state": "closed",
+    "public_evidence": true,
+    "model_visible_payload_bytes": 2902,
+    "notes": "Model-visible evidence includes only reproduction observations, pre-fix async logger lifecycle/wait code, and an isolated timing reproduction. The eventual diagnosis and fix are evaluator-only."
+  }
+}
