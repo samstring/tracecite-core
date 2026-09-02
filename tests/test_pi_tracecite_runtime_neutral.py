@@ -141,15 +141,15 @@ def test_skill_bounds_transport_and_synonym_loops() -> None:
     assert "tracecite_host_activity_summary.total_tool_calls" in skill
     assert "Inspect this field before interpreting or acting on the returned evidence" in skill
     assert "If the returned total is 16 or greater, that tool result is the terminal retrieval result" in skill
-    assert "do not issue another TraceCite call for any reason" in skill
+    assert "the next assistant action must be the final answer, not another TraceCite call" in skill
     assert "Do not estimate or restart the count from memory" in skill
     assert "absolute ceiling: 16" not in runtime
 
 
 def test_skill_orders_mechanism_before_direct_impact_and_lifecycle() -> None:
     skill = SKILL.read_text(encoding="utf-8")
-    assert "one compact mechanism/subsystem statement" in skill
-    assert "minimum supported causal path/edges" in skill
+    assert "one mechanism/subsystem statement" in skill
+    assert "the minimum supported causal path or opposing edges" in skill
     assert "direct impact visible in supplied evidence" in skill
     assert "one artifact-boundary sentence for unsupported downstream lifecycle" in skill
 
