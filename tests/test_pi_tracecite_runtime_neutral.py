@@ -80,3 +80,19 @@ def test_skill_terminal_transition_prevents_post_closure_meta_loop() -> None:
     # TraceCite runtime policy.
     assert "Terminal answer transition" not in runtime
     assert "failure mechanism/class" not in runtime
+
+
+def test_skill_interprets_synchronization_stacks_without_runtime_steering() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+
+    assert "Synchronization evidence semantics" in skill
+    assert "waiting at that operation" in skill
+    assert "minimal wait-for graph" in skill
+    assert "representative evidence over exhaustive census" in skill
+    assert "one strongest representative stack" in skill
+
+    # The runtime remains semantic-neutral; lock ownership and causal closure are
+    # Agent/skill interpretation, not evidence-tool policy.
+    assert "minimal wait-for graph" not in runtime
+    assert "representative evidence over exhaustive census" not in runtime
