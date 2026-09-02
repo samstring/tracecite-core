@@ -39,93 +39,86 @@ def test_path_errors_expose_only_configured_source_inventory() -> None:
     assert "next_source" not in text
 
 
-def test_skill_layer_can_own_usage_guidance() -> None:
-    text = SKILL.read_text(encoding="utf-8")
-
-    assert "Recommended Agent investigation loop" in text
-    assert "TraceCite's job is to make the evidence recoverable" in text
-    assert "The Agent's job is to understand what that evidence means" in text
-
-
-def test_skill_uses_answer_obligation_stopping_without_runtime_policy() -> None:
+def test_skill_owns_monotonic_causal_proof_policy_not_runtime() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
 
-    assert "Minimal answer obligations" in skill
-    assert "answer obligations" in skill
-    assert "One evidence round = one obligation" in skill
-    assert "2 consecutive non-advancing rounds" in skill
-    assert "answer immediately" in skill
-    assert "answer obligations" not in runtime
-    assert "non-advancing rounds" not in runtime
+    assert "Monotonic Causal Proof Ledger" in skill
+    assert "unresolved" in skill
+    assert "observed" in skill
+    assert "supported_inference" in skill
+    assert "contradicted" in skill
+    assert "bounded_unknown" in skill
+    assert "MUST NOT return to `unresolved`" in skill
+    assert "Reopen it only when newly materialized evidence materially contradicts" in skill
+
+    assert "Monotonic Causal Proof Ledger" not in runtime
+    assert "supported_inference" not in runtime
+    assert "bounded_unknown" not in runtime
 
 
-def test_skill_requires_minimal_causal_closure_without_runtime_steering() -> None:
+def test_every_tracecite_call_must_target_open_proof_claim() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
 
-    assert "Minimal causal closure" in skill
-    assert "minimum causal edges that must be true" in skill
-    assert "minimum causal chain" in skill
-    assert "Do not substitute evidence volume for causal closure" in skill
-    assert "mechanism edge(s) + impact edge + no material contradiction" in skill
+    assert "Every TraceCite call MUST target one material causal claim" in skill
+    assert "If no such claim exists, do not call TraceCite" in skill
+    assert "Retrieve only evidence that can change that claim" in skill
+    assert "A new TraceCite hint, rare signal, structural cluster, or interesting subsystem does NOT create a new claim" in skill
 
-    assert "Minimal causal closure" not in runtime
-    assert "minimum causal edges" not in runtime
-    assert "causal closure" not in runtime
+    assert "material causal claim" not in runtime
+    assert "Causal Proof Ledger" not in runtime
 
 
-def test_skill_terminal_transition_prevents_post_closure_meta_loop() -> None:
+def test_supported_inference_closes_claim_without_historical_census() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+
+    assert "`observed` and `supported_inference` both CLOSE a claim" in skill
+    assert "Do not require direct observation of historical or latent state" in skill
+    assert "sufficient execution-order evidence already supports it" in skill
+    assert "an outer hold may close as `supported_inference`" in skill
+    assert "do not search for more holders or equivalent stacks" in skill
+
+
+def test_non_advancing_limit_applies_to_same_claim_not_query_wording() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+
+    assert "two consecutive attempts for the SAME unresolved claim" in skill
+    assert "stop reformulating synonyms for that claim" in skill
+    assert "Mark it `bounded_unknown`" in skill
+
+
+def test_synchronization_cycle_can_close_with_supported_inference() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
 
-    assert "Terminal answer transition" in skill
-    assert "the next assistant action is the final answer" in skill
-    assert "no intermediate verification/meta-planning turn" in skill
+    assert "waiting at `Lock`, `RLock`" in skill
+    assert "does NOT mean that resource is held" in skill
+    assert "a lock-order cycle requires both opposing wait-for edges" in skill
+    assert "each `observed` or `supported_inference`" in skill
+    assert "One blocked lock, one edge, a hotspot, or many waiters is not a deadlock proof" in skill
+
+    assert "opposing wait-for edges" not in runtime
+    assert "deadlock proof" not in runtime
+
+
+def test_closed_proof_forces_final_answer_and_blocks_new_story() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+
+    assert "the NEXT assistant action MUST be the final answer" in skill
+    assert "Final causal claims MUST be a subset of closed proof claims" in skill
+    assert "Do not introduce new causal, lifecycle, cleanup, restart, kernel" in skill
+    assert "Write only closed proof claims into the final causal story" in skill
+
+    assert "NEXT assistant action MUST be the final answer" not in runtime
+    assert "closed proof claims" not in runtime
+
+
+def test_skill_keeps_representative_evidence_and_reuse_discipline() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+
+    assert "one strongest representative evidence instance per distinct causal role" in skill
+    assert "do not refetch them for confidence" in skill
     assert "do not repeatedly retry adjacent lines" in skill
-    assert "failure mechanism/class and affected subsystem/component" in skill
-    assert "A terminal declaration is a commitment" in skill
-
-    assert "Terminal answer transition" not in runtime
-    assert "failure mechanism/class" not in runtime
-    assert "terminal declaration" not in runtime
-
-
-def test_skill_interprets_synchronization_stacks_without_runtime_steering() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-    runtime = IMPL.read_text(encoding="utf-8")
-
-    assert "Synchronization evidence semantics" in skill
-    assert "waiting at that operation" in skill
-    assert "minimal wait-for graph" in skill
-    assert "representative evidence over exhaustive census" in skill
-    assert "one strongest representative stack" in skill
-    assert "A missing cycle edge keeps the root-cause obligation open" in skill
-
-    assert "minimal wait-for graph" not in runtime
-    assert "representative evidence over exhaustive census" not in runtime
-    assert "missing cycle edge" not in runtime
-
-
-def test_skill_final_answer_cannot_invent_new_causal_story() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-    runtime = IMPL.read_text(encoding="utf-8")
-
-    assert "Final-answer evidence discipline" in skill
-    assert "Do not introduce a new causal claim in the final answer" in skill
-    assert "hidden process-management behavior" in skill
-    assert "Omit unsupported lifecycle extrapolation" in skill
-    assert "A correct root-cause answer is preferable" in skill
-
-    assert "Final-answer evidence discipline" not in runtime
-    assert "new causal claim in the final answer" not in runtime
-    assert "hidden process-management behavior" not in runtime
-
-
-def test_skill_prioritizes_representative_evidence_over_census() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-
-    assert "smallest sufficient evidence packet" in skill
-    assert "Prefer one representative instance per distinct causal role" in skill
-    assert "do not census equivalents" in skill
-    assert "More matches, more examples, more waiters" in skill
+    assert "Reuse known evidence refs, ranges, source paths, source SHAs" in skill
