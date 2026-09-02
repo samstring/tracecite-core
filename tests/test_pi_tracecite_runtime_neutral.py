@@ -64,3 +64,19 @@ def test_skill_uses_answer_obligation_stopping_without_runtime_policy() -> None:
     assert "answer immediately" in skill
     assert "answer obligations" not in runtime
     assert "non-advancing rounds" not in runtime
+
+
+def test_skill_terminal_transition_prevents_post_closure_meta_loop() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+
+    assert "Terminal answer transition" in skill
+    assert "the next assistant action is the final answer" in skill
+    assert "no intermediate verification/meta-planning turn" in skill
+    assert "do not repeatedly retry adjacent lines" in skill
+    assert "failure mechanism/class and the affected subsystem or component" in skill
+
+    # Semantic stopping and answer-shaping remain Agent/skill policy, never
+    # TraceCite runtime policy.
+    assert "Terminal answer transition" not in runtime
+    assert "failure mechanism/class" not in runtime
