@@ -36,11 +36,7 @@ A TraceCite call is justified only when it does one of these:
 
 If no obligation is `open` or `contradicted`, **answer immediately**. Do not search for more confidence, completeness, alternative wording, extra examples, or hypothetical unknown conditions that were not raised by supplied evidence.
 
-Once an obligation becomes `supported` or `qualified_boundary`, freeze it. Do not reopen it for reassurance, stronger wording, more instances, or direct proof of an inference. It may reopen only if evidence gathered for another still-open obligation produces a concrete material contradiction.
-
 Do not create a new obligation merely because another search is possible. New obligations may be added only when newly observed evidence creates a material contradiction or reveals that an explicit user requirement was not actually covered.
-
-If the Agent has internally concluded that the answer/mechanism/picture is complete, clear, established, enough, or equivalent, check the obligation ledger before any further tool call. If all obligations are closed, the next action is the final answer, not a verification call.
 
 # One evidence round = one obligation
 
@@ -54,16 +50,7 @@ ROUND: O=<open/contradicted obligation>; Δ=<result that would change its status
 
 Do not turn this into a planning essay.
 
-For one evidence round, use at most:
-
-```text
-1 retrieval/search call
-+ 1 bounded materialization/expand call only if the retrieved preview is insufficient for that same obligation
-```
-
-Do not issue sibling searches in parallel for the same obligation. Pick the strongest already-observed anchor and test it first. A second query belongs to a later round only if the first round leaves the obligation materially open and the second query targets a genuinely different observable fact.
-
-Source discovery is also bounded: when the Host exposes a configured source inventory after a path error, reuse the discovered source on the next round instead of trying several filename/query combinations in parallel.
+Prefer one narrow search followed by the minimum bounded materialization needed for the same obligation. Parallel calls are acceptable only when they test distinct anchors for that same obligation and can be interpreted together.
 
 After the round, update the obligation status before starting another round.
 
@@ -105,12 +92,6 @@ captured line order             != happens-before or event time
 ```
 
 If the user's requested conclusion necessarily depends on inference from the supplied artifact, state the inference and its evidentiary basis rather than searching indefinitely for impossible proof.
-
-# Strongest evidence means representative evidence, not exhaustive evidence
-
-When the user asks for the strongest evidence, prefer the minimum representative materialized evidence that establishes each material path/claim. Once a path is supported by an exact representative stack/body and its relationship to the answer is clear, additional equivalent stacks are population context, not a reason for another round.
-
-Do not enumerate an entire repeated population unless count/frequency itself is a material answer obligation.
 
 # What does not justify another round
 
@@ -181,9 +162,9 @@ routing/coverage metadata != semantic importance
 ```text
 1. Extract the small set of material answer obligations from the user's request.
 2. Choose one open/contradicted obligation and emit a short ROUND: O / Δ / T line.
-3. Use at most one search/retrieval plus one necessary bounded materialization for that obligation.
-4. Mark the obligation supported, contradicted, still open, or qualified_boundary.
-5. Freeze supported/qualified obligations unless evidence from another open obligation produces a concrete contradiction.
+3. Retrieve only the evidence needed for that obligation.
+4. Materialize incomplete body/context only when that obligation depends on it.
+5. Mark the obligation supported, contradicted, still open, or qualified_boundary.
 6. If the same obligation has two non-advancing rounds with no new observed anchor, stop reformulating it and qualify the evidence boundary.
 7. Do not create extra obligations for reassurance, completeness, curiosity, or hypothetical alternatives unsupported by observed evidence.
 8. As soon as every explicit answer obligation is supported or appropriately qualified and no observed contradiction remains, answer immediately.
