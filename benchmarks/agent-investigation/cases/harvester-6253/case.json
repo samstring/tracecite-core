@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "id": "harvester-6253",
+  "title": "Harvester upgrade blocked by non-running stale Machine resource",
+  "source_issue": "https://github.com/harvester/harvester/issues/6253",
+  "fix_reference": "https://github.com/harvester/harvester/issues/6253#issuecomment-2266711325",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "kube-apiserver-log",
+      "url": "https://www2.web-engineer.co.uk/supportbundle_9af7d11f-d06e-44e2-b611-2acd3a809037_2024-08-02T09-42-55Z.zip",
+      "filename": "kube-apiserver.log.1",
+      "sha256": "75cb279309e6b1936038b7ad7405c89e73182bfa7e0f91fcbeb4aedd2ba90afa",
+      "required": true,
+      "extract": {
+        "kind": "zip",
+        "member": "supportbundle_9af7d11f-d06e-44e2-b611-2acd3a809037_2024-08-02T09-42-55Z/logs/kube-system/kube-apiserver-n1/kube-apiserver.log.1",
+        "sha256": "a6e4dd270631eb5cf9d016abf982b1c41d0e7f5f6e8b8df9fd516c278d0b47c7"
+      }
+    },
+    {
+      "id": "rancher-log",
+      "url": "https://www2.web-engineer.co.uk/supportbundle_9af7d11f-d06e-44e2-b611-2acd3a809037_2024-08-02T09-42-55Z.zip",
+      "filename": "rancher.log",
+      "sha256": "75cb279309e6b1936038b7ad7405c89e73182bfa7e0f91fcbeb4aedd2ba90afa",
+      "required": true,
+      "extract": {
+        "kind": "zip",
+        "member": "supportbundle_9af7d11f-d06e-44e2-b611-2acd3a809037_2024-08-02T09-42-55Z/logs/cattle-system/rancher-554b46897f-gw7n5/rancher.log",
+        "sha256": "5578162bf5a572d2a3fcd214cfb18595c51262cc17119c85bb29bbe900dbf337"
+      }
+    },
+    {
+      "id": "machines",
+      "url": "https://www2.web-engineer.co.uk/supportbundle_9af7d11f-d06e-44e2-b611-2acd3a809037_2024-08-02T09-42-55Z.zip",
+      "filename": "machines.yaml",
+      "sha256": "75cb279309e6b1936038b7ad7405c89e73182bfa7e0f91fcbeb4aedd2ba90afa",
+      "required": true,
+      "extract": {
+        "kind": "zip",
+        "member": "supportbundle_9af7d11f-d06e-44e2-b611-2acd3a809037_2024-08-02T09-42-55Z/yamls/namespaced/fleet-local/cluster.x-k8s.io/v1beta1/machines.yaml",
+        "sha256": "2a524e958228c761bdd8d103cc229b09d22de20aa8fb8e14cf288db5e6004d7f"
+      }
+    }
+  ],
+  "provenance": {
+    "project": "harvester/harvester",
+    "issue_state": "closed",
+    "public_evidence": true,
+    "archive_bytes": 55098710,
+    "model_visible_payload_bytes": 7707846,
+    "notes": "Model-visible evidence contains three complete original files extracted from the public 52.5 MiB support bundle; no issue-comment conclusion or cleanup workaround is included."
+  }
+}
