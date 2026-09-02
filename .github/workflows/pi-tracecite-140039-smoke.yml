@@ -1,0 +1,300 @@
+name: TraceCite 140039 End-to-End
+
+on:
+  push:
+    branches: [experiment/evidence-intelligence]
+    paths:
+      - .tracecite-run-140039
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tracecite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GMI_API_KEY: ${{ secrets.GMI_API_KEY || secrets.OPENAI_API_KEY }}
+      GMI_MODEL: ${{ vars.GMI_MODEL || vars.TRACECITE_BENCH_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      CASE_ID: kubernetes-140039-runc-5347-log-code
+      CASE_DIR: benchmarks/agent-investigation/log-code-cases/kubernetes-140039-runc-5347
+      RESULT_ROOT: /tmp/pi-tracecite-140039-e2e
+      PREP: /tmp/pi-tracecite-140039-e2e/prepared
+      WORK_ROOT: /tmp/pi-tracecite-140039-e2e/workspace
+      SOURCE_ROOT: /tmp/pi-tracecite-140039-e2e/workspace/source
+      TRACECITE_MCP_REF: 09215adbf01bd612b3115186951b9154320c5ca5
+
+    steps:
+      - name: Checkout TraceCite Core under test
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned TraceCite MCP
+        uses: actions/checkout@v4
+        with:
+          repository: samstring/tracecite-mcp
+          ref: ${{ env.TRACECITE_MCP_REF }}
+          path: tracecite-mcp
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi, current Core, MCP, and adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          pi install npm:pi-mcp-adapter@2.27.0 --approve
+          python -m pip install -e ".[dev]"
+          python -m pip install 'mcp>=2,<3'
+          python -m pip install -e ./tracecite-mcp --no-deps
+          python - <<'PY'
+          import inspect
+          from pathlib import Path
+          import tracecite, tracecite_mcp
+          root = Path.cwd().resolve()
+          core_path = Path(inspect.getfile(tracecite)).resolve()
+          mcp_path = Path(inspect.getfile(tracecite_mcp)).resolve()
+          assert root in core_path.parents, core_path
+          assert root / 'tracecite-mcp' in mcp_path.parents, mcp_path
+          print(f'core={core_path}')
+          print(f'mcp={mcp_path}')
+          PY
+
+      - name: Verify formal-flow contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_pi_session_to_transcript.py \
+            tests/test_benchmark_run_result.py \
+            tests/test_log_code_score.py \
+            tests/test_pi_mcp_benchmark_boundary.py \
+            tests/test_pi_tracecite_formal_flow.py
+          python -m pytest -q \
+            tracecite-mcp/tests/test_projection.py \
+            tracecite-mcp/tests/test_server.py \
+            tracecite-mcp/tests/test_stdio_integration.py
+          python scripts/check_architecture.py
+          python -m tracecite.root_cause_benchmarking validate "$CASE_DIR"
+
+      - name: Configure pinned benchmark model
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GMI_API_KEY:-}" || { echo 'GMI_API_KEY/OPENAI_API_KEY is empty' >&2; exit 2; }
+          test -n "${GMI_MODEL:-}" || { echo 'GMI_MODEL/TRACECITE_BENCH_MODEL is empty' >&2; exit 2; }
+          echo 'PI_PROVIDER=gmi' >> "$GITHUB_ENV"
+          echo "BENCH_MODEL=$GMI_MODEL" >> "$GITHUB_ENV"
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': 'https://api.gmi-serving.com/v1',
+              'api': 'openai-completions',
+              'models': [{
+                  'id': os.environ['GMI_MODEL'],
+                  'name': os.environ['GMI_MODEL'],
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Prepare runtime log
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT_ROOT"
+          mkdir -p "$RESULT_ROOT" "$PREP" "$WORK_ROOT/evidence"
+          python -m tracecite.root_cause_benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT_ROOT/prepare.json"
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          python - "$PREPARED" >> "$GITHUB_ENV" <<'PY'
+          import json, os, shutil, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text())
+          inputs = data.get('inputs') or []
+          if len(inputs) != 1:
+              raise SystemExit(f'expected one runtime log, got {len(inputs)}')
+          source = Path(inputs[0]['path']).resolve()
+          target = Path(os.environ['WORK_ROOT']) / 'evidence' / source.name
+          shutil.copyfile(source, target)
+          print(f'RUNTIME_LOG={target.resolve()}')
+          print(f'RUNTIME_LOG_BYTES={target.stat().st_size}')
+          print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
+          PY
+
+      - name: Checkout complete pre-fix runc source
+        shell: bash
+        run: |
+          set -euo pipefail
+          eval "$(python - <<'PY'
+          import json, os, shlex
+          from pathlib import Path
+          source = json.loads((Path(os.environ['CASE_DIR']) / 'case.json').read_text())['source_checkout']
+          print('SOURCE_REPOSITORY=' + shlex.quote(source['repository']))
+          print('SOURCE_COMMIT=' + shlex.quote(source['commit']))
+          PY
+          )"
+          echo "SOURCE_REPOSITORY=$SOURCE_REPOSITORY" >> "$GITHUB_ENV"
+          echo "SOURCE_COMMIT=$SOURCE_COMMIT" >> "$GITHUB_ENV"
+          rm -rf "$SOURCE_ROOT"
+          git init -q "$SOURCE_ROOT"
+          git -C "$SOURCE_ROOT" remote add origin "$SOURCE_REPOSITORY"
+          git -C "$SOURCE_ROOT" fetch --depth=1 origin "$SOURCE_COMMIT"
+          git -C "$SOURCE_ROOT" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_COMMIT"
+          git -C "$SOURCE_ROOT" remote remove origin
+          printf '%s\n' "$SOURCE_COMMIT" > "$RESULT_ROOT/source-commit.txt"
+          printf '%s\n' "$TRACECITE_MCP_REF" > "$RESULT_ROOT/tracecite-mcp-ref.txt"
+
+      - name: Run formal TraceCite 140039 investigation
+        shell: bash
+        run: |
+          set +e
+          python benchmarks/agent-investigation/agent_flow_runner.py \
+            --agent pi \
+            --mode tracecite \
+            --source-root "$SOURCE_ROOT" \
+            --runtime-log "$RUNTIME_LOG" \
+            --result-root "$RESULT_ROOT" \
+            --question-file "$QUESTION_FILE" \
+            --provider "$PI_PROVIDER" \
+            --model "$BENCH_MODEL" \
+            --api-key "$GMI_API_KEY" \
+            --thinking off \
+            --timeout-seconds 1200 \
+            --host-extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_log_code_benchmark_host.ts" \
+            --skill-dir "$GITHUB_WORKSPACE/tracecite-mcp/skills/tracecite" \
+            --mcp-evidence-root "$WORK_ROOT/evidence" \
+            --mcp-state-dir "$RESULT_ROOT/tracecite-mcp-state"
+          code=$?
+          set -e
+          echo "runner_exit=$code"
+
+      - name: Convert and score
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          SESSION="$(find "$RESULT_ROOT/pi-tracecite-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          ANSWER="$RESULT_ROOT/pi-tracecite-answer.md"
+          EXIT="$RESULT_ROOT/pi-tracecite-exit.txt"
+          if [[ -n "$SESSION" && -f "$ANSWER" && -f "$EXIT" ]]; then
+            TRANSCRIPT="$RESULT_ROOT/pi-tracecite-transcript.jsonl"
+            SCORE="$RESULT_ROOT/pi-tracecite-score.json"
+            RUN_RESULT="$RESULT_ROOT/pi-tracecite-run-result.json"
+            python benchmarks/agent-investigation/pi_session_to_transcript.py \
+              "$SESSION" "$ANSWER" "$TRANSCRIPT" \
+              --mode "pi-log-code-tracecite-formal" --model "$BENCH_MODEL"
+            python benchmarks/agent-investigation/log_code_score.py \
+              "$CASE_DIR" "$TRANSCRIPT" > "$SCORE" || true
+            if [[ -f "$SCORE" ]]; then
+              python benchmarks/agent-investigation/run_result.py \
+                --score "$SCORE" \
+                --exit-code-file "$EXIT" \
+                --stderr "$RESULT_ROOT/pi-tracecite-stderr.log" \
+                --session "$SESSION" \
+                --transcript "$TRANSCRIPT" \
+                --output "$RUN_RESULT" || true
+            fi
+          fi
+
+      - name: Verify end-to-end result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          root = Path(os.environ['RESULT_ROOT'])
+          answer = root / 'pi-tracecite-answer.md'
+          exit_file = root / 'pi-tracecite-exit.txt'
+          trace_access = root / 'tracecite-tracecite-runtime-log-access.jsonl'
+          native_access = root / 'tracecite-native-runtime-evidence-access.jsonl'
+          activity = root / 'tracecite-host-tool-activity.json'
+          run_result_path = root / 'pi-tracecite-run-result.json'
+          sessions = list((root / 'pi-tracecite-session').glob('*.jsonl'))
+
+          exit_code = int(exit_file.read_text().strip()) if exit_file.exists() else None
+          answer_nonempty = answer.exists() and bool(answer.read_text(errors='replace').strip())
+          trace_calls = sum(1 for _ in trace_access.open()) if trace_access.exists() else 0
+          native_calls = sum(1 for _ in native_access.open()) if native_access.exists() else 0
+          skill_loaded = False
+          if sessions:
+              session_text = sessions[0].read_text(encoding='utf-8', errors='replace')
+              skill_loaded = 'TraceCite MCP Agent Skill' in session_text and 'Golden rules' in session_text
+
+          run_result = json.loads(run_result_path.read_text()) if run_result_path.exists() else {}
+          primary = ((run_result.get('task_result') or {}).get('primary_evaluation') or {})
+          tokens = run_result.get('token_usage') or {}
+          validity = run_result.get('run_validity') or {}
+          tool_summary = json.loads(activity.read_text()).get('summary') if activity.exists() else None
+
+          summary = {
+              'schema_version': 3,
+              'case_id': os.environ['CASE_ID'],
+              'integration': 'formal-agent-runner-explicit-tracecite-skill-standard-mcp-core',
+              'mcp_sha': os.environ['TRACECITE_MCP_REF'],
+              'core_sha': os.environ.get('GITHUB_SHA'),
+              'model': os.environ.get('BENCH_MODEL'),
+              'runtime_log_bytes': int(os.environ.get('RUNTIME_LOG_BYTES', '0') or 0),
+              'exit_code': exit_code,
+              'answer_nonempty': answer_nonempty,
+              'skill_loaded_before_investigation': skill_loaded,
+              'runtime_log_mcp_accesses': trace_calls,
+              'native_runtime_evidence_accesses': native_calls,
+              'tracecite_evidence_channel_clean': trace_calls > 0 and native_calls == 0,
+              'valid_for_comparison': validity.get('valid_for_comparison'),
+              'validity_reason': validity.get('reason'),
+              'root_cause_accurate': primary.get('root_cause_accurate'),
+              'evidence_chain_complete_and_bounded': primary.get('evidence_chain_complete_and_bounded'),
+              'evidence_boundary_respected': primary.get('evidence_boundary_respected'),
+              'fresh_input_tokens': tokens.get('fresh_input_tokens'),
+              'cached_input_tokens': tokens.get('cached_input_tokens'),
+              'fresh_plus_cached_input_tokens': tokens.get('fresh_plus_cached_input_tokens'),
+              'output_tokens': tokens.get('output_tokens'),
+              'model_calls': tokens.get('model_calls'),
+              'tool_summary': tool_summary,
+          }
+          (root / 'e2e-summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+          print(json.dumps(summary, indent=2))
+
+          failures = []
+          if exit_code != 0: failures.append(f'Agent runner exited with {exit_code}')
+          if not answer_nonempty: failures.append('final answer is empty')
+          if not skill_loaded: failures.append('explicit TraceCite Skill was not expanded into the Agent session')
+          if trace_calls <= 0: failures.append('runtime log was never accessed through TraceCite MCP')
+          if primary.get('root_cause_accurate') is not True: failures.append('root cause was not accurate')
+          if primary.get('evidence_boundary_respected') is not True: failures.append('evidence boundary was not respected')
+          if primary.get('evidence_chain_complete_and_bounded') is not True: failures.append('evidence chain was not complete and bounded')
+          if failures:
+              raise SystemExit('; '.join(failures))
+          PY
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracecite-140039-e2e
+          path: ${{ env.RESULT_ROOT }}
+          if-no-files-found: warn

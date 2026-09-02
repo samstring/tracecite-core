@@ -18,14 +18,35 @@ def _score(passed: bool = True):
         "passed": passed,
         "legacy_passed": False,
         "support_aware_passed": passed,
+        "primary_evaluation": {
+            "root_cause_accurate": passed,
+            "evidence_chain_complete_and_bounded": passed,
+            "evidence_boundary_respected": passed,
+        },
         "quality": {"support_level_accuracy": 1.0},
-        "context_cost": {"tool_calls": 3},
+        "context_cost": {
+            "tool_calls": 3,
+            "model_calls": 2,
+            "usage_source": "model_events",
+            "reported_input_tokens": 100,
+            "reported_cached_input_tokens": 300,
+            "reported_output_tokens": 25,
+        },
     }
 
 
 def test_clean_run_is_valid_independently_of_task_result() -> None:
     result = MODULE.build_run_result(_score(True), exit_code=0)
     assert result["task_result"]["passed"] is True
+    assert result["task_result"]["primary_evaluation"]["root_cause_accurate"] is True
+    assert result["token_usage"] == {
+        "fresh_input_tokens": 100,
+        "cached_input_tokens": 300,
+        "fresh_plus_cached_input_tokens": 400,
+        "output_tokens": 25,
+        "model_calls": 2,
+        "usage_source": "model_events",
+    }
     assert result["run_validity"] == {
         "valid_for_comparison": True,
         "reason": "clean",

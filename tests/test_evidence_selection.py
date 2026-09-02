@@ -49,3 +49,28 @@ def test_repeated_low_severity_signal_does_not_hide_unique_fatal(tmp_path) -> No
 
     assert hints[0]["line"] == 9000
     assert hints[0]["severity"] == 4
+
+
+def test_long_runtime_signal_keeps_failure_suffix(tmp_path) -> None:
+    records = tmp_path / "records.jsonl"
+    long_prefix = (
+        'Jun 26 06:16:33 host containerd: level=error msg="RunPodSandbox for '
+        'name:kube-scheduler uid:abcdef namespace:kube-system failed to create task: '
+        + ("wrapper-detail " * 20)
+    )
+    rows = [
+        _record(
+            1040,
+            long_prefix
+            + "unable to init seccomp: unable to fetch "
+            + "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV bit: invalid argument",
+        )
+    ]
+    records.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    hints = select_signal_hints(records, limit=1, signature_cap=8)
+
+    assert len(hints[0]["label"]) <= 240
+    assert "RunPodSandbox" in hints[0]["label"]
+    assert "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV" in hints[0]["label"]
+    assert "invalid argument" in hints[0]["label"]
