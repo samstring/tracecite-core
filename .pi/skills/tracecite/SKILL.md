@@ -98,7 +98,16 @@ path B: holds B -> waits A   [basis]
 impact: requested operation is blocked   [basis]
 ```
 
-A deadlock/lock-order inversion requires both opposing edges, each `observed` or `supported_inference`. One waiter, many waiters, a hotspot, or a writer queue is not a cycle.
+A deadlock/lock-order inversion requires both opposing edges, each `observed` or `supported_inference`. One waiter, many waiters, a hotspot, a writer queue, or two groups waiting on the same mutex is not a cycle.
+
+**Mandatory cycle audit before naming deadlock / lock-order inversion:**
+
+```text
+EDGE 1: holder of A (or execution-phase proof of holding A) -> blocked acquiring B
+EDGE 2: holder of B (or execution-phase proof of holding B) -> blocked acquiring A
+```
+
+Both rows must have a concrete supplied-evidence basis. A waiter on A cannot serve as proof that A is held by that waiter. Multiple goroutines blocked on B do not establish `holds B -> waits A`. If one opposing edge is missing, do **not** call the mechanism a deadlock or lock-order inversion; describe only the supported contention/bottleneck and mark the missing edge `bounded_unknown`.
 
 # Evidence boundary
 
@@ -118,7 +127,19 @@ Do not use numeric address proximity to establish object/field identity. Use add
 
 If the supplied artifact cannot represent a requested later/external state, stop at the last supported in-artifact transition. Mark the rest `bounded_unknown` or describe only the minimal consequence that follows from the closed path as an inference. **Do not search broadly for external process state after this boundary is known.**
 
-In-process stack evidence alone does not prove process creation state, handshake completion, reaping, orphaning, cleanup, restart behavior, or kernel lifecycle behavior.
+In-process stack evidence alone does not prove process creation state, handshake completion, reply/registration completion, process reaping, orphaning, cleanup, restart behavior, kernel lifecycle behavior, or that an external process is at a specific lifecycle stage merely because related containerd goroutines/FIFO/ttrpc frames are present.
+
+**Final-answer lifecycle audit:** do not state any of the following as fact unless the supplied artifact directly represents that state or a closed causal claim establishes it:
+
+```text
+process/shim was already forked or started
+process is stuck at runc init / a specific external stage
+containerd did or did not receive a reply/registration
+restart clears the lock/state and therefore recovers
+cleanup/reaping/termination is blocked or will occur
+```
+
+If such a downstream story would be useful but is not represented, say the snapshot only proves the in-process blocking boundary and stop there.
 
 # Claim-driven TraceCite use
 
