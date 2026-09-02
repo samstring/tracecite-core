@@ -47,6 +47,17 @@ def test_skill_has_hard_pre_call_proof_gate() -> None:
     assert "discriminator" not in runtime
 
 
+def test_skill_prioritizes_proof_compression_without_runtime_policy() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Non-negotiable proof compression" in skill
+    assert "may only support `waits X`" in skill
+    assert "exclude equivalent waiters from both further investigation and final prose" in skill
+    assert "omit those claims rather than complete the story speculatively" in skill
+    assert "Non-negotiable proof compression" not in runtime
+    assert "exclude equivalent waiters" not in runtime
+
+
 def test_skill_forces_mechanism_first_and_bounds_downstream_state() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     assert "mechanism / required causal edges" in skill
