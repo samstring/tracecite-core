@@ -114,7 +114,7 @@ jobs:
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
           REQUEST="用 tracecite 分析这个问题。${QUESTION}"
-          SYSTEM_PROMPT="You are a coding agent investigating supplied runtime evidence. Follow the user's explicit request to use TraceCite. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims."
+          SYSTEM_PROMPT="You are a coding agent investigating supplied runtime evidence. Follow the user's explicit request to use TraceCite. Keep the investigation bounded. Once the minimum causal proof required for the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Do not stop while a required causal edge is still unresolved. Cite exact evidence lines for material factual claims."
           mkdir -p "$RESULT/session"
           cd "$INPUT_ROOT"
           unset TRACECITE_BENCHMARK_MODE || true
