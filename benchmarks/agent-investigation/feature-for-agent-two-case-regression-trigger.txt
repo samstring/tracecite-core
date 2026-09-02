@@ -1,0 +1,1 @@
+trigger 2026-09-02 feature_for_agent regression smoke: containerd-6772 + kubernetes-140039-runc-5347; gmi1/gmi2; native vs TraceCite bounded protocol
