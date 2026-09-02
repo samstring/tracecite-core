@@ -64,7 +64,7 @@ nearby pointer values == same object/field identity
 absence of holder     == holder exited/vanished
 ```
 
-A remembered implementation detail may suggest a query only when supplied evidence exposes a concrete discriminator. Do not narrate unseen code or hidden cleanup/process/kernel behavior as fact.
+A remembered implementation detail may suggest a query only when supplied evidence exposes a concrete discriminator. Do not narrate unseen code or hidden cleanup/process/kernel behavior as fact. Do not claim exhaustive uniqueness such as "there is no other holder" from search absence alone.
 
 # Monotonic Causal Proof Ledger
 
@@ -84,6 +84,16 @@ bounded_unknown
 
 Claim identity is semantic, not query wording. `holder`, `lock owner`, `active writer`, and synonymous searches for the same missing causal fact are the same claim.
 
+# Claim admission and scope lock
+
+New claims are not free. Admit a new material claim only when it is required to answer the user's question **and** the supplied evidence already exposes a concrete discriminator that could connect it to the current proof.
+
+A user-reported downstream symptom does not by itself authorize a new investigation branch. If the root mechanism and direct impact are already closed, and supplied evidence does not already expose a continuous causal bridge to that downstream symptom, mark that downstream explanation `bounded_unknown` and answer with the boundary. Do not search broadly for a bridge after closure.
+
+Before any additional TraceCite call after a mechanism candidate exists, the call must be able to name one pre-existing `unresolved`/`contradicted` claim and the specific result that could change the answer. If it cannot, the proof scope is locked and the next action is the final answer.
+
+A new hint, cluster, subsystem, count, long-lived goroutine, or co-occurring process-shaped stack does not unlock the scope. Only material contradictory evidence may reopen a closed claim.
+
 # Claim-driven TraceCite use
 
 Every TraceCite call MUST either:
@@ -101,6 +111,8 @@ For one claim:
 4. Update the claim.
 5. Stop querying it when observed, supported_inference, or bounded_unknown.
 ```
+
+Issue only the single strongest TraceCite retrieval/materialization action needed for the current claim before reassessing proof state. Do not fire multiple speculative TraceCite searches in parallel for alternative stories.
 
 Prefer one strongest representative instance per causal role. More equivalent waiters, stacks, counts, adjacent ranges, synonyms, rare hints, or structural clusters do not strengthen a closed claim and do not create a new claim.
 
@@ -124,7 +136,7 @@ Once mechanism and direct impact are closed, do not start a secondary census of 
 
 A downstream causal claim requires a continuous supplied-evidence link: a direct call/causal path, explicit identity correlation, or supplied source/context establishing the transition. Co-occurrence, duration, count, or a generic long-lived waiter is insufficient. Do not reclassify normal-looking wait/watch goroutines as pathological without differentiating evidence.
 
-If the artifact shows an operation blocked before completion but cannot represent a later external process/lifecycle state, close the direct impact at that boundary and qualify the downstream consequence without more retrieval.
+If the artifact shows an operation blocked before completion but cannot represent a later external process/lifecycle state, close the direct impact at that boundary and qualify the downstream consequence without more retrieval. In-process stack evidence does not by itself prove external process creation, handshake completion, reaping, cleanup, orphaning, or restart effects.
 
 # Stop and final answer
 
