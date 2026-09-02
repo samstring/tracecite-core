@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "case_id": "moby-35310",
+  "confirmed_by": [
+    "https://github.com/moby/moby/issues/35310",
+    "https://github.com/moby/libnetwork/pull/2004",
+    "https://github.com/moby/moby/pull/35422"
+  ],
+  "summary": "The atomic-key error is a symptom of a lifecycle bug, not ordinary harmless concurrent contention. Network teardown removes the network/pool while per-network load-balancer endpoint cleanup can still run. The pre-fix endpoint-count mutation path calls updateToStore on endpoint_count state without first requiring that the object still exists. A late endpoint increment/decrement after network deletion can therefore recreate or leave endpoint_count state that belongs to the deleted network. When the same network is created again, the stale store object/version conflicts with the new lifecycle and surfaces as ErrKeyModified / Unable to complete atomic operation, key modified. Retrying the modified-key error cannot repair the underlying out-of-order lifecycle.",
+  "required_concepts": [
+    {
+      "id": "teardown-before-endpoint-cleanup",
+      "patterns": [
+        "(network|address pool|pool).{0,140}(released|removed|deleted|gone|not found).{0,220}(endpoint|cleanup)",
+        "(endpoint|cleanup).{0,160}(after|while).{0,120}(network|pool).{0,100}(deleted|removed|gone|not found)"
+      ]
+    },
+    {
+      "id": "late-endpoint-count-store-update",
+      "patterns": [
+        "(endpoint_count|endpoint.?cnt).{0,220}(updateToStore|update.{0,40}store).{0,220}(missing|deleted|gone|create|recreate|persist|exist)",
+        "(updateToStore|update.{0,40}store).{0,220}(endpoint_count|endpoint.?cnt).{0,220}(after|deleted|missing|recreate|create)"
+      ]
+    },
+    {
+      "id": "stale-count-conflicts-on-recreate",
+      "patterns": [
+        "(stale|orphan|leftover|recreated|old).{0,140}(endpoint_count|endpoint.?cnt|key|object).{0,220}(same network|network.{0,40}recreat|create.{0,40}again|new network)",
+        "(same network|network.{0,40}recreat|create.{0,40}again).{0,220}(stale|orphan|leftover|endpoint_count|endpoint.?cnt|key)"
+      ]
+    },
+    {
+      "id": "key-modified-is-symptom",
+      "patterns": [
+        "(ErrKeyModified|key modified).{0,180}(symptom|retry|collision|stale|lifecycle|not.{0,40}root)",
+        "(retry|retrying).{0,160}(ErrKeyModified|key modified).{0,180}(not|cannot|does not|won't).{0,100}(fix|repair|prevent|safe)"
+      ]
+    }
+  ],
+  "evidence_markers": [
+    "ReleasePool(LocalDefault/10.0.4.0/24)",
+    "network id \"pz8tw8vw40ogxi01c3pcthldi\" not found",
+    "Unable to complete atomic operation, key modified",
+    "updateToStore(ec)"
+  ],
+  "thresholds": {
+    "concept_recall": 0.75,
+    "evidence_marker_recall": 1.0
+  },
+  "leak_terms": [
+    "endpoint_cnt store updates should not create an object",
+    "Move load balancer sandbox creation/deletion into libnetwork"
+  ]
+}
