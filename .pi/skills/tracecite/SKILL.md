@@ -111,6 +111,27 @@ captured line order             != happens-before or event time
 
 If the user's requested conclusion necessarily depends on inference from the supplied artifact, state the inference and its evidentiary basis rather than searching indefinitely for impossible proof.
 
+# Synchronization evidence semantics
+
+When the incident involves blocking, contention, deadlock, or other synchronization failure, interpret stacks as a **minimal wait-for graph**, not as a census of every waiter.
+
+A blocked synchronization-acquisition frame such as `Lock`, `RLock`, semaphore acquire, condition wait, channel receive/send, or equivalent means that execution is **waiting at that operation**. It does not by itself prove that the goroutine already holds the synchronization object it is waiting to acquire.
+
+An enclosing caller lower in the same stack may still be inside a different critical section that it entered before invoking the blocked callee. Infer that an outer lock is held only when the supplied evidence supports the critical-section ordering: for example, a representative stack shows execution has progressed from the outer acquisition into a nested call that is now blocked, or other supplied stacks/line locations establish the acquisition boundary. If the artifact cannot establish that ordering directly, keep it as a qualified inference rather than repeatedly searching for invisible lock history.
+
+For a candidate lock-ordering cycle, reconstruct only the distinct causal edges needed to distinguish a cycle from ordinary contention:
+
+```text
+path A: outer critical section / held resource -> waits for resource B
+path B: outer critical section / held resource B -> waits for resource A
+```
+
+Do not call something a deadlock merely because many goroutines wait on one mutex, and do not downgrade a supported cycle to a convoy merely because the acquisition frame of a held *outer* lock is no longer visible on the current stack.
+
+Once one strongest representative stack supports each distinct opposing path, the synchronization mechanism is closed unless observed evidence contradicts an edge. More equivalent waiters, counts, neighboring stacks, alternate search terms, or repeated lock-address searches are not additional answer obligations.
+
+For structural causal claims, prefer **representative evidence over exhaustive census**: one fully materialized exemplar per distinct causal path plus the minimum evidence connecting the mechanism to the user-visible impact is sufficient unless the question explicitly asks about frequency, prevalence, scope, or ordering, or multiplicity distinguishes competing explanations.
+
 # What does not justify another round
 
 These are not answer obligations:
@@ -184,9 +205,10 @@ routing/coverage metadata != semantic importance
 3. Retrieve only the evidence needed for that obligation.
 4. Materialize incomplete body/context only when that obligation depends on it; do not loop on an already-covered or empty range.
 5. Mark the obligation supported, contradicted, still open, or qualified_boundary.
-6. If the same obligation has two non-advancing rounds with no new observed anchor, stop reformulating it and qualify the evidence boundary.
-7. Do not create extra obligations for reassurance, completeness, curiosity, or hypothetical alternatives unsupported by observed evidence.
-8. As soon as every explicit answer obligation is supported or appropriately qualified and no observed contradiction remains, transition directly to the final answer with no intermediate verification/meta-planning turn.
+6. For synchronization failures, close the minimal wait-for graph from representative opposing paths before counting more equivalent waiters.
+7. If the same obligation has two non-advancing rounds with no new observed anchor, stop reformulating it and qualify the evidence boundary.
+8. Do not create extra obligations for reassurance, completeness, curiosity, or hypothetical alternatives unsupported by observed evidence.
+9. As soon as every explicit answer obligation is supported or appropriately qualified and no observed contradiction remains, transition directly to the final answer with no intermediate verification/meta-planning turn.
 ```
 
 TraceCite's job is to make the evidence recoverable, bounded, line-addressable, provenance-preserving, and mechanically non-redundant.
