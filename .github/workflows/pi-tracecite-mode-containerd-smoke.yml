@@ -51,7 +51,8 @@ jobs:
             tests/test_pi_four_public_strict_boundary.py \
             tests/test_pi_source_identity_projection.py \
             tests/test_evidence_selection_diversity.py \
-            tests/test_pi_navigation_hint_projection.py
+            tests/test_pi_navigation_hint_projection.py \
+            tests/test_pi_tracecite_runtime_neutral.py
 
       - name: Configure GMI model
         shell: bash
@@ -93,7 +94,7 @@ jobs:
           python -m tracecite.benchmarking prepare "$CASE_DIR" --work-dir "$RESULT/prepared" > "$RESULT/prepare.json"
           PREPARED="$(find "$RESULT/prepared" -name prepared.json -type f -print -quit)"
           test -n "$PREPARED"
-          python - "$PREPARED" >> "$GITHUB_ENV" <<'PY'
+          python - "$PREPARED" "$CASE_DIR" >> "$GITHUB_ENV" <<'PY'
           import json, os, sys
           from pathlib import Path
           data = json.loads(Path(sys.argv[1]).read_text())
@@ -103,6 +104,7 @@ jobs:
           print(f'INPUT_ROOT={common}')
           print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
           print('INPUT_FILES=' + ','.join(p.name for p in files))
+          print(f'CASE_DIR_ABS={Path(sys.argv[2]).resolve()}')
           PY
 
       - name: Run Pi with prompt-triggered TraceCite mode
@@ -135,7 +137,7 @@ jobs:
           set -e
           echo "$code" > "$RESULT/exit.txt"
 
-      - name: Inspect prompt-triggered evidence channel
+      - name: Enforce prompt-triggered TraceCite-only evidence channel
         if: always()
         shell: bash
         run: |
@@ -146,23 +148,26 @@ jobs:
           blocked_attempts=0
           [[ -f "$TRACE" ]] && trace_calls="$(grep -cve '^$' "$TRACE" || true)"
           [[ -f "$BLOCKED" ]] && blocked_attempts="$(grep -cve '^$' "$BLOCKED" || true)"
-          python - "$trace_calls" "$blocked_attempts" "$RESULT/mode-status.json" <<'PY'
+          exit_code="$(cat "$RESULT/exit.txt" 2>/dev/null || echo 999)"
+          python - "$trace_calls" "$blocked_attempts" "$exit_code" "$RESULT/mode-status.json" <<'PY'
           import json, sys
-          trace_calls, blocked_attempts = map(int, sys.argv[1:3])
+          trace_calls, blocked_attempts, exit_code = map(int, sys.argv[1:4])
           payload = {
               'schema_version': 1,
               'activation': 'explicit_user_prompt',
               'benchmark_mode_forced': False,
               'tracecite_evidence_calls': trace_calls,
               'blocked_native_evidence_attempts': blocked_attempts,
-              'tracecite_mode_observed': trace_calls > 0 or blocked_attempts > 0,
+              'tracecite_mode_observed': trace_calls > 0,
+              'agent_exit_code': exit_code,
+              'channel_valid': exit_code == 0 and trace_calls > 0 and blocked_attempts == 0,
           }
-          open(sys.argv[3], 'w').write(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          open(sys.argv[4], 'w').write(json.dumps(payload, indent=2, sort_keys=True) + '\n')
           print(json.dumps(payload, indent=2, sort_keys=True))
+          if not payload['channel_valid']:
+              raise SystemExit('tracecite_product_evidence_channel_invalid')
           PY
-          cat "$RESULT/exit.txt" || true
           tail -80 "$RESULT/stderr.log" || true
-          test -s "$RESULT/mode-status.json"
 
       - name: Convert transcript and collect usage
         if: always()
@@ -194,6 +199,24 @@ jobs:
                       totals['tool_calls'] += 1
           (root/'usage.json').write_text(json.dumps(totals, indent=2, sort_keys=True)+'\n')
           print(json.dumps(totals, indent=2, sort_keys=True))
+          PY
+
+      - name: Enforce gold answer correctness
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$RESULT/transcript.jsonl"
+          python -m tracecite.benchmarking score \
+            "$CASE_DIR_ABS" "$RESULT/transcript.jsonl" \
+            > "$RESULT/score.json"
+          python - "$RESULT/score.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          score = json.loads(Path(sys.argv[1]).read_text())
+          print(json.dumps(score, indent=2, sort_keys=True))
+          if not score.get('passed'):
+              raise SystemExit('tracecite_answer_correctness_gate_failed')
           PY
 
       - name: Upload smoke result
