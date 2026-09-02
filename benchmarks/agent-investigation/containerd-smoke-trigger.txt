@@ -1,3 +1,4 @@
-trigger: 2026-09-02 tracecite v4 stability round 1
-skill_head: 3d8f28b88d9fc459c78fa3ba4c58e0cd42639188
+trigger: 2026-09-02 tracecite v5 stability round 1
 tracecite_only_tools: true
+runtime_agent_steering: false
+correctness_gate: true
