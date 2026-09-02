@@ -8,6 +8,8 @@ compatibility: Requires the TraceCite Pi extension. tracecite_search/tracecite_e
 
 For diagnosis/root-cause work, build the **smallest causal proof that answers the question**. Do not perform an evidence census.
 
+**Non-negotiable proof compression:** a representative blocked at `acquire(X)` may only support `waits X`; it must never be relabeled as a holder/owner of X in the final answer. Once one representative closes each required causal role, exclude equivalent waiters from both further investigation and final prose. In-process stack/FIFO/ttrpc presence cannot support external process lifecycle, restart, cleanup, reaping, or orphan claims; omit those claims rather than complete the story speculatively.
+
 Before EVERY TraceCite call, identify internally:
 
 ```text
