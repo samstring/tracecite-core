@@ -1,11 +1,11 @@
-trigger: 2026-09-02 minimal-causal-closure diagnostic
+trigger: 2026-09-02 monotonic-causal-proof diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 correctness_gate: auxiliary_only
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: minimal-answer-obligations-causal-closure-terminal-transition
+adaptive_stopping_skill: monotonic-causal-proof-ledger
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: semantic-correctness-token-efficiency-with-evidence-intelligence
+diagnostic_focus: semantic-correctness-token-efficiency-proof-monotonicity
 agent_timeout_seconds: 900
