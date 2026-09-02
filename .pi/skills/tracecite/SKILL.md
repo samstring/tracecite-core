@@ -12,9 +12,9 @@ Build the **smallest supported causal proof**. Do not perform an evidence census
 
 Immediately before answering, delete or qualify every material sentence that is not supported by the supplied artifact. This gate overrides completeness and helpfulness.
 
-1. **Waiter != holder.** `blocked at acquire(X)`, `lockSlow(X)`, `RLock(X)`, or queued `Lock(X)` proves only `waits X`. Multiple waiters or lock exclusivity never identify a holder.
+1. **Waiter != holder.** `blocked at acquire(X)`, `lockSlow(X)`, `RLock(X)`, or queued `Lock(X)` proves only `waits X`. Multiple waiters or lock exclusivity never identify a holder. A blocked `RLock(X)` does not prove that a writer currently holds X; it may also reflect queued-writer preference. Do not convert a one-resource waiter pattern into a holder edge.
 2. **A claimed current hold needs current-ownership proof.** A caller frame or an earlier acquisition alone is insufficient. A current hold may, however, be a `supported_inference` when supplied evidence establishes the full control-flow interval: the same execution acquired Y, entered the currently blocked nested call before any possible release of Y, and the release cannot execute until that nested call returns (for example, a directly evidenced lock scope or deferred release). Do not require a separate visible "holder frame" when this interval is actually established. If acquisition-before-current-call or release-after-return is missing, mark the hold `bounded_unknown`.
-3. **Deadlock/cycle/lock-order inversion requires two independently supported current edges:** `holds A -> waits B` and `holds B -> waits A`. Either edge may use direct observation or the control-flow ownership proof above, but not an unobserved holder, waiter census, pointer proximity, or guessed lock scope. If either edge lacks current-holder proof, do not establish a cycle; report only the supported blocking/contention and the missing edge as unknown. **Do not use the words deadlock, cycle, cyclic wait, lock-order inversion, or AB-BA in the final conclusion unless both current edges are present in the proof ledger with supplied-evidence basis.**
+3. **Deadlock/cycle/lock-order inversion requires two independently supported current edges:** `holds A -> waits B` and `holds B -> waits A`. Either edge may use direct observation or the control-flow ownership proof above, but not an unobserved holder, waiter census, pointer proximity, queued-reader/writer semantics, or guessed lock scope. Repeated waits on one resource establish contention only, not an opposing causal path. If either edge lacks current-holder proof, do not establish a cycle; report only the supported blocking/contention and the missing edge as unknown. **Do not use the words deadlock, cycle, cyclic wait, lock-order inversion, or AB-BA in the final conclusion unless both current edges are present in the proof ledger with supplied-evidence basis.**
 4. **Do not manufacture identity.** Pointer proximity, guessed struct layout, helper names, or model-known source code cannot establish object/request/process identity.
 5. **Chronology conservation.** If supplied evidence shows a request blocked before stage S, do not say that same blocked attempt caused or repeatedly executed stages after S unless supplied evidence independently shows that later stage for that attempt.
 6. **Artifact lifecycle boundary.** An in-process goroutine snapshot does not by itself prove that a shim/process was forked, where an external process is waiting, whether an RPC/reply/registration completed, what a retry created, whether cleanup/reaping is blocked, or why restart recovers. Concurrent goroutines in Wait/FIFO/ttrpc/process helpers do not establish that they belong to the blocked request. Omit those claims unless identity and causal linkage are directly represented in supplied evidence.
@@ -42,6 +42,8 @@ Hard implications:
 ```text
 blocked at acquire(X) -> waits X
 blocked at acquire(X) -/-> holds X
+blocked at RLock(X) -/-> writer currently holds X
+repeated waits on X -/-> opposing causal edge
 caller frame alone -/-> current ownership
 acquire(Y) + current nested call + release only after nested return -> may support currently holds Y
 unobserved holder -/-> supported holder edge
@@ -71,7 +73,7 @@ Transport limits per investigation:
 - after two consecutive non-advancing calls for the same claim, mark it `bounded_unknown`
 - never use extra calls to confirm an already closed claim
 
-Every TraceCite result may include a mechanical `tracecite_host_activity_summary.total_tool_calls`. Treat that number as the authoritative running evidence-call count. **Before issuing another TraceCite call, if the latest observed total is 16 or greater, do not call a tool again.** Resolve remaining claims as `bounded_unknown`, run the final gate, and answer. Do not estimate or restart the count from memory.
+Every TraceCite result may include a mechanical `tracecite_host_activity_summary.total_tool_calls`. Treat that number as the authoritative running evidence-call count. **Inspect this field before interpreting or acting on the returned evidence. If the returned total is 16 or greater, that tool result is the terminal retrieval result: do not issue another TraceCite call for any reason.** Resolve remaining claims as `bounded_unknown`, run the final gate, and answer. Do not estimate or restart the count from memory.
 
 At 16 evidence calls, stop retrieval unconditionally, resolve remaining claims as `bounded_unknown`, run the final gate, and answer.
 

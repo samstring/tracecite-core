@@ -56,7 +56,8 @@ def test_skill_requires_two_independent_opposing_edges() -> None:
     assert "holds B -> waits A" in skill
     assert "report only the supported blocking/contention and the missing edge as unknown" in skill
     assert "Do not use the words deadlock, cycle, cyclic wait, lock-order inversion, or AB-BA" in skill
-    assert "but not an unobserved holder, waiter census, pointer proximity, or guessed lock scope" in skill
+    assert "but not an unobserved holder, waiter census, pointer proximity, queued-reader/writer semantics, or guessed lock scope" in skill
+    assert "Repeated waits on one resource establish contention only, not an opposing causal path" in skill
     assert "unobserved holder -/-> supported holder edge" in skill
     assert "Deadlock/cycle/lock-order inversion" not in runtime
     assert "bounded_unknown" not in runtime
@@ -65,8 +66,10 @@ def test_skill_requires_two_independent_opposing_edges() -> None:
 def test_skill_rejects_exclusivity_and_rlock_as_holder_proof() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     assert "Multiple waiters or lock exclusivity never identify a holder" in skill
-    assert "`RLock(X)`" in skill
-    assert "proves only `waits X`" in skill
+    assert "A blocked `RLock(X)` does not prove that a writer currently holds X" in skill
+    assert "queued-writer preference" in skill
+    assert "blocked at RLock(X) -/-> writer currently holds X" in skill
+    assert "repeated waits on X -/-> opposing causal edge" in skill
     assert "current hold needs current-ownership proof" in skill
 
 
@@ -136,7 +139,9 @@ def test_skill_bounds_transport_and_synonym_loops() -> None:
     assert "after two consecutive non-advancing calls for the same claim" in skill
     assert "Use one strongest representative per causal role" in skill
     assert "tracecite_host_activity_summary.total_tool_calls" in skill
-    assert "if the latest observed total is 16 or greater, do not call a tool again" in skill
+    assert "Inspect this field before interpreting or acting on the returned evidence" in skill
+    assert "If the returned total is 16 or greater, that tool result is the terminal retrieval result" in skill
+    assert "do not issue another TraceCite call for any reason" in skill
     assert "Do not estimate or restart the count from memory" in skill
     assert "absolute ceiling: 16" not in runtime
 
