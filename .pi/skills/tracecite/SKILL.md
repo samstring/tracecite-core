@@ -13,11 +13,11 @@ Build the **smallest supported causal proof**. Do not perform an evidence census
 Immediately before answering, delete or qualify every material sentence that is not supported by the supplied artifact. This gate overrides completeness and helpfulness.
 
 1. **Waiter != holder.** `blocked at acquire(X)`, `lockSlow(X)`, `RLock(X)`, or queued `Lock(X)` proves only `waits X`. Multiple waiters or lock exclusivity never identify a holder.
-2. **A claimed current hold needs current-ownership proof.** Earlier acquisition, source-line progress, an active caller frame, a remembered `defer Unlock`, or assumed lock scope does not prove the resource is still held at the observed block. If continued ownership is not represented by supplied evidence, mark it `bounded_unknown`.
-3. **Deadlock/cycle/lock-order inversion requires two independently supported current edges:** `holds A -> waits B` and `holds B -> waits A`. If either edge lacks current-holder proof, do not establish a cycle; report only the supported blocking/contention and the missing edge as unknown. **Do not use the words deadlock, cycle, cyclic wait, lock-order inversion, or AB-BA in the final conclusion unless both current edges are present in the proof ledger with supplied-evidence basis.** A logically necessary but unobserved holder is not a supported second edge.
+2. **A claimed current hold needs current-ownership proof.** A caller frame or an earlier acquisition alone is insufficient. A current hold may, however, be a `supported_inference` when supplied evidence establishes the full control-flow interval: the same execution acquired Y, entered the currently blocked nested call before any possible release of Y, and the release cannot execute until that nested call returns (for example, a directly evidenced lock scope or deferred release). Do not require a separate visible "holder frame" when this interval is actually established. If acquisition-before-current-call or release-after-return is missing, mark the hold `bounded_unknown`.
+3. **Deadlock/cycle/lock-order inversion requires two independently supported current edges:** `holds A -> waits B` and `holds B -> waits A`. Either edge may use direct observation or the control-flow ownership proof above, but not an unobserved holder, waiter census, pointer proximity, or guessed lock scope. If either edge lacks current-holder proof, do not establish a cycle; report only the supported blocking/contention and the missing edge as unknown. **Do not use the words deadlock, cycle, cyclic wait, lock-order inversion, or AB-BA in the final conclusion unless both current edges are present in the proof ledger with supplied-evidence basis.**
 4. **Do not manufacture identity.** Pointer proximity, guessed struct layout, helper names, or model-known source code cannot establish object/request/process identity.
 5. **Chronology conservation.** If supplied evidence shows a request blocked before stage S, do not say that same blocked attempt caused or repeatedly executed stages after S unless supplied evidence independently shows that later stage for that attempt.
-6. **Artifact lifecycle boundary.** An in-process goroutine snapshot does not by itself prove that a shim/process was forked, where an external process is waiting, whether an RPC/reply/registration completed, what a retry created, whether cleanup/reaping is blocked, or why restart recovers. Omit those claims unless directly represented in supplied evidence.
+6. **Artifact lifecycle boundary.** An in-process goroutine snapshot does not by itself prove that a shim/process was forked, where an external process is waiting, whether an RPC/reply/registration completed, what a retry created, whether cleanup/reaping is blocked, or why restart recovers. Concurrent goroutines in Wait/FIFO/ttrpc/process helpers do not establish that they belong to the blocked request. Omit those claims unless identity and causal linkage are directly represented in supplied evidence.
 
 When downstream lifecycle is outside the artifact, use one sentence such as: **“The supplied evidence supports the in-process blocking mechanism, but does not establish the downstream process/RPC/restart lifecycle.”** Then stop.
 
@@ -34,7 +34,7 @@ For each blocking representative normalize:
 ```text
 waits: resource at the blocking acquisition
 holds: only resources proven still held at that blocking point
-basis: exact supplied evidence for both waiting and any claimed current hold
+basis: exact supplied evidence for waiting and any claimed current hold
 ```
 
 Hard implications:
@@ -42,8 +42,8 @@ Hard implications:
 ```text
 blocked at acquire(X) -> waits X
 blocked at acquire(X) -/-> holds X
-passed acquire(Y) -/-> currently holds Y
-active caller frame -/-> current ownership
+caller frame alone -/-> current ownership
+acquire(Y) + current nested call + release only after nested return -> may support currently holds Y
 unobserved holder -/-> supported holder edge
 blocked before S -/-> same attempt reached stage after S
 ```
