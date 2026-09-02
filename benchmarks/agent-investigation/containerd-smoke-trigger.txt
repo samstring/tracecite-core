@@ -1,12 +1,12 @@
-trigger: 2026-09-02 required-edge-immediate-stop diagnostic
+trigger: 2026-09-02 diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
-pi_agent_system_steering: bounded-minimum-causal-proof-with-required-edge-immediate-stop
+pi_agent_system_steering: bounded-root-cause
 correctness_gate: auxiliary_only
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: explicit-opposing-edge-audit-and-lifecycle-boundary
+adaptive_stopping_skill: lifecycle-boundary
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: root-cause-correctness-latency-token-after-required-edge-closure
+diagnostic_focus: semantic-correctness-and-convergence
 agent_timeout_seconds: 900
