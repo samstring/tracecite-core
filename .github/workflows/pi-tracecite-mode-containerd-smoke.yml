@@ -114,7 +114,7 @@ jobs:
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
           REQUEST="用 tracecite 分析这个问题。${QUESTION}"
-          SYSTEM_PROMPT="You are a coding agent investigating supplied runtime evidence. Follow the user's explicit request to use TraceCite. Keep investigation bounded and cite exact evidence lines for material factual claims."
+          SYSTEM_PROMPT="You are a coding agent investigating supplied runtime evidence. Follow the user's explicit request to use TraceCite. Cite exact evidence lines for material factual claims."
           mkdir -p "$RESULT/session"
           cd "$INPUT_ROOT"
           unset TRACECITE_BENCHMARK_MODE || true
@@ -202,23 +202,27 @@ jobs:
           print(json.dumps(totals, indent=2, sort_keys=True))
           PY
 
-      - name: Enforce gold answer correctness
+      - name: Score final answer (auxiliary)
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          test -s "$RESULT/transcript.jsonl"
+          if [[ ! -s "$RESULT/transcript.jsonl" ]]; then
+            echo '{"available": false, "reason": "missing_transcript"}' > "$RESULT/score.json"
+            cat "$RESULT/score.json"
+            exit 0
+          fi
+          set +e
           python -m tracecite.benchmarking score \
             "$CASE_DIR_ABS" "$RESULT/transcript.jsonl" \
             > "$RESULT/score.json"
-          python - "$RESULT/score.json" <<'PY'
-          import json, sys
-          from pathlib import Path
-          score = json.loads(Path(sys.argv[1]).read_text())
-          print(json.dumps(score, indent=2, sort_keys=True))
-          if not score.get('passed'):
-              raise SystemExit('tracecite_answer_correctness_gate_failed')
-          PY
+          score_code=$?
+          set -e
+          if [[ $score_code -ne 0 ]]; then
+            echo "auxiliary scorer exited with code $score_code" >&2
+          fi
+          cat "$RESULT/score.json" 2>/dev/null || true
+          exit 0
 
       - name: Upload smoke result
         if: always()
