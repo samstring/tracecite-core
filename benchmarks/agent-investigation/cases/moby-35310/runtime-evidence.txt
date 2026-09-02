@@ -1,0 +1,22 @@
+Source: public debug evidence from moby/moby issue #35310. Root-cause commentary and fix discussion are intentionally excluded.
+
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.806458067-07:00" level=debug msg="releasing IPv4 pools from network orange (pz8tw8vw40ogxi01c3pcthldi)"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.806483219-07:00" level=debug msg="ReleaseAddress(LocalDefault/10.0.4.0/24, 10.0.4.1)"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.806504836-07:00" level=debug msg="ReleasePool(LocalDefault/10.0.4.0/24)"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.806643570-07:00" level=debug msg="moby-demo-ubuntu-1(48d7c3d0f4a7): leaving network pz8tw8vw40ogxi01c3pcthldi"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.806657694-07:00" level=debug msg="cleanupServiceDiscovery for network:pz8tw8vw40ogxi01c3pcthldi"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.806665552-07:00" level=debug msg="cleanupServiceBindings for pz8tw8vw40ogxi01c3pcthldi"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.806890107-07:00" level=warning msg="driver error deleting endpoint orange-endpoint : network id \"pz8tw8vw40ogxi01c3pcthldi\" not found"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.806904850-07:00" level=debug msg="Releasing addresses for endpoint orange-endpoint's interface on network orange"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.806915275-07:00" level=debug msg="ReleaseAddress(LocalDefault/10.0.4.0/24, 10.0.4.16)"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.806935796-07:00" level=warning msg="Failed to release ip address 10.0.4.16 on delete of endpoint orange-endpoint (d68ba4cb8deea9ed20c05c0abbd19c4db3250824dbc9133afc5bf2977f8e4765): cannot find address pool for poolID:LocalDefault/10.0.4.0/24"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.806986817-07:00" level=error msg="network orange remove failed: unknown network orange id pz8tw8vw40ogxi01c3pcthldi" module=node/agent node.id=mv4e72vawng0s82vvnb0tatc7
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.807004206-07:00" level=error msg="remove task failed" error="unknown network orange id pz8tw8vw40ogxi01c3pcthldi" module=node/agent node.id=mv4e72vawng0s82vvnb0tatc7 task.id=d675fekf2hc5vxx188d5c0r5e
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.807146117-07:00" level=warning msg="driver error deleting endpoint orange-endpoint : network id \"pz8tw8vw40ogxi01c3pcthldi\" not found"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.807160203-07:00" level=debug msg="Releasing addresses for endpoint orange-endpoint's interface on network orange"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.807169786-07:00" level=debug msg="ReleaseAddress(LocalDefault/10.0.4.0/24, 10.0.4.16)"
+Oct 26 09:43:11 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:11.807182810-07:00" level=warning msg="Failed to release ip address 10.0.4.16 on delete of endpoint orange-endpoint (d68ba4cb8deea9ed20c05c0abbd19c4db3250824dbc9133afc5bf2977f8e4765): cannot find address pool for poolID:LocalDefault/10.0.4.0/24"
+Oct 26 09:43:13 moby-demo-ubuntu-1 dockerd[14670]: time="2017-10-26T09:43:13.534861035-07:00" level=error msg="fatal task error" error="Unable to complete atomic operation, key modified" module=node/agent/taskmanager node.id=mv4e72vawng0s82vvnb0tatc7 service.id=m9484e8pmri988v4n3bossl0x task.id=c1qap6z4nr50k9cacus63d8is
+
+Later service updates repeatedly show tasks in Rejected state with:
+"Unable to complete atomic operation, key modified"
