@@ -132,6 +132,22 @@ Once one strongest representative stack supports each distinct opposing path, th
 
 For structural causal claims, prefer **representative evidence over exhaustive census**: one fully materialized exemplar per distinct causal path plus the minimum evidence connecting the mechanism to the user-visible impact is sufficient unless the question explicitly asks about frequency, prevalence, scope, or ordering, or multiplicity distinguishes competing explanations.
 
+# Final-answer evidence discipline
+
+The final answer must not become less correct by adding plausible but unsupported lifecycle details after the root cause is already established.
+
+For every material causal statement, use the shortest chain supported by the supplied evidence and distinguish:
+
+```text
+observed   directly present in materialized evidence
+inferred   follows from the observed paths but is not directly visible
+unknown    not established by the supplied artifact
+```
+
+Do not assert hidden process-management behavior, cleanup/reaping behavior, restart side effects, historical ownership, kernel behavior, or other unobserved lifecycle events merely because they would make a complete story. If the user's symptom can be explained by the supported mechanism without such a claim, omit it. If a requested link necessarily exceeds what the artifact directly shows, state it as a bounded inference and name the evidentiary boundary.
+
+A correct root-cause answer is preferable to a broader answer containing unnecessary speculative claims. Do not expand the answer beyond the user's material obligations just to explain every secondary symptom.
+
 # What does not justify another round
 
 These are not answer obligations:
@@ -209,6 +225,7 @@ routing/coverage metadata != semantic importance
 7. If the same obligation has two non-advancing rounds with no new observed anchor, stop reformulating it and qualify the evidence boundary.
 8. Do not create extra obligations for reassurance, completeness, curiosity, or hypothetical alternatives unsupported by observed evidence.
 9. As soon as every explicit answer obligation is supported or appropriately qualified and no observed contradiction remains, transition directly to the final answer with no intermediate verification/meta-planning turn.
+10. In the final answer, omit unsupported lifecycle extrapolation; qualify any required link that the supplied artifact cannot directly establish.
 ```
 
 TraceCite's job is to make the evidence recoverable, bounded, line-addressable, provenance-preserving, and mechanically non-redundant.
