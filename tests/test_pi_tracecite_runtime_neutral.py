@@ -8,7 +8,6 @@ SKILL = ROOT / ".pi" / "skills" / "tracecite" / "SKILL.md"
 
 def test_tracecite_runtime_returns_evidence_without_investigation_policy() -> None:
     text = IMPL.read_text(encoding="utf-8")
-
     assert "agent_feedback" not in text
     assert "convergence_checkpoint" not in text
     assert "checkpoint_required" not in text
@@ -20,7 +19,6 @@ def test_tracecite_runtime_returns_evidence_without_investigation_policy() -> No
 
 def test_agent_projection_keeps_only_bounded_mechanical_metadata() -> None:
     text = IMPL.read_text(encoding="utf-8")
-
     assert "function compactCoverage" in text
     assert "function compactProgress" in text
     assert "function compactMatchedExisting" in text
@@ -31,7 +29,6 @@ def test_agent_projection_keeps_only_bounded_mechanical_metadata() -> None:
 
 def test_path_errors_expose_only_configured_source_inventory() -> None:
     text = IMPL.read_text(encoding="utf-8")
-
     assert "function availableSources" in text
     assert "TRACECITE_EVIDENCE_FILES" in text
     assert "available_sources: sources" in text
@@ -39,130 +36,89 @@ def test_path_errors_expose_only_configured_source_inventory() -> None:
     assert "next_source" not in text
 
 
-def test_skill_owns_monotonic_causal_proof_policy_not_runtime() -> None:
+def test_skill_normalizes_blocking_before_diagnosis() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-
-    assert "Monotonic Causal Proof Ledger" in skill
-    assert "unresolved" in skill
-    assert "observed" in skill
-    assert "supported_inference" in skill
-    assert "contradicted" in skill
-    assert "bounded_unknown" in skill
-    assert "MUST NOT return to `unresolved`" in skill
-    assert "Reopen it only when newly materialized evidence materially contradicts" in skill
-
-    assert "Monotonic Causal Proof Ledger" not in runtime
-    assert "supported_inference" not in runtime
-    assert "bounded_unknown" not in runtime
+    assert "Hard rule: normalize blocking evidence before diagnosis" in skill
+    assert "blocked at acquire(X) -> waits X" in skill
+    assert "blocked at acquire(X) -/-> holds X" in skill
+    assert "A waiting `RLock` is not an `RLock` holder" in skill
+    assert "Correct the proof state before any further retrieval" in skill
+    assert "normalize blocking evidence" not in runtime
+    assert "waiting `RLock`" not in runtime
 
 
-def test_skill_enforces_user_supplied_evidence_boundary() -> None:
+def test_skill_closes_supported_holds_with_phase_contrast() -> None:
     skill = SKILL.read_text(encoding="utf-8")
-    runtime = IMPL.read_text(encoding="utf-8")
-
-    assert "# Evidence boundary" in skill
-    assert "model memory          == supplied evidence" in skill
-    assert "implementation details remembered from training" in skill
-    assert "cannot close a claim" in skill
-    assert "Do not narrate invented source code" in skill
-
-    assert "implementation details remembered from training" not in runtime
-    assert "model memory" not in runtime
+    assert "path/stack A stops at acquire(X)" in skill
+    assert "path/stack B is already past acquire(X)" in skill
+    assert "B supports: holds X while waiting on the nested resource" in skill
+    assert "Do not search indefinitely for a literal `held=true`" in skill
 
 
-def test_every_tracecite_call_must_target_open_proof_claim() -> None:
+def test_cycle_requires_two_normalized_edges() -> None:
     skill = SKILL.read_text(encoding="utf-8")
-    runtime = IMPL.read_text(encoding="utf-8")
-
-    assert "Every TraceCite call MUST target one material causal claim" in skill
-    assert "Claim identity is semantic, not query wording" in skill
-    assert "If no such claim exists, do not call TraceCite" in skill
-    assert "Retrieve only evidence that can change that claim" in skill
-    assert "does NOT create a new claim by itself" in skill
-
-    assert "material causal claim" not in runtime
-    assert "Causal Proof Ledger" not in runtime
-
-
-def test_supported_inference_uses_phase_contrast_instead_of_holder_census() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-
-    assert "Supported inference and phase contrast" in skill
-    assert "use **phase contrast** before searching for an invisible holder" in skill
-    assert "stack A stops at acquisition of resource X" in skill
-    assert "stack B has progressed past that acquisition into a nested call" in skill
-    assert "A paired phase contrast is causal evidence" in skill
-    assert "do not infer ownership from a waiter alone" in skill
-    assert "do not search for more holders" in skill
-
-
-def test_raw_pointer_proximity_is_not_resource_identity() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-
-    assert "nearby pointer values == same object/field identity" in skill
-    assert "Raw-address proximity or guessed struct layout is not proof" in skill
-
-
-def test_non_advancing_limit_applies_to_same_claim_not_query_wording() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-
-    assert "two consecutive attempts for the SAME unresolved claim" in skill
-    assert "stop reformulating synonyms for that claim" in skill
-    assert "Mark it `bounded_unknown`" in skill
-
-
-def test_synchronization_cycle_can_close_with_supported_inference() -> None:
-    skill = SKILL.read_text(encoding="utf-8")
-    runtime = IMPL.read_text(encoding="utf-8")
-
-    assert "waiting at `Lock`, `RLock`" in skill
-    assert "does NOT mean that resource is held" in skill
-    assert "phase contrast or supplied context establishes progression" in skill
-    assert "a lock-order cycle requires both opposing wait-for edges" in skill
     assert "path A: holds A -> waits B" in skill
     assert "path B: holds B -> waits A" in skill
-    assert "One blocked lock, one edge, a hotspot, or many waiters is not a deadlock proof" in skill
-
-    assert "opposing wait-for edges" not in runtime
-    assert "deadlock proof" not in runtime
-    assert "phase contrast" not in runtime
+    assert "A deadlock/lock-order inversion is closed only when both opposing edges" in skill
+    assert "One waiter, many waiters, a hotspot, or a writer queue is not a cycle" in skill
 
 
-def test_skill_rejects_symptom_census_as_default_investigation() -> None:
+def test_skill_owns_monotonic_proof_not_runtime() -> None:
     skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Monotonic Causal Proof Ledger" in skill
+    assert "supported_inference" in skill
+    assert "bounded_unknown" in skill
+    assert "MUST NOT reopen" in skill
+    assert "Monotonic Causal Proof Ledger" not in runtime
+    assert "supported_inference" not in runtime
 
-    assert "directly distinguishes candidate mechanisms over symptom census" in skill
-    assert "MUST NOT be collected unless the user's requested conclusion materially depends on the count" in skill
-    assert "Do not census unrelated shim/logger/fifo/syscall stacks" in skill
 
-
-def test_artifact_boundary_prevents_downstream_lifecycle_census() -> None:
+def test_every_tracecite_call_targets_open_semantic_claim() -> None:
     skill = SKILL.read_text(encoding="utf-8")
+    assert "Every TraceCite call MUST either" in skill
+    assert "Claim identity is semantic, not query wording" in skill
+    assert "If no such claim exists, do not call TraceCite" in skill
+    assert "After two consecutive non-advancing attempts for the SAME semantic claim" in skill
 
-    assert "Artifact boundary and downstream impact" in skill
-    assert "close the observed impact at that boundary and qualify the downstream consequence" in skill
-    assert "Do not census unrelated shim/logger/fifo/syscall stacks" in skill
-    assert "Absence of a directly visible holder is not evidence that the holder exited" in skill
+
+def test_skill_enforces_supplied_evidence_boundary() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    assert "model memory          == supplied evidence" in skill
+    assert "nearby pointer values == same object/field identity" in skill
+    assert "absence of holder     == holder exited/vanished" in skill
+    assert "guessed source code" in skill
+
+
+def test_mechanism_precedes_downstream_symptom_census() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    assert "Mechanism first; downstream symptoms are subordinate" in skill
+    assert "mechanism / causal edges" in skill
+    assert "A symptom stated in the user prompt is context to explain, not evidence" in skill
+    assert "do not start a secondary census of shims, FIFOs, waits, loggers" in skill
+    assert "Co-occurrence, duration, count, or a generic long-lived waiter is insufficient" in skill
+
+
+def test_artifact_boundary_qualifies_unrepresented_downstream_state() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    assert "cannot represent a later external process/lifecycle state" in skill
+    assert "qualify the downstream consequence without more retrieval" in skill
 
 
 def test_closed_proof_forces_final_answer_and_blocks_new_story() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-
     assert "the NEXT assistant action MUST be the final answer" in skill
+    assert "terminal commitment" in skill
     assert "Final causal claims MUST be a subset of closed proof claims" in skill
-    assert "Do not introduce new causal, lifecycle, cleanup, restart, kernel" in skill
-    assert '"complete picture"' in skill
-
+    assert "timing-default" in skill
     assert "NEXT assistant action MUST be the final answer" not in runtime
-    assert "closed proof claims" not in runtime
 
 
-def test_skill_keeps_representative_evidence_and_reuse_discipline() -> None:
+def test_runtime_remains_mechanical() -> None:
     skill = SKILL.read_text(encoding="utf-8")
-
-    assert "one strongest representative evidence instance per distinct causal role" in skill
-    assert "do not refetch them for confidence" in skill
-    assert "do not repeatedly retry adjacent lines" in skill
-    assert "Reuse known evidence refs, ranges, source paths, source SHAs" in skill
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Runtime boundary" in skill
+    assert "It does not know hypotheses, causality, proof claims, root cause, sufficiency, or stopping" in skill
+    assert "proof claims" not in runtime
