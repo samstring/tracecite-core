@@ -1,12 +1,12 @@
-trigger: 2026-09-03 final-evidence-discipline diagnostic
+trigger: 2026-09-03 hard-cycle-admission-and-call-ceiling diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause-plus-final-evidence-discipline
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: compressed-final-proof-and-lifecycle-boundary
+adaptive_stopping_skill: hard-cycle-admission-and-activity-count-ceiling
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: forbid-waiter-as-holder-and-unsupported-downstream-lifecycle
+diagnostic_focus: require-two-current-edges-and-stop-at-16-evidence-calls
 agent_timeout_seconds: 900
