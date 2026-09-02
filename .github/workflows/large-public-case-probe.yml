@@ -1,0 +1,82 @@
+name: Large Public Case Probe
+
+on:
+  push:
+    branches:
+      - experiment/tracecite-large-public-cases
+    paths:
+      - benchmarks/agent-investigation/large-public-case-probe-trigger.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe Longhorn support bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/probe/longhorn
+          url='https://github.com/longhorn/longhorn/files/14161835/supportbundle_b3abd9ae-8fc9-44f4-ad95-2deceffe927b_2024-02-05T07-26-29Z.zip'
+          curl -fL --retry 3 --connect-timeout 20 "$url" -o /tmp/probe/longhorn/bundle.zip
+          stat -c 'archive_bytes=%s' /tmp/probe/longhorn/bundle.zip | tee /tmp/probe/longhorn/summary.txt
+          unzip -l /tmp/probe/longhorn/bundle.zip > /tmp/probe/longhorn/unzip-list.txt
+          unzip -q /tmp/probe/longhorn/bundle.zip -d /tmp/probe/longhorn/extracted
+          find /tmp/probe/longhorn/extracted -type f -printf '%s\t%p\n' | sort -nr > /tmp/probe/longhorn/files-by-size.txt
+          head -100 /tmp/probe/longhorn/files-by-size.txt | tee -a /tmp/probe/longhorn/summary.txt
+          find /tmp/probe/longhorn/extracted -type f \( -iname '*longhorn-manager*.log*' -o -path '*/longhorn-manager/*' \) -printf '%s\t%p\n' | sort -nr | head -50 | tee /tmp/probe/longhorn/manager-candidates.txt
+
+      - name: Probe Harvester support bundle
+        shell: bash
+        run: |
+          set +e
+          mkdir -p /tmp/probe/harvester
+          ok=0
+          for url in \
+            'https://www2.web-engineer.co.uk/supportbundle_9af7d11f-d06e-44e2-b611-2acd3a809037_2024-08-02T09-42-55Z.zip' \
+            'http://www2.web-engineer.co.uk/supportbundle_9af7d11f-d06e-44e2-b611-2acd3a809037_2024-08-02T09-42-55Z.zip'; do
+            echo "trying=$url" | tee -a /tmp/probe/harvester/summary.txt
+            curl -fL --retry 2 --connect-timeout 20 --max-time 300 "$url" -o /tmp/probe/harvester/bundle.zip
+            if [[ $? -eq 0 ]]; then ok=1; break; fi
+          done
+          if [[ "$ok" -ne 1 ]]; then
+            echo 'download_failed=1' | tee -a /tmp/probe/harvester/summary.txt
+            exit 0
+          fi
+          stat -c 'archive_bytes=%s' /tmp/probe/harvester/bundle.zip | tee -a /tmp/probe/harvester/summary.txt
+          unzip -t /tmp/probe/harvester/bundle.zip >/tmp/probe/harvester/unzip-test.txt 2>&1
+          if [[ $? -eq 0 ]]; then
+            unzip -l /tmp/probe/harvester/bundle.zip > /tmp/probe/harvester/unzip-list.txt
+            unzip -q /tmp/probe/harvester/bundle.zip -d /tmp/probe/harvester/extracted
+            find /tmp/probe/harvester/extracted -type f -printf '%s\t%p\n' | sort -nr > /tmp/probe/harvester/files-by-size.txt
+            head -100 /tmp/probe/harvester/files-by-size.txt | tee -a /tmp/probe/harvester/summary.txt
+            grep -RIl 'custom-318894c86e3c\|validator.harvesterhci.io' /tmp/probe/harvester/extracted 2>/dev/null | head -100 > /tmp/probe/harvester/relevant-files.txt
+            while IFS= read -r f; do stat -c '%s\t%n' "$f"; done < /tmp/probe/harvester/relevant-files.txt | sort -nr > /tmp/probe/harvester/relevant-files-by-size.txt
+            head -50 /tmp/probe/harvester/relevant-files-by-size.txt | tee -a /tmp/probe/harvester/summary.txt
+          else
+            echo 'not_zip=1' | tee -a /tmp/probe/harvester/summary.txt
+            file /tmp/probe/harvester/bundle.zip | tee -a /tmp/probe/harvester/summary.txt
+          fi
+          exit 0
+
+      - name: Generate Gitea issue reproducer log
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/probe/gitea
+          yes 'This is a long message, always the same.' | head -n 1000000 > /tmp/probe/gitea/workflow.log || true
+          stat -c 'generated_log_bytes=%s' /tmp/probe/gitea/workflow.log | tee /tmp/probe/gitea/summary.txt
+          wc -l /tmp/probe/gitea/workflow.log | tee -a /tmp/probe/gitea/summary.txt
+
+      - name: Upload probe report
+        uses: actions/upload-artifact@v4
+        with:
+          name: large-public-case-probe
+          path: /tmp/probe
+          retention-days: 7
