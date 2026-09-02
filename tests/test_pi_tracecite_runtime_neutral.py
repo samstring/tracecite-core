@@ -89,6 +89,25 @@ def test_skill_enforces_supplied_evidence_boundary() -> None:
     assert "nearby pointer values == same object/field identity" in skill
     assert "absence of holder     == holder exited/vanished" in skill
     assert "guessed source code" in skill
+    assert 'Do not claim exhaustive uniqueness such as "there is no other holder"' in skill
+
+
+def test_claim_admission_locks_scope_after_direct_proof() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Claim admission and scope lock" in skill
+    assert "A user-reported downstream symptom does not by itself authorize a new investigation branch" in skill
+    assert "mark that downstream explanation `bounded_unknown`" in skill
+    assert "Do not search broadly for a bridge after closure" in skill
+    assert "one pre-existing `unresolved`/`contradicted` claim" in skill
+    assert "Claim admission and scope lock" not in runtime
+    assert "bounded_unknown" not in runtime
+
+
+def test_tracecite_reassesses_after_single_strongest_action() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    assert "single strongest TraceCite retrieval/materialization action" in skill
+    assert "Do not fire multiple speculative TraceCite searches in parallel" in skill
 
 
 def test_mechanism_precedes_downstream_symptom_census() -> None:
@@ -104,6 +123,8 @@ def test_artifact_boundary_qualifies_unrepresented_downstream_state() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     assert "cannot represent a later external process/lifecycle state" in skill
     assert "qualify the downstream consequence without more retrieval" in skill
+    assert "In-process stack evidence does not by itself prove external process creation" in skill
+    assert "restart effects" in skill
 
 
 def test_closed_proof_forces_final_answer_and_blocks_new_story() -> None:
