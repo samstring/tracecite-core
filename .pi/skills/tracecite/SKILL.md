@@ -1,92 +1,119 @@
 ---
 name: tracecite
 description: Use TraceCite as an evidence transport and evidence-memory layer. TraceCite retrieves and materializes evidence with provenance; the Agent owns interpretation, hypotheses, causality, sufficiency, root cause, and stopping.
-compatibility: Requires the TraceCite Pi extension. Canonical tools are tracecite_retrieve, tracecite_materialize, tracecite_replay, tracecite_aggregate, tracecite_traverse, and tracecite_verify. tracecite_search/tracecite_expand may be exposed as compatibility aliases.
+compatibility: Requires the TraceCite Pi extension. tracecite_search/tracecite_expand may be exposed as compatibility aliases for retrieval/materialization.
 ---
 
-# TraceCite Evidence Runtime in Pi
+# TraceCite evidence contract
 
 ```text
-TraceCite = evidence retrieval + bounded materialization + provenance + mechanical memory
-Agent     = interpretation + comparison + hypothesis + causality + sufficiency + stopping
+TraceCite = retrieve + materialize + provenance + mechanical evidence memory
+Agent     = interpret + hypothesize + compare + infer + decide sufficiency + stop
 ```
 
-TraceCite runtime never chooses a hypothesis, investigation direction, root cause, or stop decision.
+TraceCite runtime never chooses a hypothesis, root cause, investigation direction, semantic importance, or stop decision. Those decisions belong to the Agent/skill layer.
 
-# Mandatory adaptive call gate
+Token saving never overrides correctness.
 
-Treat every additional TraceCite call as a cost that must buy discriminating information. Do not use a fixed number of investigation rounds as the normal stopping rule.
+# Execution rule: every retrieval must buy a decision
 
-**Before every TraceCite call, the Agent must be able to answer all three questions internally:**
+Before **every** TraceCite call, write one short internal/trajectory line in this form and keep it concrete:
 
 ```text
-Q — What exact material fact is still unresolved?
-Δ — What plausible result of this call would materially change, contradict, distinguish, or refine the conclusion?
-T — What specific source/query/range can observe that result?
+VOI: Q=<one unresolved material fact>; Δ=<a plausible result that would change/refute/distinguish the answer>; T=<specific query or range that can observe it>
 ```
 
-If `Q`, `Δ`, or `T` cannot be stated concretely, do not make the call. Synthesize the evidence already obtained and answer.
+Do not expand this into a long planning paragraph.
 
-Generic goals do not pass the gate:
+A tool call is allowed only when all three fields are real:
+
+- `Q`: a fact still needed for a material claim in the user's answer;
+- `Δ`: at least one plausible observation would materially change the conclusion, distinguish competing explanations, or change how the claim must be qualified;
+- `T`: the supplied evidence can actually observe that fact and the call targets it.
+
+If any field is missing, vague, or circular, **do not call TraceCite**. Synthesize and answer.
+
+These do not pass the gate:
 
 ```text
 look for more evidence
 confirm the hypothesis
-check a few more examples
+check another example
+see what else is present
 be extra sure
-see what else is there
+final verification
+one more quick check
 ```
 
-After every call, classify what it added:
+A search that can only produce another instance of an already-established fact has no decision value unless multiplicity, frequency, variation, scope, or ordering is itself material to `Q`.
+
+# Claim ledger and closure latch
+
+Track only the material claims the user needs. A claim is one of:
 
 ```text
-discriminating -> changes or resolves a material question
-confirming      -> another instance of an already-established fact/structure
-duplicate       -> repeated/covered/no-new evidence
+observed             directly supported by materialized evidence
+inference_supported  reasoned from observed evidence and explicitly qualified
+unresolved           an observable fact could still materially change it
+out_of_scope         would require evidence that was not supplied
 ```
 
-Only `discriminating` evidence normally creates a reason for another investigation step. `confirming` or `duplicate` evidence does not justify a semantically equivalent follow-up unless multiplicity, frequency, variation, scope, or ordering itself is the unresolved fact.
+Normal investigation is complete when:
 
-If the Agent has already thought or said that the mechanism/path/pattern is "clear", "complete", "established", or equivalent, another retrieval requires a newly stated material unresolved fact and a plausible conclusion-changing outcome. Otherwise answer now.
+1. the requested material claims are `observed` or properly qualified `inference_supported`; and
+2. there is no pre-existing `unresolved` observable fact whose plausible result would materially change the answer.
 
-# Claim-closure stopping rule
+At that point the **closure latch is set**: answer immediately. Do not perform confirmation-only, completeness, curiosity, summary-verification, or “one more” retrievals.
 
-Track the material claims requested by the user, not the amount of searchable text.
+A confirming or duplicate call **closes its current Q but does not create a new Q**. Another call after confirming/duplicate evidence is allowed only for a different material unresolved claim that already existed before that call.
 
-For each material claim, determine whether it is:
+If, while composing the answer, a material claim lacks an exact materialized citation, a narrowly targeted citation-repair materialization is allowed. Citation repair must fetch only the already-identified range; it must not reopen exploratory search.
+
+If the Agent has already stated or concluded that the mechanism/path/pattern is clear, complete, established, enough, or equivalent, treat that as closure unless it can name a still-unresolved material claim and a concrete conclusion-changing `Δ`.
+
+# Prefer discriminating evidence over surveys
+
+After every call classify the result mentally as:
 
 ```text
-observed             -> directly supported by materialized evidence
-inference_supported  -> reasoned from observed evidence and explicitly qualified
-unresolved           -> could materially change the answer and is observable in supplied evidence
-out_of_scope         -> requires an artifact that was not supplied
+discriminating  resolves or materially changes Q
+confirming      repeats an already-established structure/fact
+duplicate       covered / repeated / no-new evidence
 ```
 
-Stop normal retrieval when:
+Only `discriminating` evidence normally advances the causal frontier. Do not turn confirming evidence into a chain of synonym searches or additional examples.
 
-1. the material claims needed for the answer are observed or clearly qualified as supported inference; and
-2. no remaining observable `unresolved` fact has a plausible outcome that would materially change the conclusion.
+Use exact symbols, identifiers, states, and frames already observed in evidence before broad vocabulary searches. When a narrow observed anchor exists, unrelated broad scans have low information value.
 
-The existence of more files, rows, matches, stacks, examples, or context is not itself an unresolved fact.
+When a retrieval returns many equivalent matches, investigate **structural variants**, not volume. Prefer one bounded retrieval that can reveal distinct call-site/frame variants, then materialize the variant that could change the explanation. Do not enumerate many equivalent instances merely to strengthen confidence.
 
-For diagnostic tasks, a list of blocked stacks is not enough when the question asks for a mechanism. The final synthesis should explicitly state the smallest synchronization/failure mechanism supported by the observed competing paths and explain the requested impact. Once those material claims have exact support, do not keep collecting equivalent examples merely to increase volume.
+# Conditional heuristic for blocked/concurrent systems
+
+Use this only when supplied evidence actually shows blocking, lock contention, waits, or repeated stuck execution paths.
+
+1. Establish one representative blocked path with exact materialized frames.
+2. If many instances stop at the same synchronization point, treat their repetition as population evidence, not as a reason to inspect each instance.
+3. Search the same observed function/path for the **structurally deepest-progressed variant**: an instance that has advanced past the shared blocking frame or is stopped at a different downstream wait.
+4. Materialize that downstream path and identify what resource/state it is waiting for, without inferring unseen ownership.
+5. Look for a competing observed path only when its presence/absence could distinguish a cycle, ordering conflict, starvation, external wait, or another mechanism.
+6. Once the minimal competing paths and user-visible impact are supported, set the closure latch. Do not survey unrelated goroutine classes or lifecycle operations unless they are a material alternative explanation.
+
+For a synchronization/root-cause answer, the useful unit is the smallest evidence-supported mechanism plus the paths that establish it, not the number of matching stacks.
 
 # Diminishing returns
 
-TraceCite may expose mechanical novelty/progress such as new/repeated evidence, new lines, covered ranges, or `status=no_new_evidence`.
+Mechanical TraceCite signals such as `new_evidence`, new lines, repeated evidence, covered ranges, and `status=no_new_evidence` are evidence-session facts, not semantic stop commands.
 
-Low-return signals include:
+Repeated low-return outcomes force a new VOI gate before any call:
 
-- repeated evidence dominating results;
-- zero or tiny new-line growth;
-- repeated materialization of covered context;
-- repeated equivalent `no_match` queries;
-- another instance of an already-established structure;
-- aggregate/replay/verify calls that do not resolve the current `Q`.
+- repeated evidence dominates;
+- zero/tiny new-line growth;
+- the same context is materialized again;
+- equivalent `no_match` queries are being reformulated;
+- the call adds another equivalent instance;
+- the call does not change the claim ledger.
 
-These signals do not semantically order the Agent to stop. They make a fresh `Q/Δ/T` gate mandatory before another call.
-
-Low novelty alone never overrides correctness. If a concrete observable fact could materially change the conclusion, retrieve it. Conversely, new lines alone are not evidence that another call has value.
+Low novelty does not justify stopping if a concrete observable fact could still change the answer. Conversely, fresh lines do not justify continuing if they cannot change a material claim.
 
 ```text
 new lines             != new semantic information
@@ -94,43 +121,37 @@ new evidence identity != discriminating evidence
 more instances        != stronger causal proof by default
 ```
 
-# Do not manufacture missing pieces
+# Do not manufacture missing evidence
 
-Do not search for an actor, owner, state, event, component, or function merely because the current hypothesis predicts it.
+Do not make an actor, owner, function, event, state, component, or code path a mandatory target merely because the current hypothesis predicts it.
 
-Before searching for a hypothesized missing piece, require both:
+Search for a hypothesized missing piece only when:
 
-1. observing/refuting it would materially change the conclusion; and
-2. the supplied evidence can actually establish it.
+1. observing or refuting it would materially change the answer; and
+2. the supplied artifact can actually establish it.
 
-If a required fact needs source code, telemetry, metrics, traces, or another artifact not supplied, state that evidence boundary instead of repeatedly searching the same artifact.
+If the fact requires source code, telemetry, metrics, traces, another log, or an artifact not supplied, mark it `out_of_scope` and state the boundary rather than repeatedly searching the same evidence.
 
-# Hard budgets
-
-Host call/token/time limits are safety rails against runaway investigation, not normal semantic stopping rules. If a hard limit is reached while a material fact remains unresolved, state the limitation rather than pretending the evidence is sufficient.
-
-# Evidence-use correctness contract
+# Evidence correctness
 
 - In TraceCite-only mode, do not retry blocked native `read`/`grep`/`find`/`ls`/shell evidence access.
-- Once `follow_up_file`, `source_path`, or immutable source identity is known, reuse it rather than rediscovering the source.
-- Search previews may be partial projections of multi-line records. Materialize the bounded body when a conclusion depends on complete stack/traceback/record/state/context structure.
-- Navigation/signal hints are recovery coordinates, not causal rankings, and are not observed body evidence until materialized.
-- `matched_existing_evidence`, covered ranges, repeated evidence, and `status=no_new_evidence` are mechanical session facts. Do not request the same body merely to confirm it exists.
-- `status=no_match` applies only to that exact retrieval request; it is not automatically global absence proof.
-- File line order is captured-source order, not automatically event time, execution order, happens-before, lock acquisition order, or causality.
-- Reuse source SHA/immutable identity when available so citations remain tied to exact bytes.
+- Once a `follow_up_file`, `source_path`, or immutable source identity is known, reuse it instead of rediscovering the same source.
+- Search previews may omit multi-line record bodies. If a material conclusion depends on a complete stack, traceback, exception, record, or surrounding context, materialize the bounded body first.
+- Navigation/signal hints are recovery coordinates, not evidence of causal importance, and are not observed body evidence until materialized.
+- `matched_existing_evidence`, covered ranges, repeated evidence, and `status=no_new_evidence` are mechanical facts. Do not refetch the same body simply to confirm it exists.
+- `status=no_match` applies to the exact retrieval request; it is not automatically proof of global absence.
+- Captured line order is not automatically event time, execution order, happens-before, lock acquisition order, or causality.
+- Reuse source SHA/immutable identity when available.
 - Cite exact materialized source lines for material factual claims.
 
 A current stack does not enumerate all prior state:
 
 ```text
-not visible as current frame != proven never acquired/performed
-present in a call path        != proven currently held/active
+not visible as a current frame != proven never acquired/performed
+present in a call path          != proven currently held/active
 ```
 
-Establish retained/prior state only from evidence that actually supports it.
-
-When search coverage is truncated:
+When results are truncated:
 
 ```text
 not visible in returned rows != not present in source
@@ -138,22 +159,9 @@ not visible in returned rows != not present in source
 
 # RetrievalSession boundary
 
-RetrievalSession can remember evidence identities, covered ranges, request fingerprints, source generations, and mechanical novelty/progress. It does not know the Agent's hypothesis, root cause, causal relationships, importance, evidence sufficiency, or whether the Agent should stop.
+RetrievalSession may remember evidence identities, covered ranges, request fingerprints, source generations, and mechanical novelty/progress. It does not know the Agent's hypothesis, root cause, causal relationships, importance, sufficiency, or stopping decision.
 
-# Canonical operations
-
-```text
-tracecite_retrieve      -> retrieve caller-selected evidence
-tracecite_materialize   -> expose exact bounded source context
-tracecite_replay        -> intentionally revisit covered immutable evidence
-tracecite_aggregate     -> deterministic count/distinct/group over selected scope
-tracecite_traverse      -> bounded traversal over supplied evidence relations
-tracecite_verify        -> mechanical evidence/manifest integrity verification
-```
-
-Search success does not validate a hypothesis. Frequency does not imply causal importance. Traversability does not imply causality. Integrity verification does not verify a diagnosis.
-
-Snapshot/evidence refs may be citation identities rather than usable file paths. Prefer explicit `follow_up_file` / `source_path` for later calls and reuse SHA when supported.
+Search success does not validate a hypothesis. Frequency does not imply causal importance. Structural similarity does not imply the same root cause. Integrity verification does not verify a diagnosis.
 
 # Controlled TraceCite-only mode
 
@@ -162,33 +170,31 @@ A Host may expose only TraceCite evidence operations. This changes the evidence 
 # What TraceCite mechanics do NOT imply
 
 ```text
-search match               != causal proof
-search rank                != causal importance
-signal/navigation hint     != diagnosis recommendation
-frequency/cluster size     != importance
-structural similarity      != same root cause
-same identifier            != safe correlation
-nearby/file-ordered lines  != causal/event ordering
-status=ok                  != hypothesis supported
-status=no_match            != global absence
-status=no_new_evidence     != no useful evidence exists
-new lines/evidence         != discriminating information
-verified integrity         != verified diagnosis
-routing/coverage metadata  != semantic importance
+search match              != causal proof
+search rank               != causal importance
+signal/navigation hint    != diagnosis recommendation
+frequency/cluster size    != importance
+same identifier           != safe correlation
+nearby/file-ordered lines != causal/event ordering
+status=ok                 != hypothesis supported
+status=no_match           != global absence
+status=no_new_evidence    != no useful evidence exists
+new lines/evidence        != discriminating information
+routing/coverage metadata != semantic importance
 ```
 
 # Recommended Agent investigation loop
 
 ```text
-1. Define the material claims the user actually needs.
-2. State one concrete unresolved factual question Q.
-3. State a plausible outcome Δ that would materially change the answer.
-4. Choose a specific TraceCite target T that can observe Δ.
-5. Retrieve/materialize only what Q requires.
-6. Record the observed fact and separate it from inference.
-7. Update claim closure and synthesize before any new call.
-8. Do not repeat confirming/duplicate investigation unless multiplicity/variation is itself material.
-9. Run Q/Δ/T again; if it fails, answer. If the required fact is unavailable in supplied evidence, state the boundary.
+1. Define the few material claims the user's answer requires.
+2. Choose one unresolved claim and emit a short VOI: Q / Δ / T line.
+3. Retrieve only the evidence needed for that Q.
+4. Materialize incomplete body/context only when the claim depends on it.
+5. Update the claim ledger; separate observation from inference.
+6. If the result is confirming/duplicate, close that Q; do not spawn an equivalent follow-up.
+7. If all material claims are closed, latch closure and answer immediately.
+8. Otherwise choose a different remaining material Q and repeat the VOI gate.
+9. If the needed fact is not observable in supplied evidence, mark the boundary rather than searching indefinitely.
 ```
 
 TraceCite's job is to make the evidence recoverable, bounded, line-addressable, provenance-preserving, and mechanically non-redundant.
