@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "id": "longhorn-7843",
+  "title": "Single-node auto-remount keeps Longhorn RWO volume read-only",
+  "source_issue": "https://github.com/longhorn/longhorn/issues/7843",
+  "fix_reference": "https://github.com/longhorn/longhorn-manager/pull/2550",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "longhorn-manager-log",
+      "url": "https://github.com/longhorn/longhorn/files/14161835/supportbundle_b3abd9ae-8fc9-44f4-ad95-2deceffe927b_2024-02-05T07-26-29Z.zip",
+      "filename": "longhorn-manager.log",
+      "sha256": "652a256e3ec860773bb7b68145ac3f75ef2e9782866bea21b6bc43792d5ed92b",
+      "required": true,
+      "extract": {
+        "kind": "zip",
+        "member": "supportbundle_b3abd9ae-8fc9-44f4-ad95-2deceffe927b_2024-02-05T07-26-29Z/logs/longhorn-system/longhorn-manager-zllqw/longhorn-manager.log",
+        "sha256": "d77334a06a105b8ba4269c9c1d0443192ebe3c18094db2cc437a7c3dfc753268"
+      }
+    },
+    {
+      "id": "longhorn-csi-log",
+      "url": "https://github.com/longhorn/longhorn/files/14161835/supportbundle_b3abd9ae-8fc9-44f4-ad95-2deceffe927b_2024-02-05T07-26-29Z.zip",
+      "filename": "longhorn-csi-plugin.log",
+      "sha256": "652a256e3ec860773bb7b68145ac3f75ef2e9782866bea21b6bc43792d5ed92b",
+      "required": true,
+      "extract": {
+        "kind": "zip",
+        "member": "supportbundle_b3abd9ae-8fc9-44f4-ad95-2deceffe927b_2024-02-05T07-26-29Z/logs/longhorn-system/longhorn-csi-plugin-5rld7/longhorn-csi-plugin.log",
+        "sha256": "833354457d4aa93794d71a9fadd6b2f448ceb76997cb73cbaa43e36e6fea5568"
+      }
+    }
+  ],
+  "provenance": {
+    "project": "longhorn/longhorn",
+    "issue_state": "closed",
+    "public_evidence": true,
+    "archive_bytes": 1179464,
+    "model_visible_payload_bytes": 17844938,
+    "notes": "Model-visible evidence contains complete original log files extracted from the public support bundle; no maintainer root-cause prose or fix description is included."
+  }
+}
