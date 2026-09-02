@@ -56,7 +56,7 @@ def test_skill_requires_two_independent_opposing_edges() -> None:
     assert "holds B -> waits A" in skill
     assert "report only the supported blocking/contention and the missing edge as unknown" in skill
     assert "Do not use the words deadlock, cycle, cyclic wait, lock-order inversion, or AB-BA" in skill
-    assert "A logically necessary but unobserved holder is not a supported second edge" in skill
+    assert "but not an unobserved holder, waiter census, pointer proximity, or guessed lock scope" in skill
     assert "unobserved holder -/-> supported holder edge" in skill
     assert "Deadlock/cycle/lock-order inversion" not in runtime
     assert "bounded_unknown" not in runtime
@@ -106,8 +106,8 @@ def test_skill_normalizes_blocking_and_execution_phase() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     assert "blocked at acquire(X) -> waits X" in skill
     assert "blocked at acquire(X) -/-> holds X" in skill
-    assert "passed acquire(Y) -/-> currently holds Y" in skill
-    assert "active caller frame -/-> current ownership" in skill
+    assert "caller frame alone -/-> current ownership" in skill
+    assert "acquire(Y) + current nested call + release only after nested return -> may support currently holds Y" in skill
 
 
 def test_skill_rejects_pointer_identity_invention() -> None:
