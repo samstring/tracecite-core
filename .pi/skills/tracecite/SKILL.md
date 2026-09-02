@@ -13,7 +13,7 @@ Build the **smallest supported causal proof**. Do not perform an evidence census
 These rules come before completeness, narrative quality, or scorer coverage:
 
 1. Retrieve only evidence needed to close one material claim at a time. Before every TraceCite call identify internally `claim` and `discriminator`. If either is missing, answer now.
-2. After each TraceCite result, inspect `tracecite_host_activity_summary.total_tool_calls`. At 16 or greater, the next assistant action must be the final answer. Never make call 17.
+2. Issue TraceCite calls serially. Never batch or parallelize TraceCite calls: make at most one TraceCite call per assistant turn, inspect that result's `tracecite_host_activity_summary.total_tool_calls`, then decide whether another call is admissible. At 16 or greater, the next assistant action must be the final answer. Never make call 17.
 3. A stack/source position after an acquire is **not** evidence that the lock is still held. For current ownership, supplied evidence must itself expose the acquire-to-release control-flow interval strongly enough to exclude an intervening release. Model memory or guessed source scope is not supplied evidence.
 4. Do not establish deadlock/cycle/lock-order inversion unless both opposing current `holds -> waits` edges are independently supported. A waiter is never a holder merely because someone must hold the resource.
 5. Stop at the artifact boundary. Do not explain downstream process creation, RPC completion, retries, cleanup/reaping, or restart recovery unless supplied evidence independently establishes those lifecycle links.
@@ -21,7 +21,7 @@ These rules come before completeness, narrative quality, or scorer coverage:
 
 ## Non-negotiable final gate
 
-Immediately before answering, delete or qualify every material sentence that is not supported by the supplied artifact. This gate overrides completeness and helpfulness.
+Immediately before answering, delete or qualify every material sentence that is not supported by the supplied artifact. This gate overrides completeness and helpfulness. A later caveat does not cure an earlier unsupported lifecycle/process statement: delete the unsupported statement instead of narrating it and disclaiming it later.
 
 1. **Waiter != holder.** `blocked at acquire(X)`, `lockSlow(X)`, `RLock(X)`, or queued `Lock(X)` proves only `waits X`. Multiple waiters or lock exclusivity never identify a holder. A blocked `RLock(X)` does not prove that a writer currently holds X; it may also reflect queued-writer preference. Do not convert a one-resource waiter pattern into a holder edge. If the current holder identity is not observed or proven by the control-flow ownership rule below, leave it unknown.
 2. **A claimed current hold needs current-ownership proof.** A caller frame or earlier acquisition alone is insufficient. `acquire(Y) + current nested call + release only after nested return -> may support currently holds Y`, but only when the supplied artifact exposes that interval strongly enough to exclude an intervening release. A later source line, deeper callee frame, or progress-past-acquire reasoning is not enough. If the acquisition/release scope is missing, mark the hold `bounded_unknown`.
@@ -88,6 +88,8 @@ Transport limits per investigation:
 - **target total evidence calls: <= 12; absolute ceiling: 16**
 - after two consecutive non-advancing calls for the same claim, mark it `bounded_unknown`
 - never use extra calls to confirm an already closed claim
+
+Never batch or parallelize TraceCite calls. The activity count is only actionable after the current result is observed, so each result must be inspected before any next TraceCite request is emitted.
 
 Every TraceCite result may include `tracecite_host_activity_summary.total_tool_calls`. Inspect this field before interpreting or acting on the returned evidence. If the returned total is 16 or greater, that tool result is the terminal retrieval result and the next assistant action must be the final answer, not another TraceCite call. Do not estimate or restart the count from memory. Evidence from any accidental later call is inadmissible.
 
