@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "id": "gitea-35925",
+  "title": "Gitea Actions large workflow log causes memory amplification",
+  "source_issue": "https://github.com/go-gitea/gitea/issues/35925",
+  "fix_reference": "https://github.com/go-gitea/gitea/issues/35925#issuecomment-3521597210",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "pre-fix-view-source",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/experiment/tracecite-large-public-cases/benchmarks/agent-investigation/cases/gitea-35925/view_pre_fix_excerpt.go",
+      "filename": "view_pre_fix_excerpt.go",
+      "sha256": "1268311a02bc64f08f121d7e06e126ed233c24242c0180ef999c2aec3e6eb26a",
+      "required": true
+    }
+  ],
+  "generated_evidence": {
+    "filename": "workflow.log",
+    "recipe": "yes 'This is a long message, always the same.' | head -n 1000000",
+    "bytes": 41000000,
+    "sha256": "782f3a16b60ebd65b8d92cb49dc475b1a3a11ad9f530e9e458e3a4bed1cfec19"
+  },
+  "provenance": {
+    "project": "go-gitea/gitea",
+    "issue_state": "closed",
+    "public_evidence": true,
+    "model_visible_payload_bytes": 41002584,
+    "notes": "The 41 MB workflow log is generated exactly from the public issue's one-million-line reproducer; the source excerpt is copied from the affected pre-fix revision. Maintainer root-cause comments are evaluator-only."
+  }
+}
