@@ -38,6 +38,24 @@ If no obligation is `open` or `contradicted`, **answer immediately**. Do not sea
 
 Do not create a new obligation merely because another search is possible. New obligations may be added only when newly observed evidence creates a material contradiction or reveals that an explicit user requirement was not actually covered.
 
+# Terminal answer transition
+
+The obligation ledger is internal bookkeeping, not another investigation task. Do not spend model turns repeatedly narrating, replanning, rechecking, or reconfirming already-closed obligations without new evidence.
+
+After an evidence round, make exactly one transition:
+
+```text
+an explicit obligation is still open/contradicted
+    -> the next evidence call targets that obligation
+
+all explicit obligations are supported/qualified and no observed contradiction remains
+    -> the next assistant action is the final answer
+```
+
+There is no intermediate "let me consolidate", "final verification", "one more check", or extra confidence-building phase after closure. If the Agent has stated or internally concluded that the picture/mechanism is complete, established, confirmed, sufficient, or that it has everything needed, another TraceCite call is justified only by naming one still-open or contradicted **explicit answer obligation**. If none can be named, answer now.
+
+For a root-cause investigation, when the evidence supports a root-cause conclusion, open the final answer with one compact root-cause sentence that states the failure mechanism/class and the affected subsystem or component. Then explain the competing/causal paths, user-visible impact, strongest evidence, and any evidentiary boundary required by the user's question. This is an answer-clarity rule, not a requirement to retrieve additional evidence.
+
 # One evidence round = one obligation
 
 Treat one Agent tool-use batch as an evidence round. Every exploratory round must name one target obligation internally and stay bounded to that obligation.
@@ -121,6 +139,7 @@ Fresh lines are not automatically new semantic information. New evidence identit
 - Search previews may omit multi-line record bodies. If a material conclusion depends on a complete stack, traceback, exception, record, or surrounding context, materialize the bounded body first.
 - Navigation/signal hints are recovery coordinates, not evidence of causal importance, and are not observed body evidence until materialized.
 - `matched_existing_evidence`, covered ranges, repeated evidence, and `status=no_new_evidence` are mechanical facts. Do not refetch the same body simply to confirm it exists.
+- If materialization for the same evidence identity/range returns empty text, `status=no_new_evidence`, or only already-covered/matched-existing evidence, do not repeatedly retry adjacent lines, radius changes, or synonymous searches for that same body. One alternate recovery coordinate is reasonable only when newly observed output supplies a genuinely different concrete coordinate and the body is still required by an explicit open obligation. Otherwise reuse the strongest already-materialized evidence or state the evidentiary boundary.
 - `status=no_match` applies to the exact retrieval request; it is not automatically proof of global absence.
 - Reuse source SHA/immutable identity when available.
 - Cite exact materialized source lines for material factual claims.
@@ -163,11 +182,11 @@ routing/coverage metadata != semantic importance
 1. Extract the small set of material answer obligations from the user's request.
 2. Choose one open/contradicted obligation and emit a short ROUND: O / Δ / T line.
 3. Retrieve only the evidence needed for that obligation.
-4. Materialize incomplete body/context only when that obligation depends on it.
+4. Materialize incomplete body/context only when that obligation depends on it; do not loop on an already-covered or empty range.
 5. Mark the obligation supported, contradicted, still open, or qualified_boundary.
 6. If the same obligation has two non-advancing rounds with no new observed anchor, stop reformulating it and qualify the evidence boundary.
 7. Do not create extra obligations for reassurance, completeness, curiosity, or hypothetical alternatives unsupported by observed evidence.
-8. As soon as every explicit answer obligation is supported or appropriately qualified and no observed contradiction remains, answer immediately.
+8. As soon as every explicit answer obligation is supported or appropriately qualified and no observed contradiction remains, transition directly to the final answer with no intermediate verification/meta-planning turn.
 ```
 
 TraceCite's job is to make the evidence recoverable, bounded, line-addressable, provenance-preserving, and mechanically non-redundant.
