@@ -1,5 +1,6 @@
-trigger: 2026-09-02 tracecite v6 compact-output diagnostic
+trigger: 2026-09-02 tracecite v7 source-inventory diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 correctness_gate: true
 compact_transport_metadata: true
+source_inventory_on_error: true
