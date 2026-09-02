@@ -1,0 +1,435 @@
+name: Pi Large Three Dual MinMax A/B
+
+on:
+  push:
+    branches:
+      - experiment/tracecite-adaptive-stopping
+    paths:
+      - benchmarks/agent-investigation/large-three-dual-minmax-trigger.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-large-three-dual-minmax-ab
+  cancel-in-progress: false
+
+jobs:
+  model-run:
+    name: ${{ matrix.model_slot }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        model_slot: [gmi1, gmi2]
+    env:
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      BENCH_MODEL: ${{ matrix.model_slot == 'gmi1' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+      BENCH_API_KEY: ${{ matrix.model_slot == 'gmi1' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-large-three-${{ matrix.model_slot }}
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      RESULT_ROOT: /tmp/pi-large-three-dual-minmax/${{ matrix.model_slot }}
+      EVIDENCE_ROOT: /tmp/pi-large-three-evidence
+      CASE_ROOT: /tmp/pi-large-three-cases
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BENCH_MODEL"
+          test -n "$BENCH_API_KEY"
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev,diversity]"
+          python -m pytest -q \
+            tests/test_pi_four_public_strict_boundary.py \
+            tests/test_pi_tracecite_runtime_neutral.py \
+            tests/test_session_novelty_regressions.py
+
+      - name: Configure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PI_CODING_AGENT_DIR" "$RESULT_ROOT" "$EVIDENCE_ROOT" "$CASE_ROOT"
+          printf '%s\n' "$BENCH_MODEL" > "$RESULT_ROOT/model.txt"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Prepare MB-scale evidence and evaluator cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$EVIDENCE_ROOT" "$CASE_ROOT"
+          mkdir -p "$EVIDENCE_ROOT" "$CASE_ROOT"
+
+          # Longhorn #7843: original public support bundle. The issue explicitly reports
+          # the extracted longhorn-manager log at ~17 MB. Keep whole manager log files,
+          # not hand-curated snippets.
+          mkdir -p /tmp/lh7843 "$EVIDENCE_ROOT/longhorn-7843"
+          curl -fL --retry 3 --retry-delay 2 \
+            'https://github.com/longhorn/longhorn/files/14161835/supportbundle_b3abd9ae-8fc9-44f4-ad95-2deceffe927b_2024-02-05T07-26-29Z.zip' \
+            -o /tmp/lh7843.zip
+          unzip -q /tmp/lh7843.zip -d /tmp/lh7843
+          python - <<'PY'
+          import gzip, hashlib, json, os
+          from pathlib import Path
+          src=Path('/tmp/lh7843'); out=Path(os.environ['EVIDENCE_ROOT'])/'longhorn-7843'/'longhorn-manager.log'
+          candidates=[]
+          for p in src.rglob('*'):
+              if not p.is_file(): continue
+              s=str(p).lower()
+              if 'longhorn-manager' in s and ('.log' in p.name.lower() or '/logs/' in s): candidates.append(p)
+          if not candidates:
+              candidates=[p for p in src.rglob('*') if p.is_file() and p.suffix.lower() in {'.log','.txt'}]
+          with out.open('wb') as w:
+              for p in sorted(candidates):
+                  try:
+                      raw=gzip.decompress(p.read_bytes()) if p.suffix.lower()=='.gz' else p.read_bytes()
+                  except Exception:
+                      continue
+                  if b'\x00' in raw[:8192]: continue
+                  w.write(f'\n===== FILE: {p.relative_to(src)} =====\n'.encode())
+                  w.write(raw); w.write(b'\n')
+          size=out.stat().st_size
+          if size < 1_000_000:
+              raise SystemExit(f'Longhorn evidence unexpectedly small: {size}')
+          meta={'source':'https://github.com/longhorn/longhorn/issues/7843','source_archive_bytes':Path('/tmp/lh7843.zip').stat().st_size,'model_visible_bytes':size,'sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'files_concatenated':len(candidates)}
+          (out.parent/'evidence-meta.json').write_text(json.dumps(meta,indent=2)+'\n')
+          print('LONGHORN', meta)
+          PY
+
+          # Harvester #6253: original 52 MB support bundle hosted by the reporter.
+          # If the historical host is gone, record unavailability and continue with the
+          # other two cases rather than silently substituting a tiny excerpt.
+          mkdir -p /tmp/har6253 "$EVIDENCE_ROOT/harvester-6253"
+          if curl -fL --retry 2 --connect-timeout 20 --max-time 180 \
+            'https://www2.web-engineer.co.uk/supportbundle_9af7d11f-d06e-44e2-b611-2acd3a809037_2024-08-02T09-42-55Z.zip' \
+            -o /tmp/har6253.zip; then
+            unzip -q /tmp/har6253.zip -d /tmp/har6253
+            python - <<'PY'
+          import gzip, hashlib, json, os
+          from pathlib import Path
+          src=Path('/tmp/har6253'); out=Path(os.environ['EVIDENCE_ROOT'])/'harvester-6253'/'support-bundle-evidence.log'
+          preferred=[]; fallback=[]
+          for p in src.rglob('*'):
+              if not p.is_file(): continue
+              s=str(p).lower(); name=p.name.lower()
+              if any(x in s for x in ('rancher.log','kube-apiserver','etcd')): preferred.append(p)
+              if any(x in name for x in ('.log','.txt','.yaml','.yml','.json')): fallback.append(p)
+          selected=preferred
+          def emit(paths):
+              with out.open('wb') as w:
+                  for p in sorted(paths):
+                      try:
+                          raw=gzip.decompress(p.read_bytes()) if p.suffix.lower()=='.gz' else p.read_bytes()
+                      except Exception:
+                          continue
+                      if b'\x00' in raw[:8192]: continue
+                      w.write(f'\n===== FILE: {p.relative_to(src)} =====\n'.encode())
+                      w.write(raw); w.write(b'\n')
+          emit(selected)
+          if out.stat().st_size < 1_000_000:
+              selected=fallback; emit(selected)
+          size=out.stat().st_size
+          if size < 1_000_000:
+              raise SystemExit(f'Harvester evidence unexpectedly small: {size}')
+          meta={'source':'https://github.com/harvester/harvester/issues/6253','source_archive_bytes':Path('/tmp/har6253.zip').stat().st_size,'model_visible_bytes':size,'sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'files_concatenated':len(selected)}
+          (out.parent/'evidence-meta.json').write_text(json.dumps(meta,indent=2)+'\n')
+          print('HARVESTER', meta)
+          PY
+          else
+            printf '%s\n' 'historical reporter-hosted 52 MB support bundle is no longer downloadable' > "$EVIDENCE_ROOT/harvester-6253/.unavailable"
+            printf '{"source":"https://github.com/harvester/harvester/issues/6253","status":"unavailable"}\n' > "$EVIDENCE_ROOT/harvester-6253/evidence-meta.json"
+          fi
+
+          # Gitea #35925: run the issue's deterministic one-million-line reproducer,
+          # and pair the resulting MB-scale log with the exact pre-fix source revision
+          # discussed in the issue. Gitea is intentionally the last case below.
+          mkdir -p "$EVIDENCE_ROOT/gitea-35925"
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root=Path(os.environ['EVIDENCE_ROOT'])/'gitea-35925'
+          p=root/'workflow.log'
+          line='2025-11-11T08:00:00.000000Z This is a long message, always the same.\n'
+          with p.open('w') as f:
+              for _ in range(1_000_000): f.write(line)
+          print('GITEA_LOG_BYTES', p.stat().st_size)
+          PY
+          curl -fL --retry 3 \
+            'https://raw.githubusercontent.com/go-gitea/gitea/372d24b84bc6f4c5562792009c6b6e6a4aeb85f8/routers/web/repo/actions/view.go' \
+            -o "$EVIDENCE_ROOT/gitea-35925/view.go"
+          curl -fL --retry 3 \
+            'https://raw.githubusercontent.com/go-gitea/gitea/372d24b84bc6f4c5562792009c6b6e6a4aeb85f8/modules/actions/log.go' \
+            -o "$EVIDENCE_ROOT/gitea-35925/actions-log.go"
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root=Path(os.environ['EVIDENCE_ROOT'])/'gitea-35925'
+          files=[root/'workflow.log',root/'view.go',root/'actions-log.go']
+          total=sum(p.stat().st_size for p in files)
+          h=hashlib.sha256()
+          for p in files: h.update(p.read_bytes())
+          meta={'source':'https://github.com/go-gitea/gitea/issues/35925','model_visible_bytes':total,'sha256_combined':h.hexdigest(),'reproducer_lines':1_000_000,'source_revision':'372d24b84bc6f4c5562792009c6b6e6a4aeb85f8'}
+          (root/'evidence-meta.json').write_text(json.dumps(meta,indent=2)+'\n')
+          print('GITEA',meta)
+          PY
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['CASE_ROOT'])
+          cases={
+            'longhorn-7843': {
+              'question': '''A single-node Longhorn cluster has the automatic recovery behavior enabled for a filesystem that has become read-only. The workload pod is repeatedly recreated, but the replacement pod still cannot write and the volume remains read-only. Using only the supplied original support-bundle evidence, reconstruct the causal sequence. Explain why recreating the pod on this node does not restore read/write access, and identify the lifecycle ordering failure that keeps the mount read-only. Cite exact evidence lines.''',
+              'gold': {
+                'schema_version':1,'case_id':'longhorn-7843',
+                'summary':'On a single node, recreating the workload pod does not force a real Longhorn volume detach/reattach. The old pod can still be Terminating, so its CSI UnPublishVolume has not completed and its read-only bind mount remains. The replacement pod starts PublishVolume/remount while that old RO mount is still present; the global mount therefore stays RO and the new pod inherits the read-only state. The key bug is overlapping old-pod unpublish and new-pod publish/remount lifecycle ordering, not simply a failed retry timer.',
+                'required_concepts':[
+                  {'id':'same-node-no-real-reattach','patterns':['same.{0,40}node.{0,160}(does not|doesn.t|won.t|without).{0,100}(detach|reattach)','pod.{0,80}recreat.{0,180}(same node|volume).{0,160}(not|no).{0,80}(detach|reattach)']},
+                  {'id':'old-pod-unpublish-pending','patterns':['(old|previous).{0,80}pod.{0,100}(terminat|still).{0,140}(UnPublishVolume|unpublish|mount.{0,40}(remain|still))','UnPublishVolume.{0,160}(not|hasn.t|pending|before|terminat)']},
+                  {'id':'new-publish-overlaps-old-mount','patterns':['(new|replacement).{0,80}pod.{0,120}(PublishVolume|publish|remount).{0,180}(old|previous|existing|still)','(PublishVolume|publish|remount).{0,180}(before|while).{0,100}(UnPublishVolume|unpublish|old pod|previous pod)']},
+                  {'id':'ro-mount-propagates','patterns':['(read.?only|\bro\b).{0,160}(mount|globalmount).{0,180}(remain|stay|still|inherit)','(globalmount|global mount).{0,160}(remain|stay|still).{0,100}(read.?only|\bro\b)']}
+                ],
+                'evidence_markers':['Current time is not 5 seconds after request remount','handlePodDeletionIfVolumeRequestRemount'],
+                'thresholds':{'concept_recall':0.75,'evidence_marker_recall':0.5},
+                'leak_terms':['previous pod still under terminating','it won\'t call UnPublishVolume']
+              }
+            },
+            'harvester-6253': {
+              'question': '''A Harvester 1.2.1 cluster cannot begin the 1.2.2 upgrade because the admission webhook repeatedly rejects a fleet-local machine as not running. Using only the supplied original support-bundle evidence, determine what persistent cluster state is blocking the upgrade and how the logs tie that state to old node/provisioning history. Distinguish the blocking cause from unrelated etcd latency or later upgrade activity. Cite exact evidence lines.''',
+              'gold': {
+                'schema_version':1,'case_id':'harvester-6253',
+                'summary':'The initial upgrade gate is caused by stale Cluster API Machine/bootstrap state left from old node provisioning or reinstall attempts. The old custom-* Machine objects remain in fleet-local even though they are not valid running nodes. Rancher planner logs show those machines carrying invalid previous join-server state, etcd still has rkebootstrap records for them, and the Harvester validator rejects the upgrade because one of those persisted machines is not running. The stale Machine definitions, not general etcd slowness, are the blocking condition.',
+                'required_concepts':[
+                  {'id':'stale-machine-definitions','patterns':['(stale|old|orphan|leftover|persist).{0,140}(Machine|custom-318894c86e3c|custom-3d5f2a9df91d)','(Machine|custom-318894c86e3c).{0,160}(old|stale|orphan|provision|no longer|not a node)']},
+                  {'id':'validator-blocks-on-not-running','patterns':['validator\.harvesterhci\.io.{0,180}(machine|custom-318894c86e3c).{0,120}not running','admission webhook.{0,180}not running.{0,160}(block|reject|upgrade)']},
+                  {'id':'invalid-join-server-history','patterns':['previous join server.{0,160}(not valid|invalid).{0,180}(custom-318894c86e3c|machine)','(machine|custom-318894c86e3c).{0,180}previous join server.{0,120}(not valid|invalid)']},
+                  {'id':'bootstrap-state-persists','patterns':['rkebootstrap.{0,180}(custom-318894c86e3c|machine|persist|registry)','/registry/rke\.cattle\.io/rkebootstraps.{0,180}custom-318894c86e3c']}
+                ],
+                'evidence_markers':['machine fleet-local/custom-318894c86e3c is not running','previous join server'],
+                'thresholds':{'concept_recall':0.75,'evidence_marker_recall':0.5},
+                'leak_terms':['over 200 days old','they just needed deleting']
+              }
+            },
+            'gitea-35925': {
+              'question': '''Opening one very large Gitea Actions step log makes the server allocate far more memory than the log size and can OOM. The supplied evidence contains the issue reproducer output and the pre-fix Gitea source revision. Using only these files, identify the concrete request/code path that turns an expanded step into a huge in-memory response. Explain why compressed/chunked log storage does not by itself bound memory use, and identify the missing bound. Cite exact source lines.''',
+              'gold': {
+                'schema_version':1,'case_id':'gitea-35925',
+                'summary':'For an expanded step, convertToViewModel computes length as step.LogLength minus the cursor, so an initial cursor can request every remaining log row. actions.ReadLogs materializes that many rows; the handler then creates a ViewStepLogLine object for every row, appends the whole slice to the response, and JSON-serializes it. Storage compression/chunking therefore does not cap the decompressed row count or JSON response size. A highly repetitive log can be small in compressed storage yet expand into millions of Go objects and a huge JSON payload. The missing protection is a bounded line/byte page or truncation limit at read/response construction.',
+                'required_concepts':[
+                  {'id':'all-remaining-lines-length','patterns':['length.{0,80}step\.LogLength.{0,40}cursor','(all|every).{0,80}(remaining|rest).{0,60}(line|row).{0,160}(cursor|LogLength)']},
+                  {'id':'readlogs-materializes-large-range','patterns':['ReadLogs.{0,180}(offset|length|row|all|remaining)','actions\.ReadLogs.{0,180}(length|logRows)']},
+                  {'id':'rows-expanded-into-json-objects','patterns':['logLines.{0,120}append.{0,160}ViewStepLogLine','ViewStepLogLine.{0,180}(slice|append|each|every).{0,180}(JSON|response|marshal|serialize)']},
+                  {'id':'missing-size-or-page-bound','patterns':['(no|missing|without).{0,100}(limit|bound|cap|pagination|truncate).{0,140}(line|byte|response|log)','(limit|bound|cap|page|truncat).{0,160}(line|byte|response|log).{0,120}(needed|missing|absent)']}
+                ],
+                'evidence_markers':['length := step.LogLength - cursor.Cursor','actions.ReadLogs(ctx, task.LogInStorage, task.LogFilename, offset, length)','logLines = append(logLines, &ViewStepLogLine{'],
+                'thresholds':{'concept_recall':0.75,'evidence_marker_recall':0.67},
+                'leak_terms':['stores all visible step logs in a large structure','only truncating seems feasible']
+              }
+            }
+          }
+          for cid,c in cases.items():
+              d=root/cid; d.mkdir(parents=True,exist_ok=True)
+              (d/'question.md').write_text(c['question']+'\n')
+              (d/'gold.json').write_text(json.dumps(c['gold'],indent=2,ensure_ascii=False)+'\n')
+              (d/'case.json').write_text(json.dumps({'schema_version':1,'id':cid,'question_file':'question.md','gold_file':'gold.json','inputs':[{'id':'runtime-evidence','url':'https://example.invalid/runtime-evidence','filename':'runtime-evidence.log','sha256':'0'*64,'required':True}]},indent=2)+'\n')
+          PY
+
+          echo 'Evidence sizes:'
+          find "$EVIDENCE_ROOT" -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
+
+      - name: Run large cases native vs TraceCite
+        shell: bash
+        run: |
+          set -u
+          cases=(
+            longhorn-7843
+            harvester-6253
+            gitea-35925
+          )
+          BASE_PROMPT="You are a coding agent investigating supplied evidence. Keep the investigation bounded. Once the answer is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims."
+
+          for case_id in "${cases[@]}"; do
+            echo "===== case=$case_id model=$BENCH_MODEL ====="
+            INPUT_ROOT="$EVIDENCE_ROOT/$case_id"
+            CASE_DIR="$CASE_ROOT/$case_id"
+            CASE_RESULT="$RESULT_ROOT/$case_id"
+            rm -rf "$CASE_RESULT"
+            mkdir -p "$CASE_RESULT"
+            cp "$INPUT_ROOT/evidence-meta.json" "$CASE_RESULT/evidence-meta.json" 2>/dev/null || true
+
+            if [[ -f "$INPUT_ROOT/.unavailable" ]]; then
+              printf '{"case":"%s","status":"evidence_unavailable","reason":%s}\n' "$case_id" "$(python -c 'import json,sys; print(json.dumps(open(sys.argv[1]).read().strip()))' "$INPUT_ROOT/.unavailable")" > "$CASE_RESULT/status.json"
+              continue
+            fi
+
+            python -m tracecite.benchmarking validate "$CASE_DIR" > "$CASE_RESULT/validate.json" || exit 2
+            QUESTION="$(cat "$CASE_DIR/question.md")"
+            INPUT_FILES="$(find "$INPUT_ROOT" -maxdepth 1 -type f ! -name 'evidence-meta.json' ! -name '.unavailable' -printf '%f,' | sed 's/,$//')"
+            test -n "$INPUT_FILES" || exit 2
+
+            mkdir -p "$CASE_RESULT/native-session"
+            cd "$INPUT_ROOT"
+            NATIVE_PROMPT="$BASE_PROMPT Use only evidence from files in the current working directory and do not use external knowledge."
+            set +e
+            timeout -k 30s 900s pi \
+              --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
+              --thinking off --mode text --print \
+              --session-dir "$CASE_RESULT/native-session" \
+              --tools read,bash,grep,find,ls \
+              --no-extensions --no-skills --no-prompt-templates --no-context-files \
+              --system-prompt "$NATIVE_PROMPT" "$QUESTION" \
+              > "$CASE_RESULT/native-answer.md" 2> "$CASE_RESULT/native-stderr.log"
+            native_code=$?
+            set -e
+            echo "$native_code" > "$CASE_RESULT/native-exit.txt"
+
+            sleep 30
+
+            mkdir -p "$CASE_RESULT/tracecite-session"
+            cd "$INPUT_ROOT"
+            unset TRACECITE_BENCHMARK_MODE || true
+            unset TRACECITE_MODE || true
+            export TRACECITE_EVIDENCE_ROOT="$INPUT_ROOT"
+            export TRACECITE_EVIDENCE_FILES="$INPUT_FILES"
+            export TRACECITE_LOG_ACCESS_ACTIVITY="$CASE_RESULT/tracecite-runtime-evidence-access.jsonl"
+            export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$CASE_RESULT/tracecite-blocked-native-evidence-attempts.jsonl"
+            TRACE_PROMPT="$BASE_PROMPT Follow the user's explicit request to use TraceCite. All evidence content must be obtained through TraceCite tools; do not use native file-access tools for the evidence."
+            TRACE_REQUEST="用 tracecite 分析这个问题。${QUESTION}"
+            set +e
+            timeout -k 30s 900s pi \
+              --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
+              --thinking off --mode text --print \
+              --session-dir "$CASE_RESULT/tracecite-session" \
+              --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+              --tools tracecite_search,tracecite_expand \
+              --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+              --no-prompt-templates --no-context-files \
+              --system-prompt "$TRACE_PROMPT" "$TRACE_REQUEST" \
+              > "$CASE_RESULT/tracecite-answer.md" 2> "$CASE_RESULT/tracecite-stderr.log"
+            trace_code=$?
+            set -e
+            echo "$trace_code" > "$CASE_RESULT/tracecite-exit.txt"
+
+            cd "$GITHUB_WORKSPACE"
+            for arm in native tracecite; do
+              SESSION="$(find "$CASE_RESULT/${arm}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+              ANSWER="$CASE_RESULT/${arm}-answer.md"
+              if [[ -n "$SESSION" && -f "$ANSWER" ]]; then
+                python benchmarks/agent-investigation/pi_session_to_transcript.py \
+                  "$SESSION" "$ANSWER" "$CASE_RESULT/${arm}-transcript.jsonl" \
+                  --mode "pi-${arm}" --model "$BENCH_MODEL" || true
+                python - "$CASE_DIR" "$CASE_RESULT/${arm}-transcript.jsonl" "$CASE_RESULT/${arm}-score.json" <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+          case_dir=Path(sys.argv[1]); transcript=Path(sys.argv[2]); out=Path(sys.argv[3])
+          p=subprocess.run([sys.executable,'-m','tracecite.benchmarking','score',str(case_dir),str(transcript)],text=True,capture_output=True)
+          out.write_text(p.stdout or json.dumps({'available':False,'returncode':p.returncode,'stderr':p.stderr[-2000:]}))
+          PY
+                python - "$CASE_RESULT/${arm}-transcript.jsonl" "$CASE_RESULT/${arm}-usage.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          totals={'input_tokens':0,'output_tokens':0,'cache_read_tokens':0,'model_calls':0,'tool_calls':0}
+          p=Path(sys.argv[1])
+          if p.is_file():
+            for line in p.read_text(errors='replace').splitlines():
+              try: e=json.loads(line)
+              except Exception: continue
+              if e.get('type')=='model':
+                u=e.get('usage') or {}
+                totals['input_tokens']+=int(u.get('input_tokens') or 0)
+                totals['output_tokens']+=int(u.get('output_tokens') or 0)
+                totals['cache_read_tokens']+=int(u.get('cache_read_input_tokens') or u.get('cached_input_tokens') or 0)
+                totals['model_calls']+=1
+              elif e.get('type')=='tool': totals['tool_calls']+=1
+          Path(sys.argv[2]).write_text(json.dumps(totals,indent=2,sort_keys=True)+'\n')
+          PY
+              fi
+            done
+
+            trace_calls=0
+            blocked=0
+            [[ -f "$CASE_RESULT/tracecite-runtime-evidence-access.jsonl" ]] && trace_calls="$(grep -cve '^$' "$CASE_RESULT/tracecite-runtime-evidence-access.jsonl" || true)"
+            [[ -f "$CASE_RESULT/tracecite-blocked-native-evidence-attempts.jsonl" ]] && blocked="$(grep -cve '^$' "$CASE_RESULT/tracecite-blocked-native-evidence-attempts.jsonl" || true)"
+            printf '{"tracecite_evidence_calls":%s,"blocked_native_attempts":%s}\n' "$trace_calls" "$blocked" > "$CASE_RESULT/channel.json"
+          done
+
+      - name: Build summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['RESULT_ROOT'])
+          rows=[]
+          for case in ['longhorn-7843','harvester-6253','gitea-35925']:
+            cr=root/case
+            status={}
+            try: status=json.loads((cr/'status.json').read_text())
+            except Exception: pass
+            meta={}
+            try: meta=json.loads((cr/'evidence-meta.json').read_text())
+            except Exception: pass
+            if status:
+              rows.append({'case':case,'status':status,'evidence':meta})
+              continue
+            for arm in ['native','tracecite']:
+              def read_json(name):
+                p=cr/name
+                try: return json.loads(p.read_text()) if p.is_file() else {}
+                except Exception: return {}
+              def read_int(name):
+                p=cr/name
+                try: return int(p.read_text().strip())
+                except Exception: return None
+              score=read_json(f'{arm}-score.json')
+              q=score.get('quality') if isinstance(score.get('quality'),dict) else {}
+              usage=read_json(f'{arm}-usage.json')
+              rows.append({'case':case,'arm':arm,'exit':read_int(f'{arm}-exit.txt'),'score_passed':score.get('passed'),'quality':q,'usage':usage,'evidence':meta})
+          (root/'summary.json').write_text(json.dumps({'model':(root/'model.txt').read_text().strip(),'rows':rows},indent=2,ensure_ascii=False)+'\n')
+          PY
+          cat "$RESULT_ROOT/summary.json"
+
+      - name: Upload model results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: large-three-dual-minmax-${{ matrix.model_slot }}
+          path: ${{ env.RESULT_ROOT }}
+          if-no-files-found: error
+          retention-days: 14
