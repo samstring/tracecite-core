@@ -1,4 +1,4 @@
-trigger: 2026-09-03 serialized-evidence-and-lifecycle-deletion diagnostic
+trigger: 2026-09-03 transport-ceiling-and-artifact-boundary diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause-plus-final-evidence-discipline
@@ -6,7 +6,8 @@ correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
 adaptive_stopping_skill: serialized-evidence-plus-hard-lifecycle-deletion
+runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: obey-current-ownership-serialized-terminal-count-and-artifact-boundary
+diagnostic_focus: obey-current-ownership-artifact-boundary-and-mechanical-evidence-ceiling
 agent_timeout_seconds: 900
