@@ -1,12 +1,12 @@
-trigger: 2026-09-02 role-admission-transport-budget diagnostic
+trigger: 2026-09-02 compact-semantic-proof-filter diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause
 correctness_gate: auxiliary_only
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: role-admission-transport-budget
+adaptive_stopping_skill: compact-semantic-proof-filter
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: waiter-role-admission-mechanism-first-bounded-transport-and-artifact-lifecycle-boundary
+diagnostic_focus: forbid-inferred-holder-cycle-and-lifecycle-narrative
 agent_timeout_seconds: 900
