@@ -1,8 +1,8 @@
 // Thin Pi extension entrypoint. The implementation lives next to this file so the
 // public Host surface and architecture contract remain explicit and easy to audit.
 // Runtime TraceCite results carry evidence and mechanical transport metadata only.
-// Investigation strategy may live in the Agent/skill layer; hypotheses, meaning and
-// stopping are never selected by the TraceCite runtime.
+// Investigation strategy may live in the Agent/skill layer; the TraceCite runtime
+// never chooses hypotheses or stopping.
 //
 // Canonical surface declarations retained here for architecture/regression checks:
 // name: "tracecite_retrieve"
