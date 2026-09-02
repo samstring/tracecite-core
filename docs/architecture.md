@@ -62,14 +62,14 @@ Source, Segmenter, Sample, Survey, Filter, Snapshot, Evidence, Manifest, Verify
 Evidence Store
 frozen inputs, filtered artifacts, events, reports, manifests
 
-Stable Extension Protocol v2
+Stable TraceCite Extension Protocol
     ^
     |
 Domain Extensions
 Mobile / CI / Backend / Third-party
 ```
 
-Extensions exchange stable contracts and capabilities with Runtime rather than Runtime implementation objects. The current implementation may internally adapt a `ScenarioCapability` to `ScenarioRuntime`; `ScenarioRuntime` is no longer the long-term public boundary of Extension Protocol v2.
+Extensions exchange stable contracts and capabilities with Runtime rather than Runtime implementation objects. The current implementation may internally adapt a `ScenarioCapability` to `ScenarioRuntime`; `ScenarioRuntime` is not the long-term public extension boundary.
 
 ### 3.1 Agent Host
 
@@ -97,7 +97,7 @@ The registry manages Knowledge Candidate proposal, independent-case verification
 
 ### 3.5 Domain Extensions
 
-Domain Extensions contain domain data and semantics. Mobile is an official extension, not a Core special case. Extension Protocol v2 is declarative:
+Domain Extensions contain domain data and semantics. Mobile is an official extension, not a Core special case. The TraceCite Extension Protocol is declarative:
 
 - `ExtensionManifest` identifies the extension, domain, version, and protocol version.
 - `TraceCiteExtension` contains a Manifest and capability list.
@@ -217,7 +217,7 @@ metadata -> bounded sample/survey -> EvidencePointer -> on-demand expand -> full
 
 Canonical Evidence and Results remain complete and recoverable. Agent-facing projections may compress them but must retain required Coverage, truncation signals, and recovery paths. Runtime/Integration provides budgets, Agent profiles, compact projection, Evidence Ledger, `expand-many`, bounded Seen Evidence, and persistent cross-turn Context Delta. The Context Engine stores transport memory separately from InvestigationState and applies delta only after the canonical Result is recoverable. See [Context Engine](context-engine.md).
 
-Representative Evidence grouping and semantic compaction remain later Runtime/Integration optimizations and do not enter Extension Protocol v2.
+Representative Evidence grouping and semantic compaction remain later Runtime/Integration optimizations and do not enter the Extension Protocol.
 
 Token reduction must never hide missing Evidence, approximation, parsing failure, or Coverage gaps.
 
@@ -240,14 +240,14 @@ The main package supplies mechanisms; domains supply facts and semantics:
 
 | Main-package public contract | Domain examples |
 |---|---|
-| Extension Protocol v2 | Mobile, CI, Backend Extension |
+| TraceCite Extension Protocol | Mobile, CI, Backend Extension |
 | Core Plugin Capability | Source, Segmenter, Preprocessor, Event Transformer bundles |
 | Agent Capability | device queries, CI status queries, domain read/action tools |
 | Scenario Capability | Mobile/CI profile, preset, scenario resolver |
 | Assertion / Report Capability | domain assertions and reporting |
 | DomainEvent / EvidenceRef / Coverage | Mobile crash/network, CI build/test facts |
 
-`ScenarioRuntime` is a current internal Runtime adapter, not a long-term v2 Extension capability. Concepts interpretable only by one domain remain in that extension; only cross-domain invariants enter the main package.
+`ScenarioRuntime` is a current internal Runtime adapter, not a long-term public Extension capability. Concepts interpretable only by one domain remain in that extension; only cross-domain invariants enter the main package.
 
 ## 11. Implementation status
 
@@ -259,11 +259,11 @@ The main package supplies mechanisms; domains supply facts and semantics:
 | Knowledge Governance and explicit migration | implemented |
 | Agent profile, compact projection, Evidence Ledger, `expand-many` | implemented |
 | Agent Capability Registry and live safety gates | implemented |
-| Declarative Extension Protocol v2 and internal Scenario adaptation | implemented |
-| Mobile Extension Protocol v2 migration | implemented |
+| Declarative Extension Protocol and internal Scenario adaptation | implemented |
+| Mobile Extension integration | implemented |
 | Context Engine: Seen Evidence, cross-turn dedupe, Context Delta | implemented |
 | Representative Evidence grouping / semantic compaction | planned |
-| MCP adapter on v2 Runtime/Context APIs | implemented |
+| MCP adapter on Runtime/Context APIs | implemented |
 | Mobile device and CI cross-domain validation | partially implemented: automated Mobile real-log/matrix validation exists; real-device and a separate CI-domain extension validation remain |
 
 The contract → Context Engine → Mobile → MCP migration sequence is complete on the refactor branches. Remaining validation priorities are real Agent-host/token benchmarks, real-device Mobile acceptance, and a second independent domain such as CI before generalizing additional domain concepts into the main package.

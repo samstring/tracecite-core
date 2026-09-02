@@ -227,6 +227,33 @@ def trajectory_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _metric(mapping: Mapping[str, Any], key: str) -> int | None:
+    value = mapping.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def token_usage(score: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose the token numbers used for the Native vs TraceCite headline."""
+
+    context = score.get("context_cost") or {}
+    if not isinstance(context, Mapping):
+        context = {}
+    fresh = _metric(context, "reported_input_tokens")
+    cached = _metric(context, "reported_cached_input_tokens")
+    output = _metric(context, "reported_output_tokens")
+    fresh_plus_cached = fresh + cached if fresh is not None and cached is not None else None
+    return {
+        "fresh_input_tokens": fresh,
+        "cached_input_tokens": cached,
+        "fresh_plus_cached_input_tokens": fresh_plus_cached,
+        "output_tokens": output,
+        "model_calls": _metric(context, "model_calls"),
+        "usage_source": context.get("usage_source"),
+    }
+
+
 def build_run_result(
     score: Mapping[str, Any],
     *,
@@ -254,8 +281,9 @@ def build_run_result(
     valid = exit_code == 0 and provider_contamination is None and not timed_out
     events = transcript_events or []
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "task_result": {
+            "primary_evaluation": score.get("primary_evaluation") or {},
             "passed": score.get("passed"),
             "legacy_passed": score.get("legacy_passed"),
             "support_aware_passed": score.get("support_aware_passed", score.get("passed")),
@@ -263,6 +291,7 @@ def build_run_result(
             "context_cost": score.get("context_cost") or {},
             "failure": score.get("failure"),
         },
+        "token_usage": token_usage(score),
         "run_validity": {
             "valid_for_comparison": valid,
             "reason": validity_reason,

@@ -1,0 +1,139 @@
+name: GMI Connectivity Check
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/gmi-connectivity-check.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gmi1:
+    name: GMI1 connectivity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_KEY: ${{ secrets.GMI_API_KEY }}
+      MODEL: ${{ vars.GMI_MODEL }}
+      BASE_URL: ${{ vars.GMI_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+    steps:
+      - name: Probe GMI1
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${API_KEY:-}" || { echo 'GMI_API_KEY is empty'; exit 2; }
+          test -n "${MODEL:-}" || { echo 'GMI_MODEL is empty'; exit 2; }
+          payload=$(python - <<'PY'
+          import json, os
+          print(json.dumps({
+              "model": os.environ["MODEL"],
+              "messages": [{"role": "user", "content": "Reply exactly OK"}],
+              "max_tokens": 4,
+              "stream": False,
+          }))
+          PY
+          )
+          code=$(curl -sS --connect-timeout 15 --max-time 45 \
+            -o response.json -w '%{http_code}' \
+            -H "Authorization: Bearer $API_KEY" \
+            -H 'Content-Type: application/json' \
+            -d "$payload" \
+            "$BASE_URL/chat/completions" || true)
+          echo "HTTP_STATUS=$code"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('response.json')
+          if not p.exists():
+              print('RESPONSE=missing')
+              raise SystemExit(0)
+          raw=p.read_text(errors='replace')
+          try:
+              data=json.loads(raw)
+          except Exception:
+              print('RESPONSE_TEXT=' + raw[:500])
+              raise SystemExit(0)
+          if 'error' in data:
+              err=data['error']
+              if isinstance(err, dict):
+                  print('ERROR_CODE=' + str(err.get('code','')))
+                  print('ERROR_TYPE=' + str(err.get('type','')))
+                  print('ERROR_MESSAGE=' + str(err.get('message',''))[:500])
+              else:
+                  print('ERROR=' + str(err)[:500])
+          else:
+              print('MODEL_RETURNED=' + str(data.get('model','')))
+              choices=data.get('choices') or []
+              content=''
+              if choices:
+                  content=((choices[0].get('message') or {}).get('content') or '')
+              print('CONTENT=' + content[:200].replace('\n',' '))
+          PY
+          test "$code" = "200"
+
+  gmi2:
+    name: GMI2 connectivity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_KEY: ${{ secrets.GMI2_API_KEY }}
+      MODEL: ${{ vars.GMI2_MODEL }}
+      BASE_URL: ${{ vars.GMI2_BASE_URL || vars.GMI_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+    steps:
+      - name: Probe GMI2
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${API_KEY:-}" || { echo 'GMI2_API_KEY is empty'; exit 2; }
+          test -n "${MODEL:-}" || { echo 'GMI2_MODEL is empty'; exit 2; }
+          payload=$(python - <<'PY'
+          import json, os
+          print(json.dumps({
+              "model": os.environ["MODEL"],
+              "messages": [{"role": "user", "content": "Reply exactly OK"}],
+              "max_tokens": 4,
+              "stream": False,
+          }))
+          PY
+          )
+          code=$(curl -sS --connect-timeout 15 --max-time 45 \
+            -o response.json -w '%{http_code}' \
+            -H "Authorization: Bearer $API_KEY" \
+            -H 'Content-Type: application/json' \
+            -d "$payload" \
+            "$BASE_URL/chat/completions" || true)
+          echo "HTTP_STATUS=$code"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('response.json')
+          if not p.exists():
+              print('RESPONSE=missing')
+              raise SystemExit(0)
+          raw=p.read_text(errors='replace')
+          try:
+              data=json.loads(raw)
+          except Exception:
+              print('RESPONSE_TEXT=' + raw[:500])
+              raise SystemExit(0)
+          if 'error' in data:
+              err=data['error']
+              if isinstance(err, dict):
+                  print('ERROR_CODE=' + str(err.get('code','')))
+                  print('ERROR_TYPE=' + str(err.get('type','')))
+                  print('ERROR_MESSAGE=' + str(err.get('message',''))[:500])
+              else:
+                  print('ERROR=' + str(err)[:500])
+          else:
+              print('MODEL_RETURNED=' + str(data.get('model','')))
+              choices=data.get('choices') or []
+              content=''
+              if choices:
+                  content=((choices[0].get('message') or {}).get('content') or '')
+              print('CONTENT=' + content[:200].replace('\n',' '))
+          PY
+          test "$code" = "200"

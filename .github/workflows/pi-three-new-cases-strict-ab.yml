@@ -1,0 +1,385 @@
+name: Pi Three New Cases Strict TraceCite A/B
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence
+    paths:
+      - .github/workflows/pi-three-new-cases-strict-ab.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-three-new-cases-strict-ab
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - case_id: moby-35310-endpoint-cnt
+            evidence_url: https://github.com/moby/moby/files/1420252/daemon.log
+            evidence_kind: text
+            source_repo: https://github.com/moby/libnetwork.git
+            source_commit: dd20549dbc822d961498e76c4b6e977fb26f9313
+            arm_order: native tracecite
+          - case_id: vscode-41136-clock-spdlog
+            evidence_url: https://github.com/Microsoft/vscode/files/1603003/logs.zip
+            evidence_kind: zip
+            source_repo: https://github.com/gabime/spdlog.git
+            source_commit: 32177aa77a0a20453d3e7455cac42406fc49b6ca
+            arm_order: tracecite native
+          - case_id: vscode-132086-gpu-startup
+            evidence_url: https://github.com/microsoft/vscode/files/7122976/gpu-startup-logs.zip
+            evidence_kind: zip
+            source_repo: ""
+            source_commit: ""
+            arm_order: native tracecite
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.TRACECITE_BENCH_BASE_URL || 'https://api.gmi-serving.com/v1' }}
+      BENCH_MODEL: ${{ vars.TRACECITE_BENCH_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      CASE_ID: ${{ matrix.case_id }}
+      EVIDENCE_URL: ${{ matrix.evidence_url }}
+      EVIDENCE_KIND: ${{ matrix.evidence_kind }}
+      SOURCE_REPOSITORY: ${{ matrix.source_repo }}
+      SOURCE_COMMIT: ${{ matrix.source_commit }}
+      ARM_ORDER: ${{ matrix.arm_order }}
+      RESULT_ROOT: /tmp/pi-three-new/${{ matrix.case_id }}
+      INPUT_ROOT: /tmp/pi-three-new/${{ matrix.case_id }}/input
+      SOURCE_ROOT: /tmp/pi-three-new/${{ matrix.case_id }}/source
+      CASE_DIR: /tmp/pi-three-new/${{ matrix.case_id }}/case
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev]"
+          test -f "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md"
+          python -m pytest -q \
+            tests/test_session_novelty_regressions.py \
+            tests/test_pi_host_tool_activity.py \
+            tests/test_pi_tracecite_bridge.py \
+            tests/test_root_cause_benchmarking.py \
+            tests/test_support_aware_root_cause_benchmarking.py \
+            tests/test_benchmark_run_result.py \
+            tests/test_log_code_score.py
+
+      - name: Configure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$OPENAI_API_KEY"
+          test -n "$BENCH_MODEL"
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['OPENAI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Prepare evidence and benchmark case
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT_ROOT"
+          mkdir -p "$RESULT_ROOT" "$INPUT_ROOT" "$SOURCE_ROOT" "$CASE_DIR" "$RESULT_ROOT/raw"
+          RAW="$RESULT_ROOT/raw/download"
+          curl -L --fail --retry 5 --retry-delay 2 -o "$RAW" "$EVIDENCE_URL"
+          if [[ "$EVIDENCE_KIND" == "text" ]]; then
+            cp "$RAW" "$INPUT_ROOT/evidence.log"
+          else
+            mkdir -p "$RESULT_ROOT/raw/extracted"
+            unzip -q "$RAW" -d "$RESULT_ROOT/raw/extracted"
+            python - <<'PY'
+          from pathlib import Path
+          import os
+          src = Path(os.environ['RESULT_ROOT']) / 'raw' / 'extracted'
+          out = Path(os.environ['INPUT_ROOT']) / 'evidence.log'
+          files = sorted(p for p in src.rglob('*') if p.is_file())
+          with out.open('w', encoding='utf-8', errors='replace') as w:
+              for p in files:
+                  rel = p.relative_to(src)
+                  data = p.read_bytes()
+                  if b'\x00' in data[:8192]:
+                      continue
+                  text = data.decode('utf-8', errors='replace')
+                  w.write(f'===== FILE: {rel.as_posix()} =====\n')
+                  w.write(text)
+                  if not text.endswith('\n'):
+                      w.write('\n')
+          if not out.exists() or out.stat().st_size == 0:
+              raise SystemExit('no textual evidence extracted')
+          print(f'combined {len(files)} files -> {out.stat().st_size} bytes')
+          PY
+          fi
+          EVIDENCE="$(realpath "$INPUT_ROOT/evidence.log")"
+          echo "RUNTIME_LOG=$EVIDENCE" >> "$GITHUB_ENV"
+          echo "RUNTIME_LOG_BYTES=$(stat -c '%s' "$EVIDENCE")" >> "$GITHUB_ENV"
+
+          if [[ -n "$SOURCE_REPOSITORY" ]]; then
+            git init -q "$SOURCE_ROOT"
+            git -C "$SOURCE_ROOT" remote add origin "$SOURCE_REPOSITORY"
+            git -C "$SOURCE_ROOT" fetch --depth=1 origin "$SOURCE_COMMIT"
+            git -C "$SOURCE_ROOT" checkout -q --detach FETCH_HEAD
+            test "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_COMMIT"
+            git -C "$SOURCE_ROOT" remote remove origin
+          fi
+
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          cid = os.environ['CASE_ID']
+          case_dir = Path(os.environ['CASE_DIR'])
+          evidence = Path(os.environ['INPUT_ROOT']) / 'evidence.log'
+          cases = {
+            'moby-35310-endpoint-cnt': {
+              'question': '''A Docker Swarm worker repeatedly fails tasks with `Unable to complete atomic operation, key modified` around network teardown and recreation. You have the supplied failing daemon evidence and a complete checkout of the relevant pre-fix libnetwork source repository. Investigate them together. Determine the most specific underlying state-management failure, distinguish repeated cleanup symptoms from the mechanism that poisons later network creation, trace that mechanism into source where possible, and state the narrowest fix direction justified by the evidence. Cite exact `evidence.log:L...` and source `path:L...` lines actually observed. Distinguish direct observation from inference. Do not use the web, issue/PR content, remote git operations, or post-fix knowledge.\n''',
+              'root': {
+                'failure_localization': [r'Unable to complete atomic operation, key modified|fatal task error'],
+                'immediate_failure_mechanism': [r'(?:endpoint_cnt|endpointCnt).{0,220}(?:creat|recreat|existing|stale|store|key)'],
+                'upstream_contributor': [r'(?:network|endpoint).{0,180}(?:deleted|removed|cleanup).{0,260}(?:endpoint_cnt|endpointCnt|updateToStore)|updateToStore.{0,220}(?:missing|create|recreate|endpoint)'],
+                'fix_alignment': [r'(?:do not|don.t|avoid|prevent).{0,180}(?:create|recreate).{0,120}(?:endpoint_cnt|endpointCnt)|(?:GetObject|existing object).{0,220}(?:increment|decrement|updateToStore)'],
+              },
+              'markers': ['Unable to complete atomic operation, key modified', 'network orange remove failed', 'cannot find address pool'],
+              'unsupported': [r'(?:raft|consensus).{0,80}(?:root cause|primary cause)'],
+            },
+            'vscode-41136-clock-spdlog': {
+              'question': '''VS Code on Windows can freeze when the system clock is moved backwards; closing the affected window can hang while the main process otherwise remains responsive. You have the supplied VS Code log bundle and a complete checkout of the relevant pre-fix spdlog source repository. Investigate the evidence and source together. Determine the exact shutdown/logging mechanism that can turn a clock rollback into a window hang, and state the narrowest fix direction justified by the evidence. Cite exact `evidence.log:L...` and source `path:L...` lines actually observed. Distinguish direct observation from inference. Do not use the web, issue/PR content, remote git operations, or post-fix knowledge.\n''',
+              'root': {
+                'failure_localization': [r'(?:freeze|hang).{0,160}(?:clock|time|close|shutdown)|(?:clock|time).{0,160}(?:freeze|hang)'],
+                'immediate_failure_mechanism': [r'(?:wait_empty_q|flush).{0,220}(?:queue|worker|sleep)|(?:queue|worker).{0,220}(?:wait_empty_q|flush|sleep)'],
+                'upstream_contributor': [r'(?:std::this_thread::sleep_for|sleep_for).{0,220}(?:system clock|wall clock|clock adjustment|time change)|(?:system clock|wall clock|clock adjustment).{0,220}(?:sleep_for|sleep)'],
+                'fix_alignment': [r'(?:Windows|Win32).{0,80}Sleep|sleep_for_millis|(?:steady|monotonic).{0,80}clock'],
+              },
+              'markers': ['wait_empty_q', 'sleep_for', 'queue'],
+              'unsupported': [r'(?:log folder|date rollover).{0,100}(?:root cause|primary cause)'],
+            },
+            'vscode-132086-gpu-startup': {
+              'question': '''VS Code Insiders on Windows regressed from roughly five seconds to roughly thirty seconds to become ready. The problem disappears with `--disable-gpu`. You have a supplied GPU startup trace bundle containing comparable runs. Using only this evidence, identify where the startup time is being lost, the most specific GPU/graphics mechanism supported by the traces, and the narrowest upstream/fix direction that is justified without overclaiming. Cite exact `evidence.log:L...` lines actually observed. Distinguish direct observation from inference and explicitly say what the traces cannot prove. Do not use the web, issue/PR content, or post-fix knowledge.\n''',
+              'root': {
+                'failure_localization': [r'(?:workbench|renderer|startup|restore).{0,180}(?:slow|delay|23|24|29|30)|(?:23|24|29|30).{0,80}(?:second|sec|s).{0,180}(?:workbench|renderer|startup|restore)'],
+                'immediate_failure_mechanism': [r'(?:GL|OpenGL|GPU).{0,220}(?:slow|stall|driver|call)|(?:driver|GL).{0,220}(?:100ms|1s|slow|stall)'],
+                'upstream_contributor': [r'(?:Electron|Chromium).{0,220}(?:GPU|graphics|GL).{0,120}(?:regression|change|update)|(?:GPU|graphics|GL).{0,220}(?:Electron|Chromium)'],
+                'fix_alignment': [r'(?:update|upgrade|move).{0,120}Electron|Electron.{0,100}(?:17|newer|upgrade|update)'],
+              },
+              'markers': ['gpu', 'gl'],
+              'unsupported': [r'(?:extension host|npm extension).{0,100}(?:root cause|primary cause)'],
+            },
+          }
+          spec = cases[cid]
+          (case_dir / 'question.md').write_text(spec['question'], encoding='utf-8')
+          root = {k: {'patterns': v} for k, v in spec['root'].items()}
+          gold = {
+            'root_cause_schema_version': 1,
+            'root_cause': root,
+            'evidence_sufficiency': {
+              'failure_localization': 'supported',
+              'immediate_failure_mechanism': 'supported',
+              'upstream_contributor': 'inference_supported',
+              'fix_alignment': 'inference_supported',
+            },
+            'evidence_markers': spec['markers'],
+            'unsupported_claims': [{'id': 'known-distractor', 'patterns': spec['unsupported']}],
+            'contradictions': [],
+            'root_cause_thresholds': {
+              'dimension_recall': 0.75,
+              'supported_dimension_recall': 0.75,
+              'citation_accuracy': 0.5,
+              'evidence_marker_recall': 0.6667,
+              'support_level_accuracy': 0.75,
+              'max_unsupported_claim_hits': 0,
+              'max_contradiction_hits': 0,
+              'max_unsupported_dimension_overreach_hits': 0,
+            },
+            'leak_terms': [],
+          }
+          (case_dir / 'gold.json').write_text(json.dumps(gold, indent=2) + '\n', encoding='utf-8')
+          digest = hashlib.sha256(evidence.read_bytes()).hexdigest()
+          case = {
+            'schema_version': 1,
+            'id': cid,
+            'title': cid,
+            'question_file': 'question.md',
+            'gold_file': 'gold.json',
+            'inputs': [{'id': 'runtime-evidence', 'url': os.environ['EVIDENCE_URL'], 'filename': 'evidence.log', 'sha256': digest, 'required': True}],
+          }
+          (case_dir / 'case.json').write_text(json.dumps(case, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps({'case': cid, 'bytes': evidence.stat().st_size, 'sha256': digest}, indent=2))
+          PY
+          python -m tracecite.root_cause_benchmarking validate "$CASE_DIR" > "$RESULT_ROOT/validate.json"
+
+      - name: Run paired Native vs Strict TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$CASE_DIR/question.md")"
+          if [[ -n "$SOURCE_REPOSITORY" ]]; then
+            BASE_PROMPT="You are a real coding agent debugging a failure with a complete pre-fix source repository as your current working directory. A failing runtime evidence file is available at $RUNTIME_LOG. You own hypotheses, causal reasoning, source-code exploration, investigation order, conclusions, evidence sufficiency, and when to stop. Do not use the web, issue/PR content, remote git operations, or post-fix knowledge. Cite important claims as exact runtime-evidence or source path:L<line> references you actually observed. Distinguish direct observation from inference."
+          else
+            BASE_PROMPT="You are a real coding agent investigating a supplied runtime evidence file at $RUNTIME_LOG. No source checkout is supplied for this case. You own hypotheses, causal reasoning, investigation order, conclusions, evidence sufficiency, and when to stop. Do not use the web, issue/PR content, or post-fix knowledge. Cite important claims as exact evidence.log:L<line> references you actually observed. Distinguish direct observation from inference."
+          fi
+
+          run_arm() {
+            arm="$1"
+            mkdir -p "$RESULT_ROOT/pi-${arm}-session"
+            cd "$SOURCE_ROOT"
+            set +e
+            if [[ "$arm" == native ]]; then
+              PROMPT="$BASE_PROMPT This is the native evidence arm. You may inspect the runtime evidence with the same native read/grep/bash tools you use for source code."
+              timeout -k 30s 1200s pi \
+                --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+                --thinking off --mode text --print \
+                --session-dir "$RESULT_ROOT/pi-native-session" \
+                --tools read,bash,grep,find,ls \
+                --no-extensions --no-skills --no-prompt-templates --no-context-files \
+                --system-prompt "$PROMPT" "$QUESTION" \
+                > "$RESULT_ROOT/pi-native-answer.md" 2> "$RESULT_ROOT/pi-native-stderr.log"
+            else
+              PROMPT="$BASE_PROMPT This is the strict TraceCite evidence arm. Native read/grep/bash/find/ls remain available for source-code exploration, but EVERY operation that inspects or derives from runtime evidence content MUST use TraceCite. The Host blocks native content access outside the source root. Use TraceCite as real evidence retrieval, not merely to satisfy a tool-call requirement."
+              TRACECITE_PI_SESSION="$RESULT_ROOT/tracecite-retrieval-session.json" \
+              TRACECITE_PI_ACTIVITY="$RESULT_ROOT/tracecite-host-tool-activity.json" \
+              TRACECITE_LOG_GUARD_ACTIVITY="$RESULT_ROOT/tracecite-log-guard-blocks.jsonl" \
+              TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT_ROOT/tracecite-runtime-log-access.jsonl" \
+              TRACECITE_CODE_ROOT="$SOURCE_ROOT" \
+              TRACECITE_RUNTIME_LOG="$RUNTIME_LOG" \
+              timeout -k 30s 1200s pi \
+                --provider gmi --model "$BENCH_MODEL" --api-key "$OPENAI_API_KEY" \
+                --thinking off --mode text --print \
+                --session-dir "$RESULT_ROOT/pi-tracecite-session" \
+                --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_log_code_tracecite_extension.ts" \
+                --tools read,bash,grep,find,ls,tracecite_retrieve,tracecite_materialize,tracecite_replay,tracecite_aggregate,tracecite_traverse,tracecite_verify,tracecite_search,tracecite_expand \
+                --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+                --no-prompt-templates --no-context-files \
+                --system-prompt "$PROMPT" "$QUESTION" \
+                > "$RESULT_ROOT/pi-tracecite-answer.md" 2> "$RESULT_ROOT/pi-tracecite-stderr.log"
+            fi
+            code=$?
+            set -e
+            echo "$code" > "$RESULT_ROOT/pi-${arm}-exit.txt"
+          }
+
+          echo "$ARM_ORDER" > "$RESULT_ROOT/arm-order.txt"
+          first="${ARM_ORDER%% *}"
+          second="${ARM_ORDER##* }"
+          run_arm "$first"
+          sleep 20
+          run_arm "$second"
+
+      - name: Convert, score, and summarize
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arm in native tracecite; do
+            SESSION="$(find "$RESULT_ROOT/pi-${arm}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+            ANSWER="$RESULT_ROOT/pi-${arm}-answer.md"
+            EXIT="$RESULT_ROOT/pi-${arm}-exit.txt"
+            if [[ -z "$SESSION" || ! -f "$ANSWER" || ! -f "$EXIT" ]]; then
+              continue
+            fi
+            TRANSCRIPT="$RESULT_ROOT/pi-${arm}-transcript.jsonl"
+            SCORE="$RESULT_ROOT/pi-${arm}-score.json"
+            RUN_RESULT="$RESULT_ROOT/pi-${arm}-run-result.json"
+            python benchmarks/agent-investigation/pi_session_to_transcript.py \
+              "$SESSION" "$ANSWER" "$TRANSCRIPT" \
+              --mode "pi-three-new-${arm}" --model "$BENCH_MODEL"
+            python -m tracecite.root_cause_benchmarking score \
+              "$CASE_DIR" "$TRANSCRIPT" > "$SCORE" || true
+            if [[ -f "$SCORE" ]]; then
+              python benchmarks/agent-investigation/run_result.py \
+                --score "$SCORE" \
+                --exit-code-file "$EXIT" \
+                --stderr "$RESULT_ROOT/pi-${arm}-stderr.log" \
+                --session "$SESSION" \
+                --transcript "$TRANSCRIPT" \
+                --output "$RUN_RESULT" || true
+            fi
+          done
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RESULT_ROOT'])
+          def read(name):
+              p = root / name
+              return json.loads(p.read_text()) if p.is_file() else None
+          def read_jsonl(name):
+              p = root / name
+              if not p.is_file(): return []
+              return [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
+          def valid(v):
+              return bool(v and (v.get('run_validity') or {}).get('valid_for_comparison'))
+          native = read('pi-native-run-result.json')
+          trace = read('pi-tracecite-run-result.json')
+          activity = read('tracecite-host-tool-activity.json')
+          blocked = read_jsonl('tracecite-log-guard-blocks.jsonl')
+          accesses = read_jsonl('tracecite-runtime-log-access.jsonl')
+          trajectory = (trace or {}).get('trajectory') or {}
+          tcalls = int(trajectory.get('tracecite_evidence_calls') or 0)
+          report = {
+            'schema_version': 1,
+            'case_id': os.environ['CASE_ID'],
+            'runtime_log_bytes': int(os.environ.get('RUNTIME_LOG_BYTES') or 0),
+            'source_repository': os.environ.get('SOURCE_REPOSITORY') or None,
+            'source_commit': os.environ.get('SOURCE_COMMIT') or None,
+            'arm_order': (root / 'arm-order.txt').read_text().strip() if (root / 'arm-order.txt').is_file() else None,
+            'native': native,
+            'tracecite': trace,
+            'tracecite_host_activity': activity,
+            'blocked_native_log_attempts': blocked,
+            'tracecite_runtime_log_access': accesses,
+            'tracecite_total_evidence_calls': tcalls,
+            'tracecite_runtime_log_calls': len(accesses),
+            'strict_boundary_valid': len(accesses) > 0,
+            'comparison_valid': valid(native) and valid(trace) and len(accesses) > 0,
+          }
+          (root / 'comparison.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-three-new-${{ matrix.case_id }}
+          path: ${{ env.RESULT_ROOT }}
+          if-no-files-found: warn

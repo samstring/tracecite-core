@@ -1,0 +1,422 @@
+name: Pi Dual GMI Sequential Suite Case
+
+on:
+  workflow_call:
+    inputs:
+      arm:
+        description: "native or tracecite"
+        required: true
+        type: string
+      case_key:
+        description: "Stable suite case key"
+        required: true
+        type: string
+      case_dir:
+        description: "Benchmark case directory"
+        required: true
+        type: string
+      scorer:
+        description: "legacy, root_cause, or log_code"
+        required: true
+        type: string
+      workspace_kind:
+        description: "source-repo or evidence-only"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: ${{ inputs.arm }} / ${{ inputs.case_key }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ARM: ${{ inputs.arm }}
+      CASE_KEY: ${{ inputs.case_key }}
+      CASE_DIR: ${{ inputs.case_dir }}
+      SCORER: ${{ inputs.scorer }}
+      WORKSPACE_KIND: ${{ inputs.workspace_kind }}
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-${{ inputs.arm }}-${{ github.run_id }}-${{ inputs.case_key }}
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      RESULT_ROOT: /tmp/pi-seq16/${{ inputs.arm }}/${{ inputs.case_key }}
+      WORK_ROOT: /tmp/pi-seq16-work/${{ inputs.arm }}/${{ inputs.case_key }}
+      PREP: /tmp/pi-seq16-prep/${{ inputs.arm }}/${{ inputs.case_key }}
+      SOURCE_ROOT: /tmp/pi-seq16-source/${{ inputs.arm }}/${{ inputs.case_key }}
+      TRACECITE_MCP_REF: 71ca06d7e16a1c6ed7ebde65658f9944a10d7c51
+
+    steps:
+      - name: Checkout TraceCite Core under test
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned TraceCite MCP
+        if: inputs.arm == 'tracecite'
+        uses: actions/checkout@v4
+        with:
+          repository: samstring/tracecite-mcp
+          ref: ${{ env.TRACECITE_MCP_REF }}
+          path: tracecite-mcp
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install isolated Pi runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python -m pip install -e ".[dev]"
+          if [[ "$ARM" == tracecite ]]; then
+            pi install npm:pi-mcp-adapter@2.27.0 --approve
+            python -m pip install 'mcp>=2,<3'
+            python -m pip install -e ./tracecite-mcp --no-deps
+          fi
+          pi --version
+
+      - name: Verify configuration and case
+        env:
+          ARM_MODEL: ${{ inputs.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+          ARM_API_KEY: ${{ inputs.arm == 'native' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$ARM" == native || "$ARM" == tracecite ]]
+          [[ "$SCORER" == legacy || "$SCORER" == root_cause || "$SCORER" == log_code ]]
+          [[ "$WORKSPACE_KIND" == source-repo || "$WORKSPACE_KIND" == evidence-only ]]
+          test -n "${ARM_API_KEY:-}" || { echo "$ARM GMI API key is empty" >&2; exit 2; }
+          test -n "${ARM_MODEL:-}" || { echo "$ARM GMI model is empty" >&2; exit 2; }
+          test -d "$CASE_DIR"
+          if [[ "$SCORER" == legacy ]]; then
+            python -m tracecite.benchmarking validate "$CASE_DIR"
+          else
+            python -m tracecite.root_cause_benchmarking validate "$CASE_DIR"
+          fi
+          python scripts/check_architecture.py
+          if [[ "$ARM" == tracecite ]]; then
+            python -m pytest -q \
+              tests/test_pi_mcp_benchmark_boundary.py \
+              tests/test_pi_tracecite_formal_flow.py \
+              tracecite-mcp/tests/test_projection.py \
+              tracecite-mcp/tests/test_server.py
+          fi
+
+      - name: Configure isolated Pi model
+        env:
+          ARM_MODEL: ${{ inputs.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['ARM_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          path = Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json'
+          path.write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Prepare isolated runtime evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT_ROOT" "$PREP" "$WORK_ROOT" "$SOURCE_ROOT"
+          mkdir -p "$RESULT_ROOT" "$PREP" "$WORK_ROOT/evidence"
+          if [[ "$SCORER" == legacy ]]; then
+            python -m tracecite.benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT_ROOT/prepare.json"
+          else
+            python -m tracecite.root_cause_benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT_ROOT/prepare.json"
+          fi
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          python - "$PREPARED" >> "$GITHUB_ENV" <<'PY'
+          import json, os, shutil, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text())
+          inputs = data.get('inputs') or []
+          if len(inputs) != 1:
+              raise SystemExit(f'expected exactly one runtime evidence input, got {len(inputs)}')
+          source = Path(inputs[0]['path']).resolve()
+          target = Path(os.environ['WORK_ROOT']) / 'evidence' / source.name
+          shutil.copyfile(source, target)
+          print(f'RUNTIME_LOG={target.resolve()}')
+          print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
+          PY
+          sha256sum "$(find "$WORK_ROOT/evidence" -type f -print -quit)" | awk '{print $1}' > "$RESULT_ROOT/evidence-sha256.txt"
+
+      - name: Prepare investigation workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$WORKSPACE_KIND" == source-repo ]]; then
+            eval "$(python - <<'PY'
+          import json, os, shlex
+          from pathlib import Path
+          source = json.loads((Path(os.environ['CASE_DIR']) / 'case.json').read_text()).get('source_checkout')
+          if not source:
+              raise SystemExit('source-repo case is missing source_checkout')
+          print('SOURCE_REPOSITORY=' + shlex.quote(source['repository']))
+          print('SOURCE_COMMIT=' + shlex.quote(source['commit']))
+          PY
+            )"
+            git init -q "$SOURCE_ROOT"
+            git -C "$SOURCE_ROOT" remote add origin "$SOURCE_REPOSITORY"
+            git -C "$SOURCE_ROOT" fetch --depth=1 origin "$SOURCE_COMMIT"
+            git -C "$SOURCE_ROOT" checkout -q --detach FETCH_HEAD
+            test "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_COMMIT"
+            git -C "$SOURCE_ROOT" remote remove origin
+            printf '%s\n' "$SOURCE_COMMIT" > "$RESULT_ROOT/source-commit.txt"
+          else
+            mkdir -p "$SOURCE_ROOT"
+            printf '%s\n' 'evidence-only' > "$RESULT_ROOT/source-commit.txt"
+          fi
+          printf '%s\n' "$ARM" > "$RESULT_ROOT/arm.txt"
+          printf '%s\n' "$CASE_KEY" > "$RESULT_ROOT/case-key.txt"
+          printf '%s\n' "$SCORER" > "$RESULT_ROOT/scorer.txt"
+          printf '%s\n' "$WORKSPACE_KIND" > "$RESULT_ROOT/workspace-kind.txt"
+          printf '%s\n' "${{ github.sha }}" > "$RESULT_ROOT/core-commit.txt"
+          if [[ "$ARM" == tracecite ]]; then
+            printf '%s\n' "$TRACECITE_MCP_REF" > "$RESULT_ROOT/tracecite-mcp-ref.txt"
+          fi
+
+      - name: Run Pi task with 30 minute execution limit
+        env:
+          ARM_MODEL: ${{ inputs.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+          ARM_API_KEY: ${{ inputs.arm == 'native' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          extra=()
+          if [[ "$ARM" == tracecite ]]; then
+            extra=(
+              --skill-dir "$GITHUB_WORKSPACE/tracecite-mcp/skills/tracecite"
+              --mcp-evidence-root "$WORK_ROOT/evidence"
+              --mcp-state-dir "$RESULT_ROOT/tracecite-mcp-state"
+            )
+          fi
+          printf '%s\n' "$ARM_MODEL" > "$RESULT_ROOT/model.txt"
+          set +e
+          python benchmarks/agent-investigation/agent_flow_runner.py \
+            --agent pi \
+            --mode "$ARM" \
+            --source-root "$SOURCE_ROOT" \
+            --workspace-kind "$WORKSPACE_KIND" \
+            --runtime-log "$RUNTIME_LOG" \
+            --result-root "$RESULT_ROOT" \
+            --question-file "$QUESTION_FILE" \
+            --provider gmi \
+            --model "$ARM_MODEL" \
+            --api-key "$ARM_API_KEY" \
+            --thinking off \
+            --timeout-seconds 1800 \
+            --host-extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_log_code_benchmark_host.ts" \
+            "${extra[@]}"
+          code=$?
+          set -e
+          echo "$ARM runner exit=$code"
+
+      - name: Convert, score, and classify result
+        if: always()
+        env:
+          ARM_MODEL: ${{ inputs.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SESSION="$(find "$RESULT_ROOT/pi-${ARM}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          ANSWER="$RESULT_ROOT/pi-${ARM}-answer.md"
+          EXIT="$RESULT_ROOT/pi-${ARM}-exit.txt"
+          TRANSCRIPT="$RESULT_ROOT/pi-${ARM}-transcript.jsonl"
+          SCORE="$RESULT_ROOT/pi-${ARM}-score.json"
+          RUN_RESULT="$RESULT_ROOT/pi-${ARM}-run-result.json"
+          test -f "$EXIT" || printf '%s\n' 125 > "$EXIT"
+
+          if [[ -n "$SESSION" && -f "$ANSWER" ]]; then
+            python benchmarks/agent-investigation/pi_session_to_transcript.py \
+              "$SESSION" "$ANSWER" "$TRANSCRIPT" \
+              --mode "pi-seq16-${ARM}" --model "$ARM_MODEL" || true
+          fi
+
+          if [[ -s "$TRANSCRIPT" ]]; then
+            if [[ "$SCORER" == legacy ]]; then
+              python -m tracecite.benchmarking score "$CASE_DIR" "$TRANSCRIPT" > "$SCORE" || true
+            elif [[ "$SCORER" == root_cause ]]; then
+              python -m tracecite.root_cause_benchmarking score "$CASE_DIR" "$TRANSCRIPT" > "$SCORE" || true
+            else
+              python benchmarks/agent-investigation/log_code_score.py "$CASE_DIR" "$TRANSCRIPT" > "$SCORE" || true
+            fi
+          fi
+
+          RUN_SCORE="$SCORE"
+          if [[ ! -s "$RUN_SCORE" ]]; then
+            RUN_SCORE="$RESULT_ROOT/empty-score.json"
+            printf '{}\n' > "$RUN_SCORE"
+          fi
+          args=(
+            --score "$RUN_SCORE"
+            --exit-code-file "$EXIT"
+            --stderr "$RESULT_ROOT/pi-${ARM}-stderr.log"
+            --output "$RUN_RESULT"
+          )
+          [[ -n "$SESSION" ]] && args+=(--session "$SESSION")
+          [[ -s "$TRANSCRIPT" ]] && args+=(--transcript "$TRANSCRIPT")
+          python benchmarks/agent-investigation/run_result.py "${args[@]}" >/dev/null || true
+
+      - name: Record TraceCite channel boundary
+        if: always() && inputs.arm == 'tracecite'
+        shell: bash
+        run: |
+          set -euo pipefail
+          MCP="$RESULT_ROOT/tracecite-tracecite-runtime-log-access.jsonl"
+          NATIVE="$RESULT_ROOT/tracecite-native-runtime-evidence-access.jsonl"
+          BLOCKED="$RESULT_ROOT/tracecite-blocked-native-runtime-evidence-attempts.jsonl"
+          mcp_calls=0
+          native_calls=0
+          blocked_attempts=0
+          [[ -f "$MCP" ]] && mcp_calls="$(grep -cve '^$' "$MCP" || true)"
+          [[ -f "$NATIVE" ]] && native_calls="$(grep -cve '^$' "$NATIVE" || true)"
+          [[ -f "$BLOCKED" ]] && blocked_attempts="$(grep -cve '^$' "$BLOCKED" || true)"
+          printf '%s\n' "$mcp_calls" > "$RESULT_ROOT/mcp-call-count.txt"
+          printf '%s\n' "$native_calls" > "$RESULT_ROOT/native-evidence-access-count.txt"
+          printf '%s\n' "$blocked_attempts" > "$RESULT_ROOT/blocked-native-evidence-attempt-count.txt"
+          python - "$mcp_calls" "$native_calls" "$blocked_attempts" "$RESULT_ROOT/channel-status.json" <<'PY'
+          import json, sys
+          mcp, native, blocked = map(int, sys.argv[1:4])
+          payload = {
+              'mcp_calls': mcp,
+              'native_runtime_evidence_accesses': native,
+              'blocked_native_runtime_evidence_attempts': blocked,
+              'channel_valid': mcp > 0 and native == 0,
+          }
+          open(sys.argv[4], 'w').write(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Build case summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          root = Path(os.environ['RESULT_ROOT'])
+          arm = os.environ['ARM']
+
+          def read_json(path):
+              if not path.is_file() or not path.read_text(errors='replace').strip():
+                  return {}
+              try:
+                  value = json.loads(path.read_text())
+                  return value if isinstance(value, dict) else {}
+              except Exception:
+                  return {}
+
+          def read_int(path):
+              try:
+                  return int(path.read_text().strip())
+              except Exception:
+                  return None
+
+          score = read_json(root / f'pi-{arm}-score.json')
+          result = read_json(root / f'pi-{arm}-run-result.json')
+          channel = read_json(root / 'channel-status.json')
+          tokens = result.get('token_usage') or {}
+          validity = result.get('run_validity') or {}
+          trajectory = result.get('trajectory') or {}
+          primary = score.get('primary_evaluation') or {}
+          quality = score.get('quality') or {}
+
+          dimension_recall = score.get('dimension_recall')
+          if dimension_recall is None:
+              dimension_recall = quality.get('dimension_recall')
+          citation_accuracy = score.get('citation_accuracy')
+          if citation_accuracy is None:
+              citation_accuracy = quality.get('citation_accuracy')
+
+          answer = root / f'pi-{arm}-answer.md'
+          summary = {
+              'schema_version': 1,
+              'case_key': os.environ['CASE_KEY'],
+              'case_dir': os.environ['CASE_DIR'],
+              'scorer': os.environ['SCORER'],
+              'workspace_kind': os.environ['WORKSPACE_KIND'],
+              'arm': arm,
+              'model': (root / 'model.txt').read_text().strip() if (root / 'model.txt').is_file() else None,
+              'valid_for_comparison': validity.get('valid_for_comparison', False),
+              'validity_reason': validity.get('reason'),
+              'timeout': validity.get('timeout'),
+              'exit_code': validity.get('exit_code', read_int(root / f'pi-{arm}-exit.txt')),
+              'provider_contamination': validity.get('provider_contamination'),
+              'passed': score.get('passed'),
+              'support_aware_passed': score.get('support_aware_passed', score.get('passed')),
+              'legacy_passed': score.get('legacy_passed'),
+              'root_cause_accurate': primary.get('root_cause_accurate'),
+              'dimension_recall': dimension_recall,
+              'citation_accuracy': citation_accuracy,
+              'fresh_input_tokens': tokens.get('fresh_input_tokens'),
+              'cached_input_tokens': tokens.get('cached_input_tokens'),
+              'total_input_tokens': tokens.get('fresh_plus_cached_input_tokens'),
+              'output_tokens': tokens.get('output_tokens'),
+              'model_calls': tokens.get('model_calls'),
+              'tool_calls': trajectory.get('tool_calls'),
+              'tracecite_evidence_calls': trajectory.get('tracecite_evidence_calls'),
+              'native_read_calls': trajectory.get('native_read_calls'),
+              'native_search_calls': trajectory.get('native_search_calls'),
+              'opaque_shell_calls': trajectory.get('opaque_shell_calls'),
+              'answer_bytes': answer.stat().st_size if answer.is_file() else 0,
+              'mcp_calls': channel.get('mcp_calls') if arm == 'tracecite' else None,
+              'native_runtime_evidence_accesses': (
+                  channel.get('native_runtime_evidence_accesses') if arm == 'tracecite' else None
+              ),
+              'blocked_native_runtime_evidence_attempts': (
+                  channel.get('blocked_native_runtime_evidence_attempts') if arm == 'tracecite' else None
+              ),
+              'channel_valid': channel.get('channel_valid') if arm == 'tracecite' else None,
+              'core_commit': (root / 'core-commit.txt').read_text().strip() if (root / 'core-commit.txt').is_file() else None,
+              'tracecite_mcp_ref': (
+                  (root / 'tracecite-mcp-ref.txt').read_text().strip()
+                  if (root / 'tracecite-mcp-ref.txt').is_file()
+                  else None
+              ),
+              'evidence_sha256': (
+                  (root / 'evidence-sha256.txt').read_text().strip()
+                  if (root / 'evidence-sha256.txt').is_file()
+                  else None
+              ),
+          }
+          (root / 'case-summary.json').write_text(
+              json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
+          )
+          print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload case artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seq16-${{ inputs.arm }}-${{ inputs.case_key }}
+          path: ${{ env.RESULT_ROOT }}
+          if-no-files-found: warn
+          retention-days: 14

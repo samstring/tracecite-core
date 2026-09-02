@@ -1,8 +1,8 @@
-"""TraceCite Extension Protocol v2.
+"""TraceCite Extension Protocol.
 
-Domain extensions are declarative objects.  They no longer receive a mutable
+Domain extensions are declarative objects. They do not receive a mutable
 ``ExtensionAPI`` and therefore do not depend on the Runtime's current registry
-methods.  This module owns the adapter from stable public capability contracts
+methods. This module owns the adapter from stable public capability contracts
 to today's internal registries.
 """
 
@@ -62,7 +62,7 @@ def _register_runtime(name: str, runtime: ScenarioRuntime) -> None:
 
 
 def get_runtime(name: str = "default") -> ScenarioRuntime:
-    """Host integration helper; ScenarioRuntime is not an extension v2 contract."""
+    """Host integration helper; ScenarioRuntime is not a public extension contract."""
 
     key = str(name).strip().lower() or "default"
     try:
@@ -97,7 +97,7 @@ def _scenario_runtime(capability: ScenarioCapability) -> ScenarioRuntime:
 
 
 def _install_extension(extension: TraceCiteExtension) -> None:
-    """Translate stable v2 declarations into current internal registries."""
+    """Translate stable extension declarations into current internal registries."""
 
     for capability in extension.capabilities:
         if isinstance(capability, CorePluginCapability):
