@@ -62,22 +62,32 @@ def test_every_tracecite_call_must_target_open_proof_claim() -> None:
     runtime = IMPL.read_text(encoding="utf-8")
 
     assert "Every TraceCite call MUST target one material causal claim" in skill
+    assert "Claim identity is semantic, not query wording" in skill
     assert "If no such claim exists, do not call TraceCite" in skill
     assert "Retrieve only evidence that can change that claim" in skill
-    assert "A new TraceCite hint, rare signal, structural cluster, or interesting subsystem does NOT create a new claim" in skill
+    assert "does NOT create a new claim by itself" in skill
 
     assert "material causal claim" not in runtime
     assert "Causal Proof Ledger" not in runtime
 
 
-def test_supported_inference_closes_claim_without_historical_census() -> None:
+def test_supported_inference_uses_phase_contrast_instead_of_holder_census() -> None:
     skill = SKILL.read_text(encoding="utf-8")
 
-    assert "`observed` and `supported_inference` both CLOSE a claim" in skill
-    assert "Do not require direct observation of historical or latent state" in skill
-    assert "sufficient execution-order evidence already supports it" in skill
-    assert "an outer hold may close as `supported_inference`" in skill
+    assert "Supported inference and phase contrast" in skill
+    assert "use **phase contrast** before searching for an invisible holder" in skill
+    assert "stack A stops at acquisition of resource X" in skill
+    assert "stack B has progressed past that acquisition into a nested call" in skill
+    assert "A paired phase contrast is causal evidence" in skill
+    assert "do not infer ownership from a waiter alone" in skill
     assert "do not search for more holders or equivalent stacks" in skill
+
+
+def test_raw_pointer_proximity_is_not_resource_identity() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+
+    assert "nearby pointer values == same object/field identity" in skill
+    assert "Raw-address proximity or guessed struct layout is not proof" in skill
 
 
 def test_non_advancing_limit_applies_to_same_claim_not_query_wording() -> None:
@@ -94,12 +104,24 @@ def test_synchronization_cycle_can_close_with_supported_inference() -> None:
 
     assert "waiting at `Lock`, `RLock`" in skill
     assert "does NOT mean that resource is held" in skill
+    assert "phase contrast or source/context establishes progression" in skill
     assert "a lock-order cycle requires both opposing wait-for edges" in skill
-    assert "each `observed` or `supported_inference`" in skill
+    assert "path A: holds A -> waits B" in skill
+    assert "path B: holds B -> waits A" in skill
     assert "One blocked lock, one edge, a hotspot, or many waiters is not a deadlock proof" in skill
 
     assert "opposing wait-for edges" not in runtime
     assert "deadlock proof" not in runtime
+    assert "phase contrast" not in runtime
+
+
+def test_artifact_boundary_prevents_downstream_lifecycle_census() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+
+    assert "Artifact boundary and downstream impact" in skill
+    assert "close the observed impact at that boundary and qualify the downstream consequence" in skill
+    assert "Do not census unrelated shim/logger/fifo/syscall stacks" in skill
+    assert "Absence of a directly visible holder is not evidence that the holder exited" in skill
 
 
 def test_closed_proof_forces_final_answer_and_blocks_new_story() -> None:
