@@ -1,0 +1,12 @@
+Source: public reproduction evidence from microsoft/vscode issue #41136. Root-cause and fix comments are intentionally excluded.
+
+Observed sequence on Windows:
+- Code is already running.
+- Move the system clock backwards by any amount.
+- Close the affected window using the X button.
+- The renderer/window freezes.
+- The main process still responds: menus work and new windows can be opened.
+
+A second reproduction moved the clock one day into the future and then back to normal while Code was running; the renderer became stuck.
+
+The affected process was repeatedly observed inside logging-related execution while the window was unresponsive.
