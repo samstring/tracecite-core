@@ -109,6 +109,8 @@ EDGE 2: holder of B (or execution-phase proof of holding B) -> blocked acquiring
 
 Both rows must have a concrete supplied-evidence basis. A waiter on A cannot serve as proof that A is held by that waiter. Multiple goroutines blocked on B do not establish `holds B -> waits A`. If one opposing edge is missing, do **not** call the mechanism a deadlock or lock-order inversion; describe only the supported contention/bottleneck and mark the missing edge `bounded_unknown`.
 
+**Self-contradiction check:** for an ordinary non-reentrant lock, one representative path cannot simultaneously be normalized as `waits X` and `holds X` merely because the blocked `acquire(X)` appears inside a function that also uses X. If the current blocking operation is `acquire(X)`, that representative is a waiter on X. A different, deeper representative may support a path-level prior hold only if execution-phase evidence establishes that it progressed beyond the outer acquisition before blocking on another resource. Cite the deeper representative for that inference; never cite the outer waiter as the holder.
+
 # Evidence boundary
 
 Only supplied artifacts are evidence. Model memory, guessed source code, likely fixes, guessed struct layout, pointer arithmetic, web knowledge, and unstated lifecycle behavior cannot close a claim.
@@ -140,6 +142,19 @@ cleanup/reaping/termination is blocked or will occur
 ```
 
 If such a downstream story would be useful but is not represented, say the snapshot only proves the in-process blocking boundary and stop there.
+
+# Pre-final semantic gate
+
+Before emitting the final answer, audit the proposed prose itself, not just the search history. This gate is mandatory and requires **no additional TraceCite call**.
+
+1. **Mechanism gate.** If the draft says `deadlock`, `cycle`, `lock inversion`, or an equivalent cyclic mechanism, verify that the proof ledger contains two opposing `holds -> waits` edges with separate concrete bases. If either edge is absent, downgrade the mechanism wording before answering.
+2. **Holder-language gate.** Scan every material use of `holds`, `holder`, `owns`, or equivalent. If its cited basis is a stack blocked acquiring that same resource, delete or rewrite that holder claim. A waiter is not a holder.
+3. **Phase-inference gate.** When a hold is inferred from execution phases rather than directly observed, state it as a path-level inference and cite the representative that is already past the outer acquisition and blocked deeper. Do not identify an exact holder goroutine unless that identity is independently supported.
+4. **Object-identity gate.** Delete any ownership/field conclusion derived only from numeric pointer adjacency, address offsets, or guessed struct layout.
+5. **Lifecycle gate.** Scan the draft for process creation/start, external-stage location, reply/registration, orphaning, restart recovery, cleanup, reaping, and termination claims. If the supplied artifact does not directly represent that state and the claim is not independently closed, **remove the claim from the final answer** rather than turning it into a confident narrative.
+6. **Impact gate.** State only the direct blocked operation/path visible in the supplied artifact. Do not extend it into unobserved external lifecycle consequences merely because they are plausible.
+
+If this audit removes part of the story, that is acceptable. A shorter bounded answer is more correct than a complete-sounding unsupported one.
 
 # Claim-driven TraceCite use
 
