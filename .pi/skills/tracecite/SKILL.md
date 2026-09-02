@@ -15,25 +15,36 @@ TraceCite runtime never chooses a hypothesis, root cause, investigation directio
 
 Token saving never overrides correctness.
 
-# Execution rule: every retrieval must buy a decision
+# Material answer state
 
-Before **every** TraceCite call, write one short internal/trajectory line in this form and keep it concrete:
+Keep the reasoning state small. Track only the material claims needed to answer the user:
 
 ```text
-VOI: Q=<one unresolved material fact>; Δ=<a plausible result that would change/refute/distinguish the answer>; T=<specific query or range that can observe it>
+observed             directly supported by materialized evidence
+inference_supported  reasoned from observed evidence and explicitly qualified
+unresolved           an observable fact could still materially change the answer
+out_of_scope         would require evidence that was not supplied
 ```
 
-Do not expand this into a long planning paragraph.
+Do not promote absence of a match into proof of absence. Do not invent missing facts merely to complete a preferred mechanism.
 
-A tool call is allowed only when all three fields are real:
+A candidate answer exists once the requested material claims can be stated from `observed` and properly qualified `inference_supported` evidence.
 
-- `Q`: a fact still needed for a material claim in the user's answer;
-- `Δ`: at least one plausible observation would materially change the conclusion, distinguish competing explanations, or change how the claim must be qualified;
-- `T`: the supplied evidence can actually observe that fact and the call targets it.
+# Before a candidate answer: retrieve only for a material unresolved fact
 
-If any field is missing, vague, or circular, **do not call TraceCite**. Synthesize and answer.
+Before every exploratory TraceCite call, keep one short internal/trajectory line:
 
-These do not pass the gate:
+```text
+VOI: Q=<one unresolved material fact>; Δ=<a plausible observation that would materially change/refute/distinguish the answer>; T=<specific query or range that can observe it>
+```
+
+A call is justified only when all three are real:
+
+- `Q` is still needed for a material claim;
+- `Δ` names a plausible conclusion-changing observation, not merely “more confidence”;
+- `T` targets supplied evidence that can actually observe `Q`.
+
+These are not valid reasons to call TraceCite:
 
 ```text
 look for more evidence
@@ -45,92 +56,59 @@ final verification
 one more quick check
 ```
 
-A search that can only produce another instance of an already-established fact has no decision value unless multiplicity, frequency, variation, scope, or ordering is itself material to `Q`.
+A call that can only produce another instance of an already-established fact has no decision value unless multiplicity, frequency, variation, scope, or ordering is itself material to the answer.
 
-# Claim ledger and closure latch
+# After a candidate answer: qualified-patience stopping
 
-Track only the material claims the user needs. A claim is one of:
+Once a candidate answer exists, ordinary exploration ends. Further TraceCite calls are allowed only as **qualified challenges** to that candidate answer.
 
-```text
-observed             directly supported by materialized evidence
-inference_supported  reasoned from observed evidence and explicitly qualified
-unresolved           an observable fact could still materially change it
-out_of_scope         would require evidence that was not supplied
-```
+A qualified challenge must satisfy all of the following:
 
-Normal investigation is complete when:
+1. it targets a material vulnerability of the current answer: a critical causal link, a material qualification, a contradiction, or a materially different competing explanation;
+2. at least one plausible result would materially change, refute, narrow, or re-qualify the current answer;
+3. the supplied evidence can actually observe that result;
+4. it is distinct from earlier challenges: not a synonym search, another equivalent instance, or a repeat of the same causal edge;
+5. its target is bounded enough that the result can be interpreted as a real test rather than an open-ended survey.
 
-1. the requested material claims are `observed` or properly qualified `inference_supported`; and
-2. there is no pre-existing `unresolved` observable fact whose plausible result would materially change the answer.
-
-At that point the **closure latch is set**: answer immediately. Do not perform confirmation-only, completeness, curiosity, summary-verification, or “one more” retrievals.
-
-A confirming or duplicate call **closes its current Q but does not create a new Q**. Another call after confirming/duplicate evidence is allowed only for a different material unresolved claim that already existed before that call.
-
-If, while composing the answer, a material claim lacks an exact materialized citation, a narrowly targeted citation-repair materialization is allowed. Citation repair must fetch only the already-identified range; it must not reopen exploratory search.
-
-If the Agent has already stated or concluded that the mechanism/path/pattern is clear, complete, established, enough, or equivalent, treat that as closure unless it can name a still-unresolved material claim and a concrete conclusion-changing `Δ`.
-
-# Prefer discriminating evidence over surveys
-
-After every call classify the result mentally as:
+Track only:
 
 ```text
-discriminating  resolves or materially changes Q
-confirming      repeats an already-established structure/fact
-duplicate       covered / repeated / no-new evidence
+qualified_stability = number of consecutive distinct qualified challenges
+                      that leave the material answer unchanged
 ```
 
-Only `discriminating` evidence normally advances the causal frontier. Do not turn confirming evidence into a chain of synonym searches or additional examples.
+Rules:
 
-Use exact symbols, identifiers, states, and frames already observed in evidence before broad vocabulary searches. When a narrow observed anchor exists, unrelated broad scans have low information value.
+- A qualified challenge that materially changes the answer resets `qualified_stability = 0` and returns the Agent to normal investigation.
+- A qualified challenge that reveals a contradiction resets `qualified_stability = 0` and the contradiction must be resolved or explicitly qualified.
+- A distinct qualified challenge that leaves the material answer unchanged increments `qualified_stability += 1`.
+- Confirmation-only, duplicate, curiosity, broad-survey, citation-repair, and synonymous no-match calls do **not** increment `qualified_stability`; normally they should not be made at all.
+- Do not manufacture challenges merely to reach a quota. If a proposed challenge is not observable in supplied evidence, mark that boundary `out_of_scope` rather than searching indefinitely.
+- After **2 consecutive distinct qualified challenges** leave the material answer unchanged, stop and answer.
 
-When a retrieval returns many equivalent matches, investigate **structural variants**, not volume. Prefer one bounded retrieval that can reveal distinct call-site/frame variants, then materialize the variant that could change the explanation. Do not enumerate many equivalent instances merely to strengthen confidence.
+The purpose of patience is not “two more searches.” It is to give a formed answer two genuine opportunities to be changed by supplied evidence.
 
-# Conditional heuristic for blocked/concurrent systems
+# What counts as a distinct challenge
 
-Use this only when supplied evidence actually shows blocking, lock contention, waits, or repeated stuck execution paths.
+Prefer challenges that attack different failure modes in the current answer, for example:
 
-1. Establish one representative blocked path with exact materialized frames.
-2. If many instances stop at the same synchronization point, treat their repetition as population evidence, not as a reason to inspect each instance.
-3. Search the same observed function/path for the **structurally deepest-progressed variant**: an instance that has advanced past the shared blocking frame or is stopped at a different downstream wait.
-4. Materialize that downstream path and identify what resource/state it is waiting for, without inferring unseen ownership.
-5. Look for a competing observed path only when its presence/absence could distinguish a cycle, ordering conflict, starvation, external wait, or another mechanism.
-6. Once the minimal competing paths and user-visible impact are supported, set the closure latch. Do not survey unrelated goroutine classes or lifecycle operations unless they are a material alternative explanation.
+- test the weakest material causal link for contradictory evidence;
+- test whether supplied evidence supports a materially different explanation that would change the answer;
+- test a material scope/order/state assumption whose opposite would change the conclusion.
 
-For a synchronization/root-cause answer, the useful unit is the smallest evidence-supported mechanism plus the paths that establish it, not the number of matching stacks.
+Do not force all of these categories. Use only challenges that are material and observable in the supplied artifact.
 
-# Diminishing returns
-
-Mechanical TraceCite signals such as `new_evidence`, new lines, repeated evidence, covered ranges, and `status=no_new_evidence` are evidence-session facts, not semantic stop commands.
-
-Repeated low-return outcomes force a new VOI gate before any call:
-
-- repeated evidence dominates;
-- zero/tiny new-line growth;
-- the same context is materialized again;
-- equivalent `no_match` queries are being reformulated;
-- the call adds another equivalent instance;
-- the call does not change the claim ledger.
-
-Low novelty does not justify stopping if a concrete observable fact could still change the answer. Conversely, fresh lines do not justify continuing if they cannot change a material claim.
+The following do not count as distinct challenges:
 
 ```text
-new lines             != new semantic information
-new evidence identity != discriminating evidence
-more instances        != stronger causal proof by default
+same query with different wording
+same stack/path at another occurrence
+another count of an already-established population
+another materialization of an already-covered body
+another search whose only possible value is reassurance
 ```
 
-# Do not manufacture missing evidence
-
-Do not make an actor, owner, function, event, state, component, or code path a mandatory target merely because the current hypothesis predicts it.
-
-Search for a hypothesized missing piece only when:
-
-1. observing or refuting it would materially change the answer; and
-2. the supplied artifact can actually establish it.
-
-If the fact requires source code, telemetry, metrics, traces, another log, or an artifact not supplied, mark it `out_of_scope` and state the boundary rather than repeatedly searching the same evidence.
+Fresh lines are not automatically a fresh challenge. New evidence identity is not automatically new semantic information.
 
 # Evidence correctness
 
@@ -165,7 +143,7 @@ Search success does not validate a hypothesis. Frequency does not imply causal i
 
 # Controlled TraceCite-only mode
 
-A Host may expose only TraceCite evidence operations. This changes the evidence channel, not the reasoning owner. The Agent still chooses questions, queries, ranges, comparisons, hypotheses, conclusions, and stopping.
+A Host may expose only TraceCite evidence operations. This changes the evidence channel, not the reasoning owner. The Agent still chooses questions, queries, ranges, comparisons, hypotheses, conclusions, challenges, and stopping.
 
 # What TraceCite mechanics do NOT imply
 
@@ -187,14 +165,17 @@ routing/coverage metadata != semantic importance
 
 ```text
 1. Define the few material claims the user's answer requires.
-2. Choose one unresolved claim and emit a short VOI: Q / Δ / T line.
-3. Retrieve only the evidence needed for that Q.
-4. Materialize incomplete body/context only when the claim depends on it.
-5. Update the claim ledger; separate observation from inference.
-6. If the result is confirming/duplicate, close that Q; do not spawn an equivalent follow-up.
-7. If all material claims are closed, latch closure and answer immediately.
-8. Otherwise choose a different remaining material Q and repeat the VOI gate.
-9. If the needed fact is not observable in supplied evidence, mark the boundary rather than searching indefinitely.
+2. Before a candidate answer exists, choose one material unresolved Q and use the short Q / Δ / T gate.
+3. Retrieve only enough evidence to resolve or materially update that Q.
+4. Materialize incomplete body/context only when the material claim depends on it.
+5. Update the material claims and separate observation from inference.
+6. Once a candidate answer exists, stop ordinary exploration.
+7. Permit only distinct qualified challenges whose plausible outcomes could materially change that answer.
+8. If a qualified challenge changes the answer or reveals contradiction, reset stability and investigate the changed material claim.
+9. If a qualified challenge leaves the material answer unchanged, increment qualified stability.
+10. After 2 consecutive distinct qualified challenges leave the material answer unchanged, answer immediately.
+11. Confirmation-only or duplicate retrieval never counts as stability and should not be used as a substitute for a real challenge.
+12. If a needed fact is not observable in supplied evidence, state the boundary rather than searching indefinitely.
 ```
 
 TraceCite's job is to make the evidence recoverable, bounded, line-addressable, provenance-preserving, and mechanically non-redundant.
