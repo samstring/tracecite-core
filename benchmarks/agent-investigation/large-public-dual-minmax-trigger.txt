@@ -1,0 +1,4 @@
+run=2026-09-02T20:55:00Z
+cases=longhorn-7843,harvester-6253
+protocol=native-bounded-vs-tracecite-bounded
+repeats=gmi1,gmi2
