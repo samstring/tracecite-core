@@ -1,12 +1,12 @@
-trigger: 2026-09-02 bounded-pi-stopping diagnostic
+trigger: 2026-09-02 minimum-causal-proof Pi stopping diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
-pi_agent_system_steering: bounded-stop-after-supported-root-cause
+pi_agent_system_steering: bounded-stop-after-minimum-causal-proof
 correctness_gate: auxiliary_only
 compact_transport_metadata: true
 source_inventory_on_error: true
 adaptive_stopping_skill: execution-phase-hold-wait-orientation
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: root-cause-correctness-latency-token-stability-with-pi-bounding
+diagnostic_focus: root-cause-correctness-latency-token-stability-with-minimum-causal-proof
 agent_timeout_seconds: 900
