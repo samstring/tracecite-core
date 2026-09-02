@@ -1,4 +1,4 @@
-trigger: 2026-09-02 evidence-disciplined synchronization diagnostic
+trigger: 2026-09-02 evidence-disciplined stability sample A
 tracecite_only_tools: true
 runtime_agent_steering: false
 correctness_gate: auxiliary_only
