@@ -1,12 +1,12 @@
-trigger: 2026-09-03 progress-past-acquire diagnostic rerun after opposing-edge guard sync
+trigger: 2026-09-03 frontloaded-proof-and-stopping diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause-plus-final-evidence-discipline
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: progress-past-acquire-rejected-plus-lifecycle-boundary-terminal-count
+adaptive_stopping_skill: frontloaded-proof-gate-plus-terminal-count
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: require-evidenced-release-scope-for-control-flow-hold-and-stop-before-lifecycle-completion
+diagnostic_focus: obey-current-ownership-artifact-boundary-and-terminal-evidence-count
 agent_timeout_seconds: 900
