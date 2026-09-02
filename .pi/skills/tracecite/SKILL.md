@@ -74,6 +74,12 @@ blocked at acquire(X) -/-> holds X
 
 A blocked `Lock`, `RLock`, semaphore acquire, condition wait, channel send/receive, or equivalent does not prove the waiter holds that resource.
 
+**Stack-frame orientation is not acquisition order.** In stack dumps, the currently blocked acquisition is commonly printed above its callers. The blocked acquire frame identifies the resource being **waited on**; caller frames below it do not mean those callers acquire later. Derive lock order only from execution-phase evidence that proves a resource was acquired before entry into the later blocked operation.
+
+Therefore, when a path has progressed past acquisition of A and is now blocked in a nested `acquire(B)`, normalize it as `holds A -> waits B` even if the textual stack prints `acquire(B)` above the A-owning caller. Never downgrade two proven opposing hold/wait edges to mere contention, starvation, or head-of-line blocking because the stack text visually lists functions or locks in a similar order.
+
+A goroutine blocked acquiring X must not be named as the current holder/owner of X. If the literal holder identity is not observable, keep that identity `bounded_unknown`; path-level execution-phase evidence may still establish a hold/wait edge without identifying the exact owner goroutine.
+
 An outer hold may close as `supported_inference` when supplied evidence establishes progression past the outer acquisition into a later nested blocked call. Compare execution phases when available:
 
 ```text
