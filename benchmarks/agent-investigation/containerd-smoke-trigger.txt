@@ -1,12 +1,12 @@
-trigger: 2026-09-03 holder-identity-and-symptom-boundary diagnostic rerun after guard sync
+trigger: 2026-09-03 progress-past-acquire ownership and lifecycle-boundary diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause-plus-final-evidence-discipline
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: holder-identity-symptom-boundary-plus-terminal-count
+adaptive_stopping_skill: progress-past-acquire-rejected-plus-lifecycle-boundary-terminal-count
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: reject-hidden-holder-and-symptom-completion-at-terminal-count
+diagnostic_focus: require-evidenced-release-scope-for-control-flow-hold-and-stop-before-lifecycle-completion
 agent_timeout_seconds: 900
