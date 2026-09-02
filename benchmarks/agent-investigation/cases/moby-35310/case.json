@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "id": "moby-35310",
+  "title": "Swarm task rejection after network teardown leaves endpoint-count state inconsistent",
+  "source_issue": "https://github.com/moby/moby/issues/35310",
+  "fix_reference": "https://github.com/moby/libnetwork/pull/2004",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "runtime-evidence",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/0e5d847cecda9cb518157f9a5de947a87647abfe/benchmarks/agent-investigation/cases/moby-35310/runtime-evidence.txt",
+      "filename": "runtime-evidence.txt",
+      "sha256": "f1255cb828bbd73024d400e5f1d066c9c9d4602b7ec1812ffaad733ffcca5177",
+      "required": true
+    },
+    {
+      "id": "pre-fix-endpoint-count-source",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/0e5d847cecda9cb518157f9a5de947a87647abfe/benchmarks/agent-investigation/cases/moby-35310/endpoint_cnt_pre_fix.go",
+      "filename": "endpoint_cnt_pre_fix.go",
+      "sha256": "2cc6b426858464d2c2d127c78b1481633da65c1c641846d02bdcf59152ca8450",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "moby/moby + moby/libnetwork",
+    "issue_state": "closed",
+    "public_evidence": true,
+    "model_visible_payload_bytes": 5275,
+    "notes": "Model-visible evidence is a faithful public debug-log excerpt plus the relevant pre-fix endpoint-count storage function. Upstream root-cause prose and fix descriptions are evaluator-only."
+  }
+}
