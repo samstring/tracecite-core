@@ -1,15 +1,14 @@
-name: Real Online Evidence Candidate Probe
+name: Medium Evidence Candidate Probe
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - experiment/evidence-intelligence
       - bench/add-four-public-cases
     paths:
       - benchmarks/agent-investigation/probe_real_online_evidence.py
-      - benchmarks/agent-investigation/real-online-candidate-probes.json
-      - .github/workflows/evidence-real-online-candidate-probe.yml
+      - benchmarks/agent-investigation/medium-candidate-probes.json
+      - .github/workflows/evidence-medium-candidate-probe.yml
 
 permissions:
   contents: read
@@ -17,21 +16,21 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Probe candidate evidence
+      - name: Probe medium candidate evidence
         run: |
           python benchmarks/agent-investigation/probe_real_online_evidence.py \
-            --spec benchmarks/agent-investigation/real-online-candidate-probes.json \
-            --output /tmp/real-online-candidate-probes.json
+            --spec benchmarks/agent-investigation/medium-candidate-probes.json \
+            --output /tmp/medium-candidate-probes.json
       - name: Upload probe report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-online-candidate-probes
-          path: /tmp/real-online-candidate-probes.json
+          name: medium-candidate-probes
+          path: /tmp/medium-candidate-probes.json
           if-no-files-found: error

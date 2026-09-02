@@ -1,193 +1,193 @@
 ---
 name: tracecite
-description: Use TraceCite through its canonical Evidence Runtime operations. The Pi adapter exposes retrieve, materialize, replay, aggregate, traverse, and verify while preserving provenance, coverage, immutable source identity, RetrievalSession novelty, correlation safety, and Host-owned full-tool telemetry. TraceCite never chooses hypotheses, causal conclusions, evidence sufficiency, or stopping.
-compatibility: Requires the TraceCite Pi extension. Canonical Pi tools are tracecite_retrieve, tracecite_materialize, tracecite_replay, tracecite_aggregate, tracecite_traverse, and tracecite_verify. tracecite_search/tracecite_expand remain compatibility aliases only.
+description: Use TraceCite as bounded evidence transport and mechanical evidence memory. TraceCite retrieves/materializes evidence with provenance; the Agent owns interpretation, causal proof, sufficiency, and stopping.
+compatibility: Requires the TraceCite Pi extension. tracecite_search/tracecite_expand may be exposed as compatibility aliases for retrieval/materialization.
 ---
 
-# TraceCite Evidence Runtime in Pi
+# Highest-priority execution contract
 
-TraceCite supplies evidence mechanics. The Agent remains responsible for hypotheses, investigation order, causal reasoning, conclusions, evidence sufficiency, and when to stop.
+For diagnosis/root-cause work, build the **smallest causal proof that answers the question**. Do not perform an evidence census.
 
-The Pi adapter exposes the complete canonical Evidence Runtime surface. Adapter names are a Host mapping, not a second Core API.
-
-## Canonical Pi tools
+Before EVERY TraceCite call, identify internally:
 
 ```text
-tracecite_retrieve      -> retrieve
-tracecite_materialize   -> materialize
-tracecite_replay        -> replay
-tracecite_aggregate     -> aggregate
-tracecite_traverse      -> traverse
-tracecite_verify        -> verify
+claim: the one unresolved/contradicted material causal fact this call targets
+discriminator: the concrete result that would change that claim
 ```
 
-Compatibility aliases remain available for older callers:
+If either cannot be named, **do not call TraceCite; answer now**.
+
+Investigate in this order only:
 
 ```text
-tracecite_search        -> retrieve(QueryTarget(...))
-tracecite_expand        -> materialize(...) or replay(...)
+mechanism / required causal edges
+-> direct impact visible in supplied evidence
+-> requested downstream consequence only to the artifact boundary
 ```
 
-New integrations and benchmarks should use the six canonical tool names.
+Do **not** investigate downstream symptoms while mechanism edges are unresolved. Once mechanism and direct impact are closed, do not open secondary investigations merely to make the story more complete.
 
-## Controlled A/B evidence mode
+Keep transport bounded:
 
-Some Hosts, especially the native-vs-TraceCite A/B benchmark, intentionally require all evidence-content operations to go through TraceCite.
+- `tracecite_search`: request at most **12** inline evidence items. Evidence Intelligence/navigation hints exist to preserve diverse candidates under this bound.
+- `tracecite_expand`: normally use radius **<= 16**. Widen once only when the current material claim needs a frame cut off by the first expansion.
+- Use one strongest representative instance per distinct causal role. Counts and equivalent stacks are not additional proof unless the count itself is material to the question.
 
-When the Host exposes only TraceCite Evidence tools plus file-location helpers such as `find`/`ls`:
+Correctness outranks token saving, but more evidence volume is not more correctness.
 
-- use TraceCite for searching, reading/materializing, replaying, counting/grouping, traversal, and integrity verification;
-- do not attempt to bypass the controlled arm with shell pipelines, `grep`, `cat`, or native `read`;
-- the requirement applies only to the evidence-operation channel;
-- the Agent still chooses the hypothesis, query, entity, range, traversal seed, reasoning, sufficiency judgment, conclusion, and stopping point.
+# Monotonic causal proof ledger
 
-This makes the benchmark a capability comparison, not a tool-adoption test.
+Track only material claims required by the user's question.
 
-## Convergence discipline
+Statuses:
 
-TraceCite exposes mechanical novelty, raw-evidence frontier progress, and bounded Host checkpoints so the Agent can avoid wasting investigation steps. These signals do not choose a root cause or decide stopping for the Agent.
+```text
+unresolved
+observed
+supported_inference
+contradicted
+bounded_unknown
+```
 
-Before making a follow-up evidence call, keep one explicit unresolved question in mind and know what materially different evidence the next call is expected to add. Do not continue merely because another synonym, nearby keyword, aggregate, or replay can be tried.
+`observed` and `supported_inference` CLOSE a claim. A closed claim MUST NOT reopen for reassurance, confidence, completeness, a new hint, or a desire for a more direct historical observation. Reopen only when newly materialized supplied evidence materially contradicts it.
 
-Treat these as low-novelty or non-frontier signals:
+Claim identity is semantic, not query wording. Synonyms such as `holder`, `owner`, and `active writer` do not create new claims.
 
-- `status=no_match`;
-- `status=no_new_evidence`;
-- `coverage.new_evidence=0` with repeated evidence;
-- a materialization that exposes no unseen range or new text;
-- repeated `aggregate`, `replay`, or `verify` calls that derive or revisit information without expanding raw source-evidence coverage;
-- Host `agent_feedback.convergence_checkpoint.triggered=true`.
+A root-cause proof is complete when the minimum mechanism/causal edges and direct impact are closed, requested downstream effects have either a supported link or an explicit evidence boundary, and no material contradiction remains unresolved.
 
-The Host may trigger a checkpoint after repeated low-novelty operations, a burst of non-frontier analysis, or a long TraceCite investigation. When that happens, the next TraceCite evidence operation requires an `investigation_goal`.
+# Normalize blocking evidence before naming the mechanism
 
-A valid `investigation_goal` should state both:
+For every representative blocking path record internally:
 
-1. the exact unresolved question that still matters to the task; and
-2. the materially different evidence expected from the next call.
+```text
+waits: resource being acquired at the blocked operation
+holds: only resources proven acquired before that blocked operation
+basis: exact materialized evidence supporting waits/holds
+```
 
-Do not use generic goals such as "look for more evidence", "confirm the hypothesis", or a paraphrase of the previous search. A new goal should target a genuinely different source, component, entity, time region, error signature, relation, or unseen range.
+Hard invariant:
 
-When the Host convergence checkpoint is triggered, reassess before another evidence operation:
+```text
+blocked at acquire(X) -> waits X
+blocked at acquire(X) -/-> holds X
+```
 
-1. State the strongest conclusion currently supported by observed evidence.
-2. Identify the exact unresolved question that still matters to the task.
-3. Decide whether the supplied inputs actually contain the evidence class needed to resolve it.
-4. Continue only if the next operation targets a materially different evidence frontier or a necessary derived check.
-5. Do not continue by merely paraphrasing the same query, repeatedly materializing already-covered context, or chaining aggregates that do not change the evidence boundary.
-6. If the required deeper evidence is not present in the supplied inputs, stop that line of investigation and state the evidence boundary explicitly.
+A blocked `Lock`, `RLock`, semaphore acquire, condition wait, channel send/receive, or equivalent does not prove the waiter holds that resource.
 
-A search miss is not the same as evidence insufficiency. One miss may justify a different retrieval strategy. Repeated low-novelty operations across the relevant source/component/time region are evidence that the current investigation direction is exhausted, not proof that the hypothesized event never happened.
+**Stack-frame orientation is not acquisition order.** In stack dumps, the currently blocked acquisition is commonly printed above its callers. The blocked acquire frame identifies the resource being **waited on**; caller frames below it do not mean those callers acquire later. Derive lock order only from execution-phase evidence that proves a resource was acquired before entry into the later blocked operation.
 
-The Agent still owns the decision to continue, switch hypotheses, answer, or declare insufficient evidence. The Host checkpoint only exposes recent evidence progress and requires deliberate reassessment.
+Therefore, when a path has progressed past acquisition of A and is now blocked in a nested `acquire(B)`, normalize it as `holds A -> waits B` even if the textual stack prints `acquire(B)` above the A-owning caller. Never downgrade two proven opposing hold/wait edges to mere contention, starvation, or head-of-line blocking because the stack text visually lists functions or locks in a similar order.
 
-## `tracecite_retrieve`
+A goroutine blocked acquiring X must not be named as the current holder/owner of X. If the literal holder identity is not observable, keep that identity `bounded_unknown`; path-level execution-phase evidence may still establish a hold/wait edge without identifying the exact owner goroutine.
 
-`tracecite_retrieve` performs caller-selected evidence retrieval.
+An outer hold may close as `supported_inference` when supplied evidence establishes progression past the outer acquisition into a later nested blocked call. Compare execution phases when available:
 
-- With `query`, it performs QueryTarget retrieval; literal matching is default unless `regex=true`.
-- Without `query`, it performs SourceTarget inspection.
-- A match is an observation, not proof of causality.
-- `no_match` is a retrieval fact, not proof that an event never happened.
-- `new_evidence=0` means the operation exposed no new Evidence identity in the current RetrievalSession.
-- `matched_existing_evidence` identifies previously delivered Evidence matched by the current request without pretending it is new.
+```text
+one representative stops at acquire(X)
+another representative of the same path/function is already past acquire(X) and blocked deeper
+=> the deeper path supports: holds X while waiting on the nested resource
+```
 
-Use exact refs and returned source SHA-256 for later materialization/replay.
+Do not keep searching for literal `held=true` evidence after execution ordering is sufficient and uncontradicted.
 
-## `tracecite_materialize`
+For a candidate cycle, normalize explicit edges before prose:
 
-`tracecite_materialize` materializes exact bounded context around a caller-selected line/range.
+```text
+path A: holds A -> waits B   [basis]
+path B: holds B -> waits A   [basis]
+impact: requested operation is blocked   [basis]
+```
 
-- `radius` is bounded to `0..30`; use multiple deliberate ranges rather than requesting a larger invalid radius.
-- It preserves immutable source identity when a SHA-256 is supplied.
-- Previously covered immutable context may be suppressed rather than returned as fake new evidence.
-- Materialized text is evidence; any interpretation of that text remains the Agent's responsibility.
+A deadlock/lock-order inversion requires both opposing edges, each `observed` or `supported_inference`. One waiter, many waiters, a hotspot, a writer queue, or two groups waiting on the same mutex is not a cycle.
 
-## `tracecite_replay`
+**Mandatory cycle audit before naming deadlock / lock-order inversion:**
 
-`tracecite_replay` intentionally re-reads context already covered by the same immutable RetrievalSession.
+```text
+EDGE 1: holder of A (or execution-phase proof of holding A) -> blocked acquiring B
+EDGE 2: holder of B (or execution-phase proof of holding B) -> blocked acquiring A
+```
 
-- SHA-256 is required.
-- Replay does not create new evidence or expand the raw evidence frontier.
-- Use replay when reconsidering old text rather than repeating searches and treating old output as new discovery.
+Both rows must have a concrete supplied-evidence basis. A waiter on A cannot serve as proof that A is held by that waiter. Multiple goroutines blocked on B do not establish `holds B -> waits A`. If one opposing edge is missing, do **not** call the mechanism a deadlock or lock-order inversion; describe only the supported contention/bottleneck and mark the missing edge `bounded_unknown`.
 
-## `tracecite_aggregate`
+# Evidence boundary
 
-`tracecite_aggregate` performs bounded deterministic `count`, `distinct`, or `group` operations over caller-selected local text matches.
+Only supplied artifacts are evidence. Model memory, guessed source code, likely fixes, guessed struct layout, pointer arithmetic, web knowledge, and unstated lifecycle behavior cannot close a claim.
 
-- It returns mechanical values and source provenance.
-- It does not rank groups by causal importance.
-- It derives information from supplied evidence but does not expand raw source-evidence coverage by itself.
-- Do not chain aggregates merely to keep investigating after the relevant raw evidence is already covered.
-- For `group`, the Agent supplies the grouping regex.
+Do not treat:
 
-## `tracecite_traverse`
+```text
+search match          == causal proof
+frequency/rank        == causal importance
+file/line order       == global happens-before
+nearby pointer values == same object/field identity
+absence of a match    == global absence
+```
 
-`tracecite_traverse` runs bounded deterministic provider traversal over caller-selected evidence IDs/entities.
+Do not use numeric address proximity to establish object/field identity. Use addresses only when the same identity is directly established by supplied evidence and the identity is material to the proof.
 
-- The Pi bridge accepts a provider-shaped JSON fixture (`name`, `evidence[]`, optional `relations[]`) so the canonical provider traversal is genuinely executable from Pi.
-- The Agent selects seeds and limits.
-- Traversal follows mechanical identity/entity relationships only; it does not choose what should be investigated next.
+If the supplied artifact cannot represent a requested later/external state, stop at the last supported in-artifact transition. Mark the rest `bounded_unknown` or describe only the minimal consequence that follows from the closed path as an inference. **Do not search broadly for external process state after this boundary is known.**
 
-## `tracecite_verify`
+In-process stack evidence alone does not prove process creation state, handshake completion, reply/registration completion, process reaping, orphaning, cleanup, restart behavior, kernel lifecycle behavior, or that an external process is at a specific lifecycle stage merely because related containerd goroutines/FIFO/ttrpc frames are present.
 
-`tracecite_verify` verifies a caller-selected evidence manifest mechanically.
+**Final-answer lifecycle audit:** do not state any of the following as fact unless the supplied artifact directly represents that state or a closed causal claim establishes it:
 
-- It verifies integrity/manifest facts.
-- It does not validate the Agent's causal conclusion or expand source-evidence coverage.
+```text
+process/shim was already forked or started
+process is stuck at runc init / a specific external stage
+containerd did or did not receive a reply/registration
+restart clears the lock/state and therefore recovers
+cleanup/reaping/termination is blocked or will occur
+```
 
-## RetrievalSession semantics
+If such a downstream story would be useful but is not represented, say the snapshot only proves the in-process blocking boundary and stop there.
 
-RetrievalSession is mechanical evidence memory only. It can track:
+# Claim-driven TraceCite use
 
-- previously exposed Evidence identities;
-- immutable covered ranges;
-- bounded recent operations;
-- request fingerprints;
-- new/repeated/replay/no-match outcomes.
+For one unresolved/contradicted claim:
 
-It does not contain or infer hypotheses, root cause, evidence sufficiency, or stop recommendations.
+```text
+1. Search for its strongest discriminator.
+2. Materialize the minimum representative context.
+3. Normalize/compare paths if needed.
+4. Update the claim.
+5. Stop querying it once observed, supported_inference, or bounded_unknown.
+```
 
-## Correlation and identity safety
+Do not run independent searches for multiple alternative stories before reassessing the current claim. A search may be followed by materialization of its returned coordinate for the same claim; otherwise reassess proof state first.
 
-Correlation constraints are evidence-identity facts, not causal claims.
+A new hint, rare signal, structural cluster, subsystem, long-lived goroutine, or co-occurring symptom does NOT create a new claim by itself.
 
-If `identifier_only_correlation_safe=false`, do not collapse distinct scopes using that identifier alone. Use the returned minimum safe correlation key when the Agent chooses to correlate those records.
+After two consecutive non-advancing attempts for the SAME semantic claim, stop reformulating synonyms. Mark it `bounded_unknown` or qualify the conclusion.
 
-## Host tool activity
+Reuse known refs/ranges/source identities. `no_match`, `no_new_evidence`, matched-existing evidence, duplicate requests, and covered ranges are mechanical facts; do not refetch them for confidence.
 
-The Pi extension observes actual Host tool calls and records categories such as:
+# Stop and answer
 
-- canonical TraceCite tools -> `tracecite_evidence`;
-- `grep` / `find` -> `native_search`;
-- `read` -> `native_read`;
-- `bash` -> `opaque_shell`;
-- `ls` -> `native_other`.
+Stop when every material claim is `observed`, `supported_inference`, or `bounded_unknown`, with no unresolved material contradiction.
 
-Host activity is trajectory telemetry only. It is not evidence sufficiency or a stop recommendation.
+When that becomes true, the **NEXT assistant action MUST be the final answer**. No verification turn, broader census, symptom sweep, or new investigation is allowed.
 
-## Evidence support boundary
+A statement such as `enough`, `complete picture`, `confirmed`, `ready to answer`, or equivalent is a terminal commitment. Do not follow it with another evidence call unless newly materialized evidence contradicted a closed claim.
 
-Evaluation may distinguish:
+Every material causal statement in the final answer MUST be a closed proof claim:
 
-- `supported`;
-- `inference_supported`;
-- `unsupported_from_log`.
+```text
+observed            -> state as fact
+supported_inference -> state as conclusion/inference
+bounded_unknown     -> qualify explicitly
+unresolved          -> do not present as established
+contradicted        -> resolve or qualify
+```
 
-If a claim is an inference, qualify it. If supplied evidence does not establish a deeper cause or fix, state that boundary rather than presenting outside knowledge as observed fact.
+For root-cause questions, keep the answer to the proof:
 
-When a deeper upstream cause or corrective fix would require source code, internal component logs, telemetry, or another artifact that is not present, say so directly instead of repeatedly searching the same supplied evidence for confirmation that cannot exist there.
+1. one compact sentence naming the mechanism/class and subsystem;
+2. the minimum competing causal paths/edges;
+3. the direct impact and any explicit downstream evidence boundary;
+4. only the strongest representative evidence citations.
 
-## What TraceCite does not decide
+Do not enumerate equivalent waiters or add cleanup, restart, kernel, hidden-ownership, process-management, timing-default, or fix stories unless they are themselves required material claims and independently closed by supplied evidence.
 
-TraceCite does not decide:
+# Runtime boundary
 
-- which hypothesis to form;
-- which query, source, entity, range, or traversal seed to choose;
-- which sibling is important;
-- whether identity ambiguity is causal;
-- what the root cause is;
-- whether evidence is sufficient;
-- what final answer to give;
-- when to stop.
-
-Those decisions remain with the Agent, including in the forced TraceCite A/B arm.
+TraceCite Runtime may remember evidence identities, ranges, source generations, novelty, coverage, diversity, and repetition. It does not know hypotheses, causality, proof claims, root cause, sufficiency, or stopping.

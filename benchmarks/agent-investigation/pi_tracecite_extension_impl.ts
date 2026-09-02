@@ -22,24 +22,10 @@ const TRACE_TOOLS = new Set([
 
 type Category = "tracecite_evidence" | "native_search" | "native_read" | "opaque_shell" | "native_other" | "other";
 type Activity = { tool: string; category: Category; duration_ms: number; status: string; metadata?: Record<string, unknown> };
-type EvidenceProgressEvent = {
-  operation: string;
-  status: string;
-  new_evidence: number | null;
-  repeated_evidence: number | null;
-  unseen_range_count: number;
-  frontier_expanding: boolean;
-  low_novelty: boolean;
-};
 
 const starts = new Map<string, number>();
 const events: Activity[] = [];
-const recentEvidenceProgress: EvidenceProgressEvent[] = [];
 let activityWrite: Promise<void> = Promise.resolve();
-let traceciteOperationCount = 0;
-let checkpointPending = false;
-let checkpointReason: string | null = null;
-let lastCheckpointAtOperation = 0;
 
 function category(tool: string): Category {
   if (TRACE_TOOLS.has(tool)) return "tracecite_evidence";
@@ -64,7 +50,11 @@ function activitySummary() {
 
 async function persistActivity() {
   await mkdir(dirname(ACTIVITY_PATH), { recursive: true });
-  await writeFile(ACTIVITY_PATH, JSON.stringify({ schema_version: 1, summary: activitySummary(), events }, null, 2) + "\n", "utf8");
+  await writeFile(
+    ACTIVITY_PATH,
+    JSON.stringify({ schema_version: 1, summary: activitySummary(), events }, null, 2) + "\n",
+    "utf8",
+  );
 }
 
 async function bridge(args: string[], cwd: string, signal?: AbortSignal): Promise<string> {
@@ -81,12 +71,80 @@ async function bridge(args: string[], cwd: string, signal?: AbortSignal): Promis
   }
 }
 
+function availableSources(): string[] | undefined {
+  const configured = String(process.env.TRACECITE_EVIDENCE_FILES || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const unique = Array.from(new Set(configured)).slice(0, 50);
+  return unique.length ? unique : undefined;
+}
+
+function neutralPreview(value: unknown): string | undefined {
+  let text = String(value || "").trim();
+  if (!text) return undefined;
+  for (const phrase of [
+    "use access_file for later TraceCite calls",
+    "snapshot refs are citations, not file paths",
+    "reuse follow_up_file for later TraceCite calls",
+    "materialize this range with TraceCite before citing",
+  ]) {
+    text = text.replace(phrase, "").replace(/\s+/g, " ").trim();
+  }
+  return text.slice(0, 300) || undefined;
+}
+
+function compactCoverage(value: any): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const keys = [
+    "files", "scoped_lines", "match_records", "match_lines",
+    "evidence_returned", "evidence_truncated", "signal_hints_returned",
+    "context_start_line", "context_end_line", "truncated",
+    "new_evidence", "repeated_evidence",
+  ];
+  const result: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (value[key] !== undefined && value[key] !== null) result[key] = value[key];
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+function compactProgress(value: any): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const result: Record<string, unknown> = {};
+  const delta = value.delta && typeof value.delta === "object" ? value.delta : undefined;
+  if (delta) {
+    const smallDelta: Record<string, unknown> = {};
+    for (const key of ["new_evidence", "new_lines", "grew"]) {
+      if (delta[key] !== undefined && delta[key] !== null) smallDelta[key] = delta[key];
+    }
+    if (Object.keys(smallDelta).length) result.delta = smallDelta;
+  }
+  for (const key of [
+    "seen_evidence", "seen_lines", "coverage_status", "source_complete",
+    "frontier_exhausted", "scope_exhausted", "consecutive_no_growth",
+  ]) {
+    if (value[key] !== undefined && value[key] !== null) result[key] = value[key];
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+function compactMatchedExisting(value: any): Array<Record<string, number>> | undefined {
+  if (!Array.isArray(value) || !value.length) return undefined;
+  const rows = value.map((row: any) => {
+    const start = Number(row?.start_line || 0);
+    const end = Number(row?.end_line || start || 0);
+    return end > start ? { start_line: start, end_line: end } : { start_line: start };
+  }).filter((row: any) => row.start_line > 0);
+  return rows.length ? rows : undefined;
+}
+
 function compact(text: string): string {
   let p: any;
   try { p = JSON.parse(text); } catch { return text; }
   if (!p || typeof p !== "object") return text;
+
   const data = p.data && typeof p.data === "object" ? p.data : {};
-  const coverage = p.coverage && typeof p.coverage === "object" ? p.coverage : {};
   const operation = String(p.operation || "");
   const evidence = Array.isArray(p.evidence) ? p.evidence.map((row: any) => {
     const start = Number(row?.start_line || 0);
@@ -95,7 +153,7 @@ function compact(text: string): string {
     return {
       ref: start > 0 ? `${source}:L${start}${end > start ? `-L${end}` : ""}` : undefined,
       uri: start > 0 ? undefined : row?.uri,
-      preview: String(row?.label || "").slice(0, 420) || undefined,
+      preview: neutralPreview(row?.label),
     };
   }) : [];
   const sha256 = (() => {
@@ -104,168 +162,85 @@ function compact(text: string): string {
       .filter((v: string) => /^[0-9a-f]{64}$/.test(v))));
     return values.length === 1 ? values[0] : p.sha256;
   })();
+  const sources = p.status === "error" ? availableSources() : undefined;
 
   if (["search", "retrieve", "probe"].includes(operation)) {
     return JSON.stringify({
-      operation: "retrieve", status: p.status, evidence, source_sha256: sha256,
-      matched_existing_evidence: data.matched_existing_evidence,
-      coverage, progress: data.progress, correlation_constraints: data.correlation_constraints,
-      missing_evidence: p.missing_evidence, acquisition_end_reason: data.acquisition_end_reason,
+      operation: "retrieve",
+      status: p.status,
+      evidence,
+      available_sources: sources,
+      source_sha256: sha256,
+      matched_existing_evidence: compactMatchedExisting(data.matched_existing_evidence),
+      coverage: compactCoverage(p.coverage),
+      progress: compactProgress(data.progress),
+      correlation_constraints: data.correlation_constraints,
+      missing_evidence: p.missing_evidence,
+      acquisition_end_reason: data.acquisition_end_reason,
     });
   }
   if (["expand", "materialize", "replay"].includes(operation)) {
     return JSON.stringify({
       operation: operation === "replay" ? "replay" : "materialize",
-      status: p.status, evidence, source_sha256: sha256, coverage, progress: data.progress,
+      status: p.status,
+      evidence,
+      available_sources: sources,
+      source_sha256: sha256,
+      coverage: compactCoverage(p.coverage),
+      progress: compactProgress(data.progress),
       text: data.new_text !== undefined ? data.new_text : data.text,
       replayed: Boolean(data.replayed || operation === "replay") || undefined,
-      unseen_ranges: data.unseen_ranges, observed_references: data.observed_references,
-      observed_relations: data.observed_relations, acquisition_end_reason: data.acquisition_end_reason,
+      unseen_ranges: data.unseen_ranges,
+      observed_references: data.observed_references,
+      observed_relations: data.observed_relations,
+      acquisition_end_reason: data.acquisition_end_reason,
     });
   }
   if (operation === "aggregate") {
-    return JSON.stringify({ operation, status: p.status, source: p.source, source_sha256: sha256, query: p.query, regex: p.regex, aggregate: p.aggregate, data, coverage });
+    return JSON.stringify({
+      operation, status: p.status, source: p.source, source_sha256: sha256,
+      query: p.query, regex: p.regex, aggregate: p.aggregate, data,
+      coverage: compactCoverage(p.coverage),
+    });
   }
   if (operation === "traverse") {
-    return JSON.stringify({ operation, status: p.status, stop_reason: p.stop_reason, coverage: p.coverage, progress: p.progress, trace: p.trace, diagnostics: p.diagnostics, graph: p.graph, grouping: p.grouping, reduction: p.reduction, acquisition_end_reason: p.acquisition_end_reason });
+    return JSON.stringify({
+      operation, status: p.status, stop_reason: p.stop_reason,
+      coverage: compactCoverage(p.coverage), progress: compactProgress(p.progress),
+      trace: p.trace, diagnostics: p.diagnostics, graph: p.graph,
+      grouping: p.grouping, reduction: p.reduction,
+      acquisition_end_reason: p.acquisition_end_reason,
+    });
   }
   if (operation === "verify") {
-    return JSON.stringify({ operation, status: p.status, coverage: p.coverage, verification: p.verification, data, error: p.error });
+    return JSON.stringify({
+      operation, status: p.status, coverage: compactCoverage(p.coverage),
+      verification: p.verification, data, error: p.error,
+    });
   }
   return text;
 }
 
-function currentCheckpointFeedback() {
-  return checkpointPending ? {
-    triggered: true,
-    reason: checkpointReason,
-    next_evidence_call_requires_investigation_goal: true,
-    reassess_before_next_evidence_call: [
-      "What exact unresolved question still matters to the task?",
-      "What materially different evidence should the next call add?",
-      "Does the supplied evidence actually contain the source/component/time range needed to resolve that question?",
-      "If not, state the evidence boundary instead of paraphrasing the same search or repeating derived analysis.",
-    ],
-  } : { triggered: false, next_evidence_call_requires_investigation_goal: false };
-}
-
-function addAgentFeedback(text: string): string {
-  let payload: any;
-  try { payload = JSON.parse(text); } catch { return text; }
-  if (!payload || typeof payload !== "object") return text;
-
-  const operation = String(payload.operation || "");
-  const isEvidenceOperation = ["retrieve", "materialize", "replay", "aggregate", "traverse", "verify"].includes(operation);
-  if (isEvidenceOperation) {
-    traceciteOperationCount += 1;
-    const coverage = payload.coverage && typeof payload.coverage === "object" ? payload.coverage : {};
-    const newEvidence = Number.isInteger(coverage.new_evidence) ? Number(coverage.new_evidence) : null;
-    const repeatedEvidence = Number.isInteger(coverage.repeated_evidence) ? Number(coverage.repeated_evidence) : null;
-    const unseenRangeCount = Array.isArray(payload.unseen_ranges) ? payload.unseen_ranges.length : 0;
-    const hasEvidence = Array.isArray(payload.evidence) && payload.evidence.length > 0;
-    const hasText = typeof payload.text === "string" && payload.text.trim().length > 0;
-    const status = String(payload.status || "");
-
-    let frontierExpanding = false;
-    let lowNovelty = false;
-    if (operation === "retrieve" || operation === "materialize") {
-      frontierExpanding = hasEvidence || hasText || unseenRangeCount > 0 || (newEvidence !== null && newEvidence > 0);
-      lowNovelty = status === "no_match" || status === "no_new_evidence" || (
-        !frontierExpanding && newEvidence === 0 && (repeatedEvidence ?? 0) > 0
-      );
-    } else if (operation === "traverse") {
-      frontierExpanding = Boolean(payload.graph || payload.trace || (payload.progress && payload.progress.new_evidence));
-    }
-
-    recentEvidenceProgress.push({
-      operation,
-      status,
-      new_evidence: newEvidence,
-      repeated_evidence: repeatedEvidence,
-      unseen_range_count: unseenRangeCount,
-      frontier_expanding: frontierExpanding,
-      low_novelty: lowNovelty,
-    });
-    if (recentEvidenceProgress.length > 12) recentEvidenceProgress.splice(0, recentEvidenceProgress.length - 12);
-
-    const recentFrontier = recentEvidenceProgress.filter((item) => item.operation === "retrieve" || item.operation === "materialize");
-    let lowNoveltyStreak = 0;
-    for (let index = recentFrontier.length - 1; index >= 0; index -= 1) {
-      if (!recentFrontier[index].low_novelty) break;
-      lowNoveltyStreak += 1;
-    }
-    const recentFourFrontier = recentFrontier.slice(-4);
-    const lowNoveltyInRecentWindow = recentFourFrontier.filter((item) => item.low_novelty).length;
-    const recentSix = recentEvidenceProgress.slice(-6);
-    const nonFrontierInRecentWindow = recentSix.filter((item) => !item.frontier_expanding).length;
-    const operationsSinceCheckpoint = traceciteOperationCount - lastCheckpointAtOperation;
-
-    if (!checkpointPending && lowNoveltyStreak >= 3) {
-      checkpointPending = true;
-      checkpointReason = "Three consecutive retrieve/materialize operations added no meaningful new evidence frontier.";
-    } else if (!checkpointPending && recentFourFrontier.length === 4 && lowNoveltyInRecentWindow >= 3) {
-      checkpointPending = true;
-      checkpointReason = "Most recent retrieve/materialize operations are repeating covered evidence or returning no new evidence.";
-    } else if (!checkpointPending && recentSix.length === 6 && nonFrontierInRecentWindow >= 4 && operationsSinceCheckpoint >= 6) {
-      checkpointPending = true;
-      checkpointReason = "Recent TraceCite operations are dominated by replay/aggregate/verification or other non-frontier work rather than new source evidence.";
-    } else if (!checkpointPending && traceciteOperationCount >= 20 && operationsSinceCheckpoint >= 10) {
-      checkpointPending = true;
-      checkpointReason = "The investigation has accumulated many TraceCite evidence operations without an explicit convergence reassessment.";
-    }
-
-    payload.agent_feedback = {
-      evidence_progress: {
-        total_tracecite_operations: traceciteOperationCount,
-        operations_since_checkpoint: operationsSinceCheckpoint,
-        low_novelty_streak: lowNoveltyStreak,
-        low_novelty_in_recent_frontier_window: lowNoveltyInRecentWindow,
-        non_frontier_in_recent_operation_window: nonFrontierInRecentWindow,
-        recent: recentEvidenceProgress.slice(-6),
-      },
-      convergence_checkpoint: currentCheckpointFeedback(),
-    };
-  }
-  return JSON.stringify(payload);
-}
-
 function output(text: string, details: Record<string, unknown>) {
-  return { content: [{ type: "text" as const, text: addAgentFeedback(text) }], details: { ...details, persistent_retrieval_session: true, evidence_only: true } };
-}
-
-function checkpointGate(operation: string, investigationGoal: unknown) {
-  if (!checkpointPending) return null;
-  const goal = String(investigationGoal || "").trim();
-  if (goal.length >= 16) {
-    checkpointPending = false;
-    checkpointReason = null;
-    lastCheckpointAtOperation = traceciteOperationCount;
-    recentEvidenceProgress.splice(0, recentEvidenceProgress.length);
-    return null;
-  }
-  const payload = {
-    operation,
-    status: "checkpoint_required",
-    agent_feedback: {
-      evidence_progress: {
-        total_tracecite_operations: traceciteOperationCount,
-        operations_since_checkpoint: traceciteOperationCount - lastCheckpointAtOperation,
-      },
-      convergence_checkpoint: currentCheckpointFeedback(),
-      required_field: "investigation_goal",
-      requirement: "Before another TraceCite evidence operation, provide a concrete unresolved question and the materially different evidence this call is expected to obtain. If no such evidence exists in the supplied inputs, answer at the current evidence boundary instead.",
-    },
+  return {
+    content: [{ type: "text" as const, text }],
+    details: { ...details, persistent_retrieval_session: true, evidence_only: true },
   };
-  return { content: [{ type: "text" as const, text: JSON.stringify(payload) }], details: { operation, convergence_checkpoint_blocked: true, evidence_only: true } };
 }
 
 function rangeArgs(command: string, params: any): string[] {
-  const args = [command, params.file, String(params.line), "--radius", String(params.radius ?? 8), "--max-chars", "12000"];
+  const args = [
+    command,
+    params.file,
+    String(params.line),
+    "--radius",
+    String(params.radius ?? 8),
+    "--max-chars",
+    "12000",
+  ];
   if (params.sha256) args.push("--sha256", params.sha256);
   return args;
 }
-
-const investigationGoal = Type.Optional(Type.String({ minLength: 16, maxLength: 500 }));
 
 export default function traceciteTools(pi: ExtensionAPI) {
   pi.on("tool_call", async (event) => { starts.set(event.toolCallId, Date.now()); });
@@ -273,137 +248,198 @@ export default function traceciteTools(pi: ExtensionAPI) {
     const started = starts.get(event.toolCallId) ?? Date.now();
     starts.delete(event.toolCallId);
     const row: Activity = {
-      tool: event.toolName, category: category(event.toolName),
-      duration_ms: Math.max(0, Date.now() - started), status: event.isError ? "error" : "ok",
+      tool: event.toolName,
+      category: category(event.toolName),
+      duration_ms: Math.max(0, Date.now() - started),
+      status: event.isError ? "error" : "ok",
       metadata: event.toolName === "bash" ? { opaque: true } : undefined,
     };
     events.push(row);
     if (events.length > 512) events.splice(0, events.length - 512);
     activityWrite = activityWrite.then(persistActivity, persistActivity);
     await activityWrite;
-    const base = event.details && typeof event.details === "object" && !Array.isArray(event.details) ? event.details as Record<string, unknown> : {};
-    return { details: { ...base, tracecite_host_activity: row, tracecite_host_activity_summary: activitySummary() } } as any;
+    const base = event.details && typeof event.details === "object" && !Array.isArray(event.details)
+      ? event.details as Record<string, unknown>
+      : {};
+    return {
+      details: {
+        ...base,
+        tracecite_host_activity: row,
+        tracecite_host_activity_summary: activitySummary(),
+      },
+    } as any;
   });
 
   pi.registerTool({
-    name: "tracecite_retrieve", label: "TraceCite Retrieve",
-    description: "Canonical retrieve for caller-selected local evidence. Preserves provenance, coverage, identity safety and RetrievalSession novelty. Host feedback may require investigation_goal after a convergence checkpoint; the Agent still owns hypotheses and stopping.",
+    name: "tracecite_retrieve",
+    label: "TraceCite Retrieve",
+    description: "Retrieve caller-selected local evidence with provenance, coverage, identity safety and RetrievalSession novelty. Interpretation, hypotheses and stopping belong to the Agent.",
     parameters: Type.Object({
-      file: Type.String(), query: Type.Optional(Type.String()), regex: Type.Optional(Type.Boolean()),
+      file: Type.String(),
+      query: Type.Optional(Type.String()),
+      regex: Type.Optional(Type.Boolean()),
       max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
-      glob: Type.Optional(Type.String()), recursive: Type.Optional(Type.Boolean()), investigation_goal: investigationGoal,
+      glob: Type.Optional(Type.String()),
+      recursive: Type.Optional(Type.Boolean()),
     }),
     async execute(_id, p, signal, _update, ctx) {
-      const blocked = checkpointGate("retrieve", p.investigation_goal);
-      if (blocked) return blocked;
       const args = ["retrieve", p.file, "--max-evidence", String(p.max_evidence ?? 20)];
       if (p.query) args.push("--query", p.query);
       if (p.regex) args.push("--regex");
       if (p.glob) args.push("--glob", p.glob);
       if (p.recursive) args.push("--recursive");
-      return output(compact(await bridge(args, ctx.cwd, signal)), { operation: "retrieve", canonical_operation: true });
+      return output(compact(await bridge(args, ctx.cwd, signal)), {
+        operation: "retrieve", canonical_operation: true,
+      });
     },
   });
 
   pi.registerTool({
-    name: "tracecite_materialize", label: "TraceCite Materialize",
-    description: "Canonical materialize of exact bounded caller-selected source context with immutable identity and session coverage. Radius is 0..30. Host feedback may require investigation_goal after a convergence checkpoint.",
+    name: "tracecite_materialize",
+    label: "TraceCite Materialize",
+    description: "Materialize exact bounded caller-selected source context with immutable identity and session coverage. Radius is 0..30.",
     parameters: Type.Object({
-      file: Type.String(), line: Type.Integer({ minimum: 1 }),
-      radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.Optional(Type.String()), investigation_goal: investigationGoal,
+      file: Type.String(),
+      line: Type.Integer({ minimum: 1 }),
+      radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })),
+      sha256: Type.Optional(Type.String()),
     }),
     async execute(_id, p, signal, _update, ctx) {
-      const blocked = checkpointGate("materialize", p.investigation_goal);
-      if (blocked) return blocked;
-      return output(compact(await bridge(rangeArgs("materialize", p), ctx.cwd, signal)), { operation: "materialize", canonical_operation: true });
+      return output(compact(await bridge(rangeArgs("materialize", p), ctx.cwd, signal)), {
+        operation: "materialize", canonical_operation: true,
+      });
     },
   });
 
   pi.registerTool({
-    name: "tracecite_replay", label: "TraceCite Replay",
-    description: "Canonical replay of previously materialized immutable context without counting it as new evidence. Radius is 0..30. Replay does not expand the evidence frontier.",
+    name: "tracecite_replay",
+    label: "TraceCite Replay",
+    description: "Replay previously materialized immutable context without counting it as new evidence. Radius is 0..30.",
     parameters: Type.Object({
-      file: Type.String(), line: Type.Integer({ minimum: 1 }),
-      radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.String(), investigation_goal: investigationGoal,
+      file: Type.String(),
+      line: Type.Integer({ minimum: 1 }),
+      radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })),
+      sha256: Type.String(),
     }),
     async execute(_id, p, signal, _update, ctx) {
-      const blocked = checkpointGate("replay", p.investigation_goal);
-      if (blocked) return blocked;
-      return output(compact(await bridge(rangeArgs("replay", p), ctx.cwd, signal)), { operation: "replay", canonical_operation: true });
+      return output(compact(await bridge(rangeArgs("replay", p), ctx.cwd, signal)), {
+        operation: "replay", canonical_operation: true,
+      });
     },
   });
 
   pi.registerTool({
-    name: "tracecite_aggregate", label: "TraceCite Aggregate",
-    description: "Canonical deterministic count/distinct/group over caller-selected local text matches with source provenance; aggregate derives values but does not expand raw source-evidence coverage. Host feedback may require investigation_goal after a convergence checkpoint.",
+    name: "tracecite_aggregate",
+    label: "TraceCite Aggregate",
+    description: "Deterministic count/distinct/group over caller-selected local text matches with source provenance.",
     parameters: Type.Object({
-      file: Type.String(), query: Type.String(), regex: Type.Optional(Type.Boolean()),
-      operation: Type.Optional(Type.Union([Type.Literal("count"), Type.Literal("distinct"), Type.Literal("group")])),
-      group_regex: Type.Optional(Type.String()), max_groups: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })), investigation_goal: investigationGoal,
+      file: Type.String(),
+      query: Type.String(),
+      regex: Type.Optional(Type.Boolean()),
+      operation: Type.Optional(Type.Union([
+        Type.Literal("count"), Type.Literal("distinct"), Type.Literal("group"),
+      ])),
+      group_regex: Type.Optional(Type.String()),
+      max_groups: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
     }),
     async execute(_id, p, signal, _update, ctx) {
-      const blocked = checkpointGate("aggregate", p.investigation_goal);
-      if (blocked) return blocked;
-      const args = ["aggregate", p.file, p.query, "--operation", p.operation ?? "count", "--max-groups", String(p.max_groups ?? 100)];
+      const args = [
+        "aggregate", p.file, p.query,
+        "--operation", p.operation ?? "count",
+        "--max-groups", String(p.max_groups ?? 100),
+      ];
       if (p.regex) args.push("--regex");
       if (p.group_regex) args.push("--group-regex", p.group_regex);
-      return output(compact(await bridge(args, ctx.cwd, signal)), { operation: "aggregate", canonical_operation: true });
+      return output(compact(await bridge(args, ctx.cwd, signal)), {
+        operation: "aggregate", canonical_operation: true,
+      });
     },
   });
 
   pi.registerTool({
-    name: "tracecite_traverse", label: "TraceCite Traverse",
-    description: "Canonical bounded provider traversal over caller-selected evidence IDs/entities. The Agent owns seeds, limits, hypotheses and interpretation. Host feedback may require investigation_goal after a convergence checkpoint.",
+    name: "tracecite_traverse",
+    label: "TraceCite Traverse",
+    description: "Bounded provider traversal over caller-selected evidence IDs/entities. Seeds, limits and interpretation belong to the Agent.",
     parameters: Type.Object({
-      provider_file: Type.String(), seed_evidence_ids: Type.Optional(Type.Array(Type.String(), { maxItems: 50 })),
-      seed_entities: Type.Optional(Type.Array(Type.Object({ kind: Type.String(), value: Type.String(), namespace: Type.Optional(Type.String()) }), { maxItems: 50 })),
+      provider_file: Type.String(),
+      seed_evidence_ids: Type.Optional(Type.Array(Type.String(), { maxItems: 50 })),
+      seed_entities: Type.Optional(Type.Array(Type.Object({
+        kind: Type.String(), value: Type.String(), namespace: Type.Optional(Type.String()),
+      }), { maxItems: 50 })),
       max_depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 8 })),
       max_retrievals: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
       max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000 })),
       max_wall_seconds: Type.Optional(Type.Number({ minimum: 0.1, maximum: 30 })),
-      per_request_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })), investigation_goal: investigationGoal,
+      per_request_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
     }),
     async execute(_id, p, signal, _update, ctx) {
-      const blocked = checkpointGate("traverse", p.investigation_goal);
-      if (blocked) return blocked;
-      const args = ["traverse", p.provider_file, "--max-depth", String(p.max_depth ?? 3), "--max-retrievals", String(p.max_retrievals ?? 12), "--max-evidence", String(p.max_evidence ?? 500), "--max-wall-seconds", String(p.max_wall_seconds ?? 5), "--per-request-limit", String(p.per_request_limit ?? 100)];
+      const args = [
+        "traverse", p.provider_file,
+        "--max-depth", String(p.max_depth ?? 3),
+        "--max-retrievals", String(p.max_retrievals ?? 12),
+        "--max-evidence", String(p.max_evidence ?? 500),
+        "--max-wall-seconds", String(p.max_wall_seconds ?? 5),
+        "--per-request-limit", String(p.per_request_limit ?? 100),
+      ];
       for (const id of p.seed_evidence_ids ?? []) args.push("--seed-evidence-id", id);
       for (const entity of p.seed_entities ?? []) args.push("--seed-entity", JSON.stringify(entity));
-      return output(compact(await bridge(args, ctx.cwd, signal)), { operation: "traverse", canonical_operation: true });
+      return output(compact(await bridge(args, ctx.cwd, signal)), {
+        operation: "traverse", canonical_operation: true,
+      });
     },
   });
 
   pi.registerTool({
-    name: "tracecite_verify", label: "TraceCite Verify",
-    description: "Canonical mechanical evidence-manifest integrity verification; does not validate the Agent's causal conclusion and does not expand raw source-evidence coverage.",
-    parameters: Type.Object({ manifest: Type.String(), investigation_goal: investigationGoal }),
+    name: "tracecite_verify",
+    label: "TraceCite Verify",
+    description: "Mechanical evidence-manifest integrity verification. It does not validate causal conclusions or expand raw evidence coverage.",
+    parameters: Type.Object({ manifest: Type.String() }),
     async execute(_id, p, signal, _update, ctx) {
-      const blocked = checkpointGate("verify", p.investigation_goal);
-      if (blocked) return blocked;
-      return output(compact(await bridge(["verify", p.manifest], ctx.cwd, signal)), { operation: "verify", canonical_operation: true });
+      return output(compact(await bridge(["verify", p.manifest], ctx.cwd, signal)), {
+        operation: "verify", canonical_operation: true,
+      });
     },
   });
 
-  // Compatibility aliases. The canonical A/B workflow does not expose them.
+  // Compatibility aliases. They preserve the same evidence-only runtime contract.
   pi.registerTool({
-    name: "tracecite_search", label: "TraceCite Search (compat)", description: "Compatibility alias for tracecite_retrieve.",
-    parameters: Type.Object({ file: Type.String(), query: Type.String(), regex: Type.Optional(Type.Boolean()), max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })), investigation_goal: investigationGoal }),
+    name: "tracecite_search",
+    label: "TraceCite Search (compat)",
+    description: "Compatibility alias for tracecite_retrieve.",
+    parameters: Type.Object({
+      file: Type.String(),
+      query: Type.String(),
+      regex: Type.Optional(Type.Boolean()),
+      max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
+    }),
     async execute(_id, p, signal, _update, ctx) {
-      const blocked = checkpointGate("retrieve", p.investigation_goal);
-      if (blocked) return blocked;
-      const args = ["retrieve", p.file, "--query", p.query, "--max-evidence", String(p.max_evidence ?? 20)];
+      const args = [
+        "retrieve", p.file, "--query", p.query,
+        "--max-evidence", String(p.max_evidence ?? 20),
+      ];
       if (p.regex) args.push("--regex");
-      return output(compact(await bridge(args, ctx.cwd, signal)), { operation: "retrieve", compatibility_alias: "tracecite_search" });
+      return output(compact(await bridge(args, ctx.cwd, signal)), {
+        operation: "retrieve", compatibility_alias: "tracecite_search",
+      });
     },
   });
+
   pi.registerTool({
-    name: "tracecite_expand", label: "TraceCite Expand (compat)", description: "Compatibility alias for tracecite_materialize/replay.",
-    parameters: Type.Object({ file: Type.String(), line: Type.Integer({ minimum: 1 }), radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.Optional(Type.String()), replay: Type.Optional(Type.Boolean()), investigation_goal: investigationGoal }),
+    name: "tracecite_expand",
+    label: "TraceCite Expand (compat)",
+    description: "Compatibility alias for tracecite_materialize/replay.",
+    parameters: Type.Object({
+      file: Type.String(),
+      line: Type.Integer({ minimum: 1 }),
+      radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })),
+      sha256: Type.Optional(Type.String()),
+      replay: Type.Optional(Type.Boolean()),
+    }),
     async execute(_id, p, signal, _update, ctx) {
       const op = p.replay ? "replay" : "materialize";
-      const blocked = checkpointGate(op, p.investigation_goal);
-      if (blocked) return blocked;
-      return output(compact(await bridge(rangeArgs(op, p), ctx.cwd, signal)), { operation: op, compatibility_alias: "tracecite_expand" });
+      return output(compact(await bridge(rangeArgs(op, p), ctx.cwd, signal)), {
+        operation: op, compatibility_alias: "tracecite_expand",
+      });
     },
   });
 }

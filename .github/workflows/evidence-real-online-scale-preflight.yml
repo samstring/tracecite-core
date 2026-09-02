@@ -10,6 +10,7 @@ on:
   push:
     branches:
       - experiment/evidence-intelligence
+      - bench/add-four-public-cases
     paths:
       - benchmarks/agent-investigation/real-online-scale-10.json
       - benchmarks/agent-investigation/discover_real_online_evidence.py

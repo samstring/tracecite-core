@@ -1,6 +1,8 @@
 // Thin Pi extension entrypoint. The implementation lives next to this file so the
 // public Host surface and architecture contract remain explicit and easy to audit.
-// Host convergence feedback never chooses hypotheses or stopping; the Agent owns both.
+// Runtime TraceCite results carry evidence and mechanical transport metadata only.
+// Investigation strategy may live in the Agent/skill layer; the TraceCite runtime
+// never chooses hypotheses or stopping.
 //
 // Canonical surface declarations retained here for architecture/regression checks:
 // name: "tracecite_retrieve"
@@ -22,5 +24,17 @@
 // return "opaque_shell"
 // metadata: event.toolName === "bash" ? { opaque: true }
 // TRACECITE_PI_ACTIVITY
+//
+// Evidence guard:
+// - benchmark: TRACECITE_BENCHMARK_MODE=tracecite forces strict evidence isolation;
+// - product: an explicit user request such as "用 tracecite" / "use tracecite" activates
+//   the same native-evidence guard for that Pi agent run when an evidence root is configured.
 
-export { default } from "./pi_tracecite_extension_impl.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import traceciteTools from "./pi_tracecite_extension_impl.ts";
+import traceciteEvidenceGuard from "./pi_strict_evidence_boundary.ts";
+
+export default function traceciteExtension(pi: ExtensionAPI) {
+  traceciteEvidenceGuard(pi);
+  traceciteTools(pi);
+}

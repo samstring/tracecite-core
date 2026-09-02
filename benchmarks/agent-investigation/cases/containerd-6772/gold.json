@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "case_id": "containerd-6772",
+  "confirmed_by": [
+    "https://github.com/containerd/containerd/issues/6772#issuecomment-1091387002",
+    "https://github.com/containerd/containerd/pull/6788",
+    "https://github.com/containerd/containerd/commit/449eb08b89b1854eaaec86f3233778d87c952e48"
+  ],
+  "summary": "containerd deadlocks in the cgroups metrics path because lock acquisition order is inverted. Namespace.Collect holds the metrics namespace lock and calls Collector.Collect, which waits for the collector RWMutex read lock, while concurrent Collector.Add holds the collector write lock and calls Namespace.WithConstLabels, which needs the namespace lock. The resulting cycle prevents task startup from progressing and leaves runc-init processes stuck.",
+  "required_concepts": [
+    {
+      "id": "metrics-lock-cycle",
+      "patterns": [
+        "(dead.?lock|lock[- ]order|lock inversion).{0,140}(metrics|cgroup|collector)",
+        "(metrics|cgroup|collector).{0,140}(dead.?lock|lock[- ]order|lock inversion)"
+      ]
+    },
+    {
+      "id": "opposing-lock-paths",
+      "patterns": [
+        "(Namespace\\.?Collect|ns\\.?Collect).{0,220}(Collector\\.?Collect).{0,220}(RLock|read lock)",
+        "Collector\\.?Add.{0,220}(WithConstLabels|Namespace|ns).{0,220}(Lock|namespace lock)",
+        "Collector\\.?Add.{0,300}(write lock|RWMutex).{0,300}(Namespace|WithConstLabels)"
+      ]
+    },
+    {
+      "id": "task-start-impact",
+      "patterns": [
+        "(task\\.?Start|task start|runc[- ]?init|runc init).{0,160}(block|stuck|wait|prevent|cannot|does not|no progress)",
+        "(block|stuck|prevent|no progress).{0,160}(task\\.?Start|task start|runc[- ]?init|runc init)"
+      ]
+    }
+  ],
+  "evidence_markers": [
+    "github.com/containerd/containerd/metrics/cgroups/v1.(*Collector).Add",
+    "github.com/containerd/containerd/metrics/cgroups/v1.(*Collector).Collect",
+    "github.com/docker/go-metrics.(*Namespace).WithConstLabels",
+    "github.com/docker/go-metrics.(*Namespace).Collect"
+  ],
+  "thresholds": {
+    "concept_recall": 0.6667,
+    "evidence_marker_recall": 0.75
+  },
+  "leak_terms": [
+    "WithConstLabels",
+    "lock inversion",
+    "deadlock in metrics"
+  ]
+}

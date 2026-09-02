@@ -1,0 +1,102 @@
+name: Offline Retrieval Diversity Eval
+
+on:
+  push:
+    branches:
+      - test/tracecite-mode-containerd
+    paths:
+      - .github/workflows/offline-retrieval-diversity-eval.yml
+      - benchmarks/agent-investigation/offline_diversity_eval.py
+      - benchmarks/agent-investigation/prepare_case.py
+      - src/tracecite/runtime/evidence_selection.py
+      - tests/test_evidence_selection_diversity.py
+      - pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      WORK: /tmp/tracecite-offline-diversity
+      OUT: /tmp/tracecite-offline-diversity-report
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install TraceCite experiment dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[dev,experiments]"
+
+      - name: Run diversity regressions with Drain installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_evidence_selection_diversity.py
+
+      - name: Download historical benchmark artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK/history"
+          download_artifact() {
+            local artifact_id="$1"
+            local case_id="$2"
+            local zip="$WORK/history/${case_id}.zip"
+            local dest="$WORK/history/${case_id}"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$zip"
+            mkdir -p "$dest"
+            unzip -q "$zip" -d "$dest"
+          }
+          # Existing artifacts only provide historical Agent query choices. They are
+          # not used as evidence; the evaluator re-downloads each case's pinned
+          # original public input from case.json.
+          download_artifact 9786039159 containerd-6772
+          download_artifact 9786204195 kubernetes-140039-runc-5347
+          download_artifact 9786922209 kubernetes-141402-podcertificate-readiness
+          download_artifact 9788287982 kubernetes-141283-compat-feature-gate
+
+      - name: Compare Top-K, structural grouping, Drain, MMR, and hybrid MMR
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          python benchmarks/agent-investigation/offline_diversity_eval.py \
+            --candidate-limit 512 \
+            --max-evidence 20 \
+            --radius 8 \
+            --neighborhood-char-limit 6000 \
+            --work-dir "$WORK/prepared" \
+            --output-dir "$OUT" \
+            --case benchmarks/agent-investigation/cases/containerd-6772 "$WORK/history/containerd-6772" \
+            --case benchmarks/agent-investigation/cases/kubernetes-140039-runc-5347 "$WORK/history/kubernetes-140039-runc-5347" \
+            --case benchmarks/agent-investigation/cases/kubernetes-141402-podcertificate-readiness "$WORK/history/kubernetes-141402-podcertificate-readiness" \
+            --case benchmarks/agent-investigation/cases/kubernetes-141283-compat-feature-gate "$WORK/history/kubernetes-141283-compat-feature-gate"
+
+      - name: Show summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f "$OUT/report.md" ]]; then
+            cat "$OUT/report.md"
+          fi
+
+      - name: Upload offline comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-retrieval-diversity-report
+          path: ${{ env.OUT }}
+          if-no-files-found: warn

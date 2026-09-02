@@ -1,0 +1,272 @@
+name: Pi Four Public TraceCite Only
+
+on:
+  push:
+    branches:
+      - test/tracecite-mode-containerd
+      - experiment/tracecite-adaptive-stopping
+    paths:
+      - benchmarks/agent-investigation/four-public-tracecite-only-trigger.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tracecite-public-case:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        case:
+          - containerd-6772
+          - kubernetes-140039-runc-5347
+          - kubernetes-141402-podcertificate-readiness
+          - kubernetes-141283-compat-feature-gate
+    env:
+      GMI_API_KEY: ${{ secrets.GMI2_API_KEY }}
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      BENCH_MODEL: ${{ vars.GMI_MODEL }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      RESULT: /tmp/pi-four-public-tracecite-${{ matrix.case }}
+      CASE_DIR_REL: benchmarks/agent-investigation/cases/${{ matrix.case }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev,diversity]"
+
+      - name: Run TraceCite integration regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_pi_four_public_strict_boundary.py \
+            tests/test_pi_source_identity_projection.py \
+            tests/test_evidence_selection_diversity.py \
+            tests/test_pi_navigation_hint_projection.py \
+            tests/test_pi_tracecite_runtime_neutral.py
+
+      - name: Configure GMI model
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GMI_API_KEY"
+          test -n "$BENCH_MODEL"
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(
+              json.dumps(payload, indent=2) + '\n'
+          )
+          PY
+
+      - name: Prepare public case evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT"
+          mkdir -p "$RESULT/prepared"
+          CASE_DIR="$GITHUB_WORKSPACE/$CASE_DIR_REL"
+          python -m tracecite.benchmarking validate "$CASE_DIR" > "$RESULT/validate.json"
+          python -m tracecite.benchmarking prepare "$CASE_DIR" --work-dir "$RESULT/prepared" > "$RESULT/prepare.json"
+          PREPARED="$(find "$RESULT/prepared" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED"
+          python - "$PREPARED" "$CASE_DIR" >> "$GITHUB_ENV" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text())
+          files = [Path(item['path']).resolve() for item in data['inputs']]
+          assert files and all(p.is_file() for p in files)
+          common = Path(os.path.commonpath([str(p.parent) for p in files])).resolve()
+          print(f'INPUT_ROOT={common}')
+          print(f'QUESTION_FILE={Path(data["question"]).resolve()}')
+          print('INPUT_FILES=' + ','.join(p.name for p in files))
+          print(f'CASE_DIR_ABS={Path(sys.argv[2]).resolve()}')
+          PY
+
+      - name: Run Pi using TraceCite evidence only
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION="$(cat "$QUESTION_FILE")"
+          REQUEST="用 tracecite 分析这个问题。${QUESTION}"
+          SYSTEM_PROMPT="You are a coding agent investigating supplied runtime evidence. Follow the user's explicit request to use TraceCite. Cite exact evidence lines for material factual claims."
+          mkdir -p "$RESULT/session"
+          cd "$INPUT_ROOT"
+          unset TRACECITE_BENCHMARK_MODE || true
+          unset TRACECITE_MODE || true
+          export TRACECITE_EVIDENCE_ROOT="$INPUT_ROOT"
+          export TRACECITE_EVIDENCE_FILES="$INPUT_FILES"
+          export TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT/tracecite-runtime-evidence-access.jsonl"
+          export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$RESULT/tracecite-blocked-native-evidence-attempts.jsonl"
+          set +e
+          timeout -k 30s 900s pi \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$GMI_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT/session" \
+            --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+            --tools tracecite_search,tracecite_expand \
+            --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+            --no-prompt-templates --no-context-files \
+            --system-prompt "$SYSTEM_PROMPT" "$REQUEST" \
+            > "$RESULT/answer.md" 2> "$RESULT/stderr.log"
+          code=$?
+          set -e
+          echo "$code" > "$RESULT/exit.txt"
+
+      - name: Enforce TraceCite-only evidence channel
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          TRACE="$RESULT/tracecite-runtime-evidence-access.jsonl"
+          BLOCKED="$RESULT/tracecite-blocked-native-evidence-attempts.jsonl"
+          trace_calls=0
+          blocked_attempts=0
+          [[ -f "$TRACE" ]] && trace_calls="$(grep -cve '^$' "$TRACE" || true)"
+          [[ -f "$BLOCKED" ]] && blocked_attempts="$(grep -cve '^$' "$BLOCKED" || true)"
+          exit_code="$(cat "$RESULT/exit.txt" 2>/dev/null || echo 999)"
+          python - "$trace_calls" "$blocked_attempts" "$exit_code" "$RESULT/mode-status.json" <<'PY'
+          import json, sys
+          trace_calls, blocked_attempts, exit_code = map(int, sys.argv[1:4])
+          payload = {
+              'schema_version': 1,
+              'activation': 'explicit_user_prompt',
+              'benchmark_mode_forced': False,
+              'tracecite_evidence_calls': trace_calls,
+              'blocked_native_evidence_attempts': blocked_attempts,
+              'agent_exit_code': exit_code,
+              'channel_valid': exit_code == 0 and trace_calls > 0 and blocked_attempts == 0,
+          }
+          open(sys.argv[4], 'w').write(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          if not payload['channel_valid']:
+              raise SystemExit('tracecite_only_channel_invalid')
+          PY
+          tail -80 "$RESULT/stderr.log" || true
+
+      - name: Convert transcript and collect usage
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          SESSION="$(find "$RESULT/session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          if [[ -n "$SESSION" && -f "$RESULT/answer.md" ]]; then
+            python benchmarks/agent-investigation/pi_session_to_transcript.py \
+              "$SESSION" "$RESULT/answer.md" "$RESULT/transcript.jsonl" \
+              --mode pi-tracecite-product-mode --model "$BENCH_MODEL" || true
+          fi
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RESULT'])
+          totals = {'input_tokens': 0, 'output_tokens': 0, 'model_calls': 0, 'tool_calls': 0}
+          transcript = root / 'transcript.jsonl'
+          if transcript.is_file():
+              for line in transcript.read_text(errors='replace').splitlines():
+                  try:
+                      event = json.loads(line)
+                  except Exception:
+                      continue
+                  if event.get('type') == 'model':
+                      usage = event.get('usage') or {}
+                      totals['input_tokens'] += int(usage.get('input_tokens') or 0)
+                      totals['output_tokens'] += int(usage.get('output_tokens') or 0)
+                      totals['model_calls'] += 1
+                  elif event.get('type') == 'tool':
+                      totals['tool_calls'] += 1
+          (root / 'usage.json').write_text(json.dumps(totals, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(totals, indent=2, sort_keys=True))
+          PY
+
+      - name: Score final answer with case schema (auxiliary)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -s "$RESULT/transcript.jsonl" ]]; then
+            echo '{"available": false, "reason": "missing_transcript"}' > "$RESULT/score.json"
+            cat "$RESULT/score.json"
+            exit 0
+          fi
+          set +e
+          python - "$CASE_DIR_ABS" "$RESULT/transcript.jsonl" "$RESULT/score.json" <<'PY'
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          case_dir = Path(sys.argv[1])
+          transcript = Path(sys.argv[2])
+          score_path = Path(sys.argv[3])
+          gold = json.loads((case_dir / 'gold.json').read_text())
+          module = (
+              'tracecite.root_cause_benchmarking'
+              if 'root_cause_schema_version' in gold
+              else 'tracecite.benchmarking'
+          )
+          proc = subprocess.run(
+              [sys.executable, '-m', module, 'score', str(case_dir), str(transcript)],
+              text=True,
+              capture_output=True,
+          )
+          score_path.write_text(proc.stdout or json.dumps({
+              'available': False,
+              'scorer_returncode': proc.returncode,
+              'stderr': proc.stderr[-2000:],
+          }))
+          if proc.stdout:
+              print(proc.stdout)
+          if proc.stderr:
+              print(proc.stderr, file=sys.stderr)
+          PY
+          score_code=$?
+          set -e
+          if [[ $score_code -ne 0 ]]; then
+            echo "auxiliary scorer wrapper exited with code $score_code" >&2
+          fi
+          cat "$RESULT/score.json" 2>/dev/null || true
+          exit 0
+
+      - name: Upload case result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-tracecite-only-${{ matrix.case }}
+          path: /tmp/pi-four-public-tracecite-${{ matrix.case }}
+          if-no-files-found: error

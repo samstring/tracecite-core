@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "case_id": "kubernetes-140039-runc-5347",
+  "confirmed_by": [
+    "https://github.com/kubernetes/kubernetes/issues/140039",
+    "https://github.com/opencontainers/runc/pull/5347",
+    "https://github.com/opencontainers/runc/commit/d3e8242ca32c17d1587701031454d667522c3c1e"
+  ],
+  "summary": "runc fails container initialization in its seccomp setup path because probing the SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV capability returns EINVAL and runc 1.5.0 treats that unsupported-flag result as fatal. The error is propagated through OCI runtime create and containerd RunPodSandbox, so control-plane sandboxes cannot start. The merged fix makes the wait-kill capability probe tolerate EINVAL as an unsupported feature instead of aborting container creation.",
+  "required_concepts": [
+    {
+      "id": "seccomp-init-failure",
+      "patterns": [
+        "seccomp.{0,160}(init|filter|container).{0,160}(fail|error|invalid argument)",
+        "(container init|container process).{0,160}seccomp.{0,160}(fail|error|invalid argument)"
+      ]
+    },
+    {
+      "id": "wait-kill-probe",
+      "patterns": [
+        "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV",
+        "wait.?kill.{0,120}(probe|flag|unsupported|EINVAL|invalid argument)"
+      ]
+    },
+    {
+      "id": "unsupported-probe-is-fatal",
+      "patterns": [
+        "(EINVAL|invalid argument).{0,160}(unsupported|capability|probe|flag).{0,160}(fatal|abort|fail)",
+        "(unsupported|capability|probe|flag).{0,160}(EINVAL|invalid argument).{0,160}(fatal|abort|fail)",
+        "(treat|treated).{0,100}(EINVAL|invalid argument).{0,100}(fatal|error)"
+      ]
+    }
+  ],
+  "evidence_markers": [
+    "unable to init seccomp",
+    "error loading seccomp filter into kernel",
+    "unable to fetch seccomp filter flags",
+    "unable to fetch SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV bit: invalid argument"
+  ],
+  "thresholds": {
+    "concept_recall": 0.6667,
+    "evidence_marker_recall": 0.75
+  },
+  "leak_terms": [
+    "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV",
+    "wait-kill capability probe",
+    "tolerate EINVAL"
+  ]
+}

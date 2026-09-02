@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "kubernetes-141402-podcertificate-readiness",
+  "title": "Projected PodCertificate mTLS e2e flakes while client/server pods start",
+  "source_issue": "https://github.com/kubernetes/kubernetes/issues/141402",
+  "fix_reference": "https://github.com/kubernetes/kubernetes/pull/141440",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "prow-build-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-kind-cloud-provider-loadbalancer/2086677576276774912/build-log.txt",
+      "filename": "build-log.txt",
+      "sha256": "bea8de2f091ab90f0207c7fd716c71e5473f7dd9ddae89190969d32cb4b102bf",
+      "required": true
+    },
+    {
+      "id": "worker-containerd-log",
+      "url": "https://storage.googleapis.com/kubernetes-ci-logs/logs/ci-kubernetes-kind-cloud-provider-loadbalancer/2086677576276774912/artifacts/kind-worker/containerd.log",
+      "filename": "containerd.log",
+      "sha256": "4227061e5e2550bab706690038ad2ac2b3fbf00be0ed020e9e1e67fb8b548638",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "kubernetes/kubernetes",
+    "issue_state": "closed",
+    "public_log": true,
+    "fix_commit": "b3bc2ac58fa173967f27ade80f28cc5015b8c1c3",
+    "model_visible_payload_bytes": 3906543,
+    "notes": "Two original files from the same failing public Prow run: the complete 156,657-byte build log and the complete 3,749,886-byte worker containerd log. Their combined model-visible evidence is 3.725 MiB. No padding, concatenation, or truncation is used."
+  }
+}
