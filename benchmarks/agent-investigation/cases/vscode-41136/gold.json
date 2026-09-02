@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "case_id": "vscode-41136",
+  "confirmed_by": [
+    "https://github.com/microsoft/vscode/issues/41136",
+    "https://github.com/gabime/spdlog/issues/609",
+    "https://github.com/gabime/spdlog/pull/610"
+  ],
+  "summary": "The renderer freeze is caused by the asynchronous spdlog worker using std::this_thread::sleep_for on Windows while window shutdown waits for that worker to terminate. The reproduction shows the freeze is triggered by moving the wall clock backwards. The isolated timing evidence shows an active 500 ms sleep_for can become much longer after a backwards clock adjustment, while WinAPI Sleep is not affected in the same way. The pre-fix async logger sleeps for 20 or 500 ms when idle and its destructor queues a terminate message then joins the worker. If the worker is stuck in the clock-sensitive sleep, the renderer's shutdown path blocks in join until the worker wakes and handles termination. This also explains why the separate main process can remain responsive.",
+  "required_concepts": [
+    {
+      "id": "clock-rollback-trigger",
+      "patterns": [
+        "(clock|time|system time).{0,120}(back|backward|backwards|previous|earlier).{0,180}(freeze|hang|stuck|reproduc)",
+        "(freeze|hang|stuck).{0,160}(clock|time).{0,120}(back|backward|backwards|earlier)"
+      ]
+    },
+    {
+      "id": "sleep-for-clock-sensitive-delay",
+      "patterns": [
+        "sleep_for.{0,220}(clock|time).{0,160}(back|adjust|long|delay|500)",
+        "(clock|time).{0,160}(back|adjust).{0,220}sleep_for.{0,160}(long|delay|block|wait)"
+      ]
+    },
+    {
+      "id": "async-worker-uses-sleep-for",
+      "patterns": [
+        "(async|logging|logger|worker).{0,220}sleep_for.{0,120}(20|500|milliseconds)",
+        "sleep_or_yield.{0,220}sleep_for"
+      ]
+    },
+    {
+      "id": "join-blocks-renderer-shutdown",
+      "patterns": [
+        "(destructor|destroy|shutdown|close).{0,220}(join|worker).{0,220}(block|wait|freeze|hang|terminate)",
+        "_worker_thread\.join.{0,220}(block|wait|freeze|hang|terminate)"
+      ]
+    },
+    {
+      "id": "main-process-remains-responsive",
+      "patterns": [
+        "main process.{0,160}(responsive|working|menus|new windows).{0,220}(renderer|window|separate)",
+        "renderer.{0,160}(blocked|freeze|hang).{0,220}main process.{0,160}(responsive|working)"
+      ]
+    }
+  ],
+  "evidence_markers": [
+    "Move the system clock backwards by any amount.",
+    "_worker_thread.join();",
+    "return sleep_for(milliseconds(500));",
+    "that wait can remain blocked far longer than 500 ms"
+  ],
+  "thresholds": {
+    "concept_recall": 0.8,
+    "evidence_marker_recall": 1.0
+  },
+  "leak_terms": [
+    "Use Sleep in Windows instead of sleep_for",
+    "gabime/spdlog/pull/610"
+  ]
+}
