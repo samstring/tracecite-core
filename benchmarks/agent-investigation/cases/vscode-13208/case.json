@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "vscode-13208",
+  "title": "Localization string capitalization at a standalone terminal error call site",
+  "source_issue": "https://github.com/microsoft/vscode/issues/13208",
+  "fix_reference": "https://github.com/microsoft/vscode/commit/ac837a1d9cc6b8934a0ebc04d01df03ce79e9099",
+  "question_file": "question.md",
+  "gold_file": "gold.json",
+  "inputs": [
+    {
+      "id": "pre-fix-terminal-source",
+      "url": "https://raw.githubusercontent.com/samstring/tracecite-core/0e5d847cecda9cb518157f9a5de947a87647abfe/benchmarks/agent-investigation/cases/vscode-13208/terminalService_pre_fix.ts",
+      "filename": "terminalService_pre_fix.ts",
+      "sha256": "059e1ff151744e7d27d8aed4730e5c65bf7dd9dfcabde82b15b279c6b9ca3d7c",
+      "required": true
+    }
+  ],
+  "provenance": {
+    "project": "microsoft/vscode",
+    "issue_state": "closed",
+    "public_evidence": true,
+    "model_visible_payload_bytes": 1007,
+    "notes": "This is intentionally a small source-semantics case rather than a runtime-log investigation. The model sees the pre-fix call site but not the maintainer reply or fixing commit."
+  }
+}
