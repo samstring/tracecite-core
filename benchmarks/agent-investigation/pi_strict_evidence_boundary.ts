@@ -22,6 +22,13 @@ const EVIDENCE_BASENAMES = new Set(
     .filter(Boolean),
 );
 
+const configuredEvidenceCallLimit = Number(
+  String(process.env.TRACECITE_MAX_EVIDENCE_CALLS || "16").trim(),
+);
+const TRACE_EVIDENCE_CALL_LIMIT = Number.isFinite(configuredEvidenceCallLimit)
+  ? Math.max(1, Math.min(1000, Math.floor(configuredEvidenceCallLimit)))
+  : 16;
+
 const TRACE_TOOLS = new Set([
   "tracecite_retrieve",
   "tracecite_materialize",
@@ -169,6 +176,7 @@ export function explicitlyRequestsTracecite(text: string): boolean {
 
 export default function traceciteEvidenceGuard(pi: ExtensionAPI) {
   let promptTraceciteMode = false;
+  let traceEvidenceCalls = 0;
   const modeActive = () => forcedTraceciteMode() || promptTraceciteMode;
 
   // Product activation: a user turn that explicitly requests TraceCite enables the
@@ -176,6 +184,7 @@ export default function traceciteEvidenceGuard(pi: ExtensionAPI) {
   pi.on("input", async (event) => {
     if (!forcedTraceciteMode() && event.source !== "extension") {
       promptTraceciteMode = explicitlyRequestsTracecite(event.text);
+      traceEvidenceCalls = 0;
     }
     return { action: "continue" } as any;
   });
@@ -183,7 +192,23 @@ export default function traceciteEvidenceGuard(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     if (!modeActive() || !EVIDENCE_ROOT) return undefined;
 
-    await recordTraceCiteRuntimeAccess(event, ctx.cwd, true);
+    const tool = String(event?.toolName || "");
+    if (TRACE_TOOLS.has(tool)) {
+      // Mechanical transport guard only. This does not inspect claims, hypotheses,
+      // evidence meaning, or diagnostic sufficiency. It simply bounds evidence I/O.
+      if (traceEvidenceCalls >= TRACE_EVIDENCE_CALL_LIMIT) {
+        return {
+          block: true,
+          reason: `TraceCite evidence transport limit reached (${TRACE_EVIDENCE_CALL_LIMIT}). Do not request more evidence; answer from the evidence already retrieved.`,
+        } as any;
+      }
+      // Increment before the first await so concurrently emitted tool calls cannot
+      // race past the transport ceiling in a single model turn.
+      traceEvidenceCalls += 1;
+      await recordTraceCiteRuntimeAccess(event, ctx.cwd, true);
+      return undefined;
+    }
+
     const nativeAccess = detectNativeRuntimeAccess(event, ctx.cwd);
     if (!nativeAccess) return undefined;
 
@@ -204,8 +229,10 @@ export default function traceciteEvidenceGuard(pi: ExtensionAPI) {
   });
 
   // A prompt-triggered product mode is scoped to one completed agent run. Forced
-  // env modes remain active until the host process exits.
+  // env modes remain active until the host process exits. The transport count is
+  // per agent run in both modes.
   pi.on("agent_end", async () => {
+    traceEvidenceCalls = 0;
     if (!forcedTraceciteMode()) promptTraceciteMode = false;
   });
 }
