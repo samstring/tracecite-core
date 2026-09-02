@@ -54,13 +54,13 @@ def test_skill_layer_can_own_usage_guidance() -> None:
     assert "The Agent's job is to understand what that evidence means" in text
 
 
-def test_skill_uses_qualified_patience_without_runtime_stop_policy() -> None:
+def test_skill_uses_answer_obligation_stopping_without_runtime_policy() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
 
-    assert "qualified-patience stopping" in skill
-    assert "qualified_stability" in skill
-    assert "2 consecutive distinct qualified challenges" in skill
-    assert "Confirmation-only" in skill
-    assert "qualified_stability" not in runtime
-    assert "qualified challenge" not in runtime
+    assert "answer obligations" in skill
+    assert "One evidence round = one obligation" in skill
+    assert "2 consecutive non-advancing rounds" in skill
+    assert "answer immediately" in skill
+    assert "answer obligations" not in runtime
+    assert "non-advancing rounds" not in runtime
