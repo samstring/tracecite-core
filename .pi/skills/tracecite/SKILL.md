@@ -24,15 +24,17 @@ These rules override any desire to produce a complete story.
    EDGE B: holds B -> waits A   [concrete supplied-evidence basis]
    ```
 
-   A hold may be a path-level inference only when supplied evidence shows that execution has already passed acquisition of the outer resource and is blocked deeper. If either edge is missing, do **not** invent the holder or infer it from exclusivity; describe only the supported contention/blocking and mark the missing edge `bounded_unknown`.
+   A hold may be a path-level inference only when supplied evidence establishes both that execution passed acquisition of the outer resource **and that the resource is still held at the observed blocking point**. Merely seeing an acquisition earlier in the same function/call path, or seeing the caller still active below the current frame, proves progress through the path but not current ownership. If the supplied artifact does not establish the lock scope/release ordering needed for `still held`, classify the hold as `bounded_unknown` instead of promoting it into a causal edge. If either opposing edge is missing, do **not** invent the holder or infer it from exclusivity; describe only the supported contention/blocking and mark the missing edge `bounded_unknown`.
 
-3. **Do not use lock exclusivity as evidence of holder identity.** Statements such as "only one worker can be inside, therefore another worker holds the mutex" are forbidden unless a supplied representative actually shows the holder path past acquisition.
+3. **Do not use lock exclusivity as evidence of holder identity.** Statements such as "only one worker can be inside, therefore another worker holds the mutex" are forbidden unless a supplied representative actually shows the holder path and current ownership at the blocking point.
 
 4. **Blocked `RLock` proves a reader is waiting, not that a writer is proven to hold the RWMutex.** Likewise, a queued writer does not by itself prove which reader/writer holds the lock.
 
-5. **Do not manufacture object identity.** Nearby pointer values, address offsets, guessed struct layout, or model-known source code cannot establish that two locks/fields belong to the same object. Only supplied evidence may establish identity.
+5. **An active caller frame is not ownership proof.** Stack call-chain order may show that function A called function B and B is currently blocked. It does not by itself prove that any lock acquired somewhere in A remains held across B. Do not turn source-line position, remembered implementation details, or an assumed `defer Unlock` into a current-hold claim unless that acquire/hold/release relationship is represented in the supplied evidence.
 
-6. **Stay inside the artifact lifecycle boundary.** In-process stack/FIFO/ttrpc presence does not by itself prove that a shim/process was forked, where an external process is stuck, whether an RPC/reply/registration completed, whether cleanup/reaping is blocked, or why restart recovers. If the supplied artifact does not directly represent that state, omit it or state the boundary explicitly.
+6. **Do not manufacture object identity.** Nearby pointer values, address offsets, guessed struct layout, or model-known source code cannot establish that two locks/fields belong to the same object. Only supplied evidence may establish identity.
+
+7. **Stay inside the artifact lifecycle boundary.** In-process stack/FIFO/ttrpc presence does not by itself prove that a shim/process was forked, where an external process is stuck, whether an RPC/reply/registration completed, whether cleanup/reaping is blocked, or why restart recovers. If the supplied artifact does not directly represent that state, omit it or state the boundary explicitly. Symptom text in the question is context to explain, not evidence that a proposed internal mechanism caused each lifecycle step.
 
 ## Mandatory final-answer proof filter
 
@@ -44,13 +46,17 @@ For every material sentence:
 - Is it observation, supported inference, or bounded_unknown?
 - Does it promote a waiter into a holder?
 - Does it infer an unnamed holder from "someone must hold it"?
-- Does it claim a cycle without two concrete opposing holds->waits edges?
-- Does it extend an in-process stack into external lifecycle/restart/cleanup behavior?
+- Does a claimed hold prove CURRENT ownership at the blocking point, rather than only earlier acquisition/path progress?
+- Does it assume an active caller frame means a lock from that caller is still held?
+- Does it claim a cycle without two concrete opposing current holds->waits edges?
+- Does it extend an in-process stack or symptom wording into external lifecycle/restart/cleanup behavior?
 ```
 
 If any answer is unsafe, delete or qualify that sentence. A shorter bounded answer is preferred over a complete-sounding unsupported narrative.
 
 **Special cycle output rule:** if one opposing edge is not independently supported, the final answer must literally avoid the words `deadlock`, `cycle`, and `lock-order inversion` as the established mechanism. It may say the evidence shows blocking/contention and that the reverse ownership edge is not established.
+
+**Special lifecycle output rule:** when the artifact is an in-process snapshot and external lifecycle state is not directly represented, do not explain why restart helps or assert process/RPC/cleanup states as facts. End with one boundary sentence instead of completing the story from general knowledge.
 
 ## Minimum causal proof ledger
 
@@ -70,18 +76,19 @@ For every blocking representative normalize internally:
 
 ```text
 waits: resource at the blocking acquisition
-holds: only resources proven acquired earlier on this same execution path
-basis: exact supplied evidence
+holds: only resources proven still held at this blocking point
+basis: exact supplied evidence for both acquisition and continued ownership
 ```
 
-Hard invariant:
+Hard invariants:
 
 ```text
 blocked at acquire(X) -> waits X
 blocked at acquire(X) -/-> holds X
+passed acquire(Y) -/-> currently holds Y
 ```
 
-Stack textual order is not acquisition order. An outer hold can be inferred only from execution-phase evidence proving the path progressed beyond that acquisition before blocking deeper.
+Stack textual order is not acquisition order, and path progress is not ownership scope. An outer hold can close only when supplied evidence proves that the acquisition dominates the observed block and release has not occurred before that point.
 
 ## Bounded retrieval
 
