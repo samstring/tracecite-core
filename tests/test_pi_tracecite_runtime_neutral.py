@@ -130,7 +130,7 @@ def test_skill_bounds_transport_and_synonym_loops() -> None:
     runtime = IMPL.read_text(encoding="utf-8")
     assert "`tracecite_search`: `max_evidence <= 12`" in skill
     assert "`tracecite_expand`: normally `radius <= 16`" in skill
-    assert "default total evidence-call budget: **16 calls**" in skill
+    assert "hard total evidence-call budget: 16 calls" in skill
     assert "after two consecutive non-advancing attempts for the same claim" in skill
     assert "one strongest representative per distinct causal role" in skill
     assert "16 calls" not in runtime
