@@ -1,4 +1,4 @@
-trigger: 2026-09-02 formal stability round 1 of 3
+trigger: 2026-09-02 formal stability round 1 of 3 retry 1
 tracecite_only_tools: true
 runtime_agent_steering: false
 correctness_gate: true
@@ -7,3 +7,4 @@ source_inventory_on_error: true
 adaptive_stopping_skill: answer-obligation-v5-frozen
 behavior_frozen: true
 formal_stability_round: 1/3
+retry_after_false_negative: 1
