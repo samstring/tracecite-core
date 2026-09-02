@@ -1,11 +1,11 @@
-trigger: 2026-09-02 compact-mechanism-first-proof diagnostic
+trigger: 2026-09-02 blocked-stack-orientation diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 correctness_gate: auxiliary_only
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: compact-mechanism-first-monotonic-proof
+adaptive_stopping_skill: execution-phase-hold-wait-orientation
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: semantic-correctness-downstream-boundary-token-budget
+diagnostic_focus: semantic-correctness-lock-cycle-waiter-holder-token-budget
 agent_timeout_seconds: 900
