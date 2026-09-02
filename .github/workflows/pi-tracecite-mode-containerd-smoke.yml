@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - test/tracecite-mode-containerd
+      - experiment/tracecite-adaptive-stopping
     paths:
       - benchmarks/agent-investigation/containerd-smoke-trigger.txt
   workflow_dispatch:
