@@ -86,6 +86,18 @@ def test_skill_normalizes_blocking_before_cycle_claim() -> None:
     assert "blocked at acquire(X)" not in runtime
 
 
+def test_skill_orients_blocked_stacks_by_execution_phase_not_frame_order() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Stack-frame orientation is not acquisition order" in skill
+    assert "currently blocked acquisition is commonly printed above its callers" in skill
+    assert "Derive lock order only from execution-phase evidence" in skill
+    assert "holds A -> waits B" in skill
+    assert "Never downgrade two proven opposing hold/wait edges to mere contention" in skill
+    assert "blocked acquiring X must not be named as the current holder/owner of X" in skill
+    assert "Stack-frame orientation is not acquisition order" not in runtime
+
+
 def test_skill_rejects_pointer_arithmetic_and_search_absence_as_proof() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     assert "nearby pointer values == same object/field identity" in skill
