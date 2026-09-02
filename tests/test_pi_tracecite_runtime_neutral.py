@@ -80,6 +80,7 @@ def test_skill_enforces_artifact_lifecycle_boundary() -> None:
     assert "does not by itself prove that a shim/process was forked" in skill
     assert "whether cleanup/reaping is blocked" in skill
     assert "why restart recovers" in skill
+    assert "delete the unsupported statement instead of narrating it and disclaiming it later" in skill
     assert "Artifact lifecycle boundary" not in runtime
 
 
@@ -144,6 +145,15 @@ def test_skill_bounds_transport_and_synonym_loops() -> None:
     assert "the next assistant action must be the final answer, not another TraceCite call" in skill
     assert "Do not estimate or restart the count from memory" in skill
     assert "absolute ceiling: 16" not in runtime
+
+
+def test_skill_serializes_tracecite_calls_before_count_decision() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Never batch or parallelize TraceCite calls" in skill
+    assert "at most one TraceCite call per assistant turn" in skill
+    assert "each result must be inspected before any next TraceCite request is emitted" in skill
+    assert "Never batch or parallelize TraceCite calls" not in runtime
 
 
 def test_skill_orders_mechanism_before_direct_impact_and_lifecycle() -> None:
