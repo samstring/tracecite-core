@@ -13,11 +13,12 @@ Build the **smallest supported causal proof**. Do not perform an evidence census
 These rules come before completeness, narrative quality, or scorer coverage:
 
 1. Retrieve only evidence needed to close one material claim at a time. Before every TraceCite call identify internally `claim` and `discriminator`. If either is missing, answer now.
-2. Issue TraceCite calls serially. Never batch or parallelize TraceCite calls: make at most one TraceCite call per assistant turn, inspect that result's `tracecite_host_activity_summary.total_tool_calls`, then decide whether another call is admissible. At 16 or greater, the next assistant action must be the final answer. Never make call 17.
-3. A stack/source position after an acquire is **not** evidence that the lock is still held. For current ownership, supplied evidence must itself expose the acquire-to-release control-flow interval strongly enough to exclude an intervening release. Model memory or guessed source scope is not supplied evidence.
-4. Do not establish deadlock/cycle/lock-order inversion unless both opposing current `holds -> waits` edges are independently supported. A waiter is never a holder merely because someone must hold the resource.
-5. Stop at the artifact boundary. Do not explain downstream process creation, RPC completion, retries, cleanup/reaping, or restart recovery unless supplied evidence independently establishes those lifecycle links.
-6. Once the mechanism and direct visible impact are closed, answer immediately. No waiter census, synonym search, confirmation pass, or symptom completion.
+2. **Prioritize causal closure over symptom census.** Once one blocking representative is found, spend the next admissible retrieval on the unresolved causal role that would complete or falsify the mechanism (for synchronization, the current holder/opposing `holds -> waits` edge). Do not spend the remaining budget counting equivalent waiters or searching user-described downstream symptoms while that causal discriminator is unresolved.
+3. Issue TraceCite calls serially. Never batch or parallelize TraceCite calls: make at most one TraceCite call per assistant turn, inspect that result's `tracecite_host_activity_summary.total_tool_calls`, then decide whether another call is admissible. At 16 or greater, the next assistant action must be the final answer. Never make call 17.
+4. A stack/source position after an acquire is **not** evidence that the lock is still held. For current ownership, supplied evidence must itself expose the acquire-to-release control-flow interval strongly enough to exclude an intervening release. Model memory or guessed source scope is not supplied evidence.
+5. Do not establish deadlock/cycle/lock-order inversion unless both opposing current `holds -> waits` edges are independently supported. A waiter is never a holder merely because someone must hold the resource.
+6. Stop at the artifact boundary. Do not explain downstream process creation, RPC completion, retries, cleanup/reaping, or restart recovery unless supplied evidence independently establishes those lifecycle links.
+7. Once the mechanism and direct visible impact are closed, answer immediately. No waiter census, synonym search, confirmation pass, or symptom completion.
 
 ## Non-negotiable final gate
 
