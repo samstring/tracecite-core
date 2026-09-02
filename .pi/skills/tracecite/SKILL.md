@@ -66,7 +66,7 @@ This is an Agent decision. TraceCite does not calculate semantic value of inform
 ## 3. Distinguish novelty from discriminating evidence
 
 ```text
-new source lines     != new semantic information
+new source lines      != new semantic information
 new evidence identity != evidence that changes the explanation
 more matching instances != stronger causal proof by default
 ```
@@ -225,4 +225,5 @@ routing/coverage metadata    != semantic importance
 9. Stop when no unresolved observable fact has enough value of information to change the material conclusion; otherwise state the evidence boundary if the required artifact is unavailable.
 ```
 
-TraceCite makes evidence recoverable, bounded, line-addressable, provenance-preserving, and mechanically non-redundant. The Agent decides what that evidence means and when enough has been learned.
+TraceCite's job is to make the evidence recoverable, bounded, line-addressable, provenance-preserving, and mechanically non-redundant.
+The Agent's job is to understand what that evidence means and decide when enough has been learned.
