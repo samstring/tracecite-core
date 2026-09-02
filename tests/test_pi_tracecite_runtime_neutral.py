@@ -83,7 +83,7 @@ def test_skill_has_mandatory_final_answer_filter() -> None:
     assert "Mandatory final-answer proof filter" in skill
     assert "without making another TraceCite call" in skill
     assert "Does it promote a waiter into a holder?" in skill
-    assert "Does it claim a cycle without two concrete opposing holds->waits edges?" in skill
+    assert "Does it claim a cycle without two concrete opposing current holds->waits edges?" in skill
     assert "delete or qualify that sentence" in skill
     assert "Mandatory final-answer proof filter" not in runtime
 
@@ -104,7 +104,8 @@ def test_skill_normalizes_blocking_and_execution_phase() -> None:
     assert "blocked at acquire(X) -> waits X" in skill
     assert "blocked at acquire(X) -/-> holds X" in skill
     assert "Stack textual order is not acquisition order" in skill
-    assert "execution-phase evidence" in skill
+    assert "acquisition dominates the observed block" in skill
+    assert "release has not occurred before that point" in skill
 
 
 def test_skill_rejects_pointer_identity_invention() -> None:
