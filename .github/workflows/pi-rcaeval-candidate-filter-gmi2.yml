@@ -1,0 +1,233 @@
+name: Pi RCAEval Candidate Filter GMI2
+
+on:
+  push:
+    branches:
+      - exp/candidate-first-local-recovery-v1
+    paths:
+      - .github/workflows/pi-rcaeval-candidate-filter-gmi2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-rcaeval-candidate-filter-gmi2
+  cancel-in-progress: false
+
+jobs:
+  prepare-evidence:
+    name: prepare neutral 100MB+ evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download and neutralize RCAEval case
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet huggingface_hub pandas pyarrow
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import snapshot_download
+
+          source_case = "re3tt_ts-route-service_f3_6"
+          srcroot = Path('/tmp/rcaeval-source')
+          out = Path('/tmp/rcaeval-neutral-evidence')
+          out.mkdir(parents=True, exist_ok=True)
+          snapshot_download(repo_id='phamquiluan/RCAEval', repo_type='dataset', allow_patterns=[f'{source_case}/*'], local_dir=srcroot)
+          src = srcroot / source_case
+          metrics = pd.read_parquet(src / 'metrics.parquet')
+          logs = pd.read_parquet(src / 'logs.parquet')
+          traces = pd.read_parquet(src / 'traces.parquet')
+          onset = int((src / 'inject_time.txt').read_text().strip())
+          metrics.to_csv(out / 'metrics.csv', index=False)
+          logs.to_json(out / 'logs.jsonl', orient='records', lines=True, force_ascii=False)
+          traces.to_json(out / 'traces.jsonl', orient='records', lines=True, force_ascii=False)
+          (out / 'incident.txt').write_text(
+              'System: Train Ticket microservices\n'
+              f'Known incident onset (Unix seconds): {onset}\n'
+              'Telemetry covers the normal and faulty window around this onset.\n',
+              encoding='utf-8')
+          files=['metrics.csv','logs.jsonl','traces.jsonl','incident.txt']
+          manifest={
+              'system':'Train Ticket','incident_onset_unix':onset,
+              'files':{p:(out/p).stat().st_size for p in files},
+              'rows':{'metrics':len(metrics),'logs':len(logs),'traces':len(traces)},
+              'metric_series':max(0,len(metrics.columns)-1),
+              'correctness':None,'correctness_source':'manual_review'}
+          manifest['total_bytes']=sum(manifest['files'].values())
+          (out/'evidence-manifest.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(manifest,indent=2,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rcaeval-candidate-filter-neutral-evidence
+          path: /tmp/rcaeval-neutral-evidence
+          retention-days: 7
+
+  tracecite-gmi2:
+    name: gmi2 TraceCite candidate filter
+    needs: prepare-evidence
+    runs-on: ubuntu-latest
+    env:
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      BENCH_MODEL: ${{ vars.GMI2_MODEL }}
+      BENCH_API_KEY: ${{ secrets.GMI2_API_KEY }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-rcaeval-candidate-filter-gmi2
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      EVIDENCE_ROOT: /tmp/rcaeval-candidate-filter/evidence
+      RESULT_ROOT: /tmp/rcaeval-candidate-filter/results
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install Pi and configure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BENCH_MODEL"; test -n "$BENCH_API_KEY"
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          mkdir -p "$PI_CODING_AGENT_DIR" "$RESULT_ROOT" "$EVIDENCE_ROOT"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          m=os.environ['BENCH_MODEL']
+          p={'providers':{'gmi':{'name':'GMI OpenAI-compatible','baseUrl':os.environ['GMI_BASE_URL'],'api':'openai-completions','models':[{'id':m,'name':m,'reasoning':False,'input':['text'],'cost':{'input':0,'output':0,'cacheRead':0,'cacheWrite':0},'contextWindow':1000000,'maxTokens':4096,'compat':{'supportsDeveloperRole':False,'supportsReasoningEffort':False}}]}}}
+          (Path(os.environ['PI_CODING_AGENT_DIR'])/'models.json').write_text(json.dumps(p,indent=2)+'\n')
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          name: rcaeval-candidate-filter-neutral-evidence
+          path: /tmp/rcaeval-candidate-filter/evidence
+      - name: Install TraceCite and validate candidate filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev,diversity]'
+          python -m pytest -q tests/test_candidate_search.py tests/test_candidate_filter.py tests/test_session_novelty_regressions.py tests/test_pi_tracecite_runtime_neutral.py
+      - name: Enable candidate filter in Pi bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('benchmarks/agent-investigation/pi_tracecite_bridge.py')
+          s=p.read_text()
+          marker='from tracecite.runtime.repeated_evidence import attach_matched_existing_evidence\n'
+          patch=r'''
+from tracecite.runtime import tools as _runtime_tools
+from tracecite.runtime.candidate_filter import CandidateFilterUnsupported, filter_literal_single_line
+import os as _candidate_os
+import time as _candidate_time
+import json as _candidate_json
+
+_LEGACY_FILTER_TEXT = _runtime_tools.filter_text
+
+
+def _candidate_filter_text(*args, **kwargs):
+    started = _candidate_time.perf_counter()
+    mode = "candidate"
+    reason = ""
+    try:
+        result = filter_literal_single_line(*args, **kwargs)
+    except CandidateFilterUnsupported as exc:
+        mode = "legacy_fallback"
+        reason = str(exc)
+        result = _LEGACY_FILTER_TEXT(*args, **kwargs)
+    activity = _candidate_os.environ.get("TRACECITE_CANDIDATE_FILTER_ACTIVITY")
+    if activity:
+        row = {
+            "mode": mode,
+            "reason": reason,
+            "seconds": round(_candidate_time.perf_counter() - started, 6),
+            "source": str(args[0] if args else kwargs.get("input_path") or ""),
+            "pattern": str(kwargs.get("pattern") or "")[:200],
+            "match_records": int(getattr(result, "match_records", 0) or 0),
+        }
+        with open(activity, "a", encoding="utf-8") as handle:
+            handle.write(_candidate_json.dumps(row, ensure_ascii=False) + "\n")
+    return result
+
+
+_runtime_tools.filter_text = _candidate_filter_text
+'''
+          if marker not in s:
+              raise SystemExit('bridge import marker not found')
+          if '_runtime_tools.filter_text = _candidate_filter_text' in s:
+              raise SystemExit('candidate filter patch already present')
+          p.write_text(s.replace(marker, marker + patch, 1))
+          PY
+          grep -n 'candidate_filter_text\|filter_literal_single_line' benchmarks/agent-investigation/pi_tracecite_bridge.py
+      - name: Run TraceCite unbounded with candidate filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULT_ROOT/tracecite-session"
+          export TRACECITE_EVIDENCE_ROOT="$EVIDENCE_ROOT"
+          export TRACECITE_EVIDENCE_FILES="metrics.csv,logs.jsonl,traces.jsonl,incident.txt"
+          export TRACECITE_PI_ACTIVITY="$RESULT_ROOT/tracecite-host-tool-activity.json"
+          export TRACECITE_CANDIDATE_FILTER_ACTIVITY="$RESULT_ROOT/candidate-filter-activity.jsonl"
+          PROMPT="A production incident occurred in a Train Ticket microservice deployment. The supplied telemetry covers the incident window and incident.txt gives the known onset time. Determine the root-cause service and the concrete failure mechanism. Explain the causal chain from the root cause to downstream symptoms. Use only supplied evidence and cite exact evidence lines for material claims. All telemetry content must be obtained through TraceCite tools; do not use native file-access tools for the evidence."
+          cd "$EVIDENCE_ROOT"
+          start=$(date +%s); set +e
+          pi --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" --thinking off --mode text --print \
+            --session-dir "$RESULT_ROOT/tracecite-session" \
+            --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+            --tools tracecite_search,tracecite_expand --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+            --no-prompt-templates --no-context-files --system-prompt "$PROMPT" \
+            "用 tracecite 调查这个 incident 并报告根因。" \
+            > "$RESULT_ROOT/tracecite-answer.md" 2> "$RESULT_ROOT/tracecite-stderr.log"
+          code=$?; set -e
+          echo "$code" > "$RESULT_ROOT/tracecite-exit.txt"
+          echo "$(( $(date +%s)-start ))" > "$RESULT_ROOT/tracecite-wall-seconds.txt"
+      - name: Convert transcript and summarize telemetry
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          S="$(find "$RESULT_ROOT/tracecite-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          if [[ -n "$S" ]]; then python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_session_to_transcript.py" "$S" "$RESULT_ROOT/tracecite-answer.md" "$RESULT_ROOT/tracecite-transcript.jsonl" --mode pi-tracecite --model "$BENCH_MODEL" || true; fi
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          r=Path(os.environ['RESULT_ROOT'])
+          def ri(n):
+              try:return int((r/n).read_text().strip())
+              except:return None
+          usage={'input_tokens':0,'output_tokens':0,'cache_read_tokens':0,'model_calls':0,'tool_calls':0}
+          p=r/'tracecite-transcript.jsonl'
+          if p.exists():
+              for line in p.read_text(errors='replace').splitlines():
+                  try:e=json.loads(line)
+                  except:continue
+                  if e.get('type')=='model':
+                      u=e.get('usage') or {}; usage['input_tokens']+=int(u.get('input_tokens') or 0); usage['output_tokens']+=int(u.get('output_tokens') or 0); usage['cache_read_tokens']+=int(u.get('cache_read_input_tokens') or u.get('cached_input_tokens') or 0); usage['model_calls']+=1
+                  elif e.get('type')=='tool': usage['tool_calls']+=1
+          rows=[]
+          ap=r/'candidate-filter-activity.jsonl'
+          if ap.exists():
+              for line in ap.read_text(errors='replace').splitlines():
+                  try:rows.append(json.loads(line))
+                  except:pass
+          modes={}
+          for row in rows:
+              m=str(row.get('mode') or 'unknown'); modes[m]=modes.get(m,0)+1
+          payload={'model':os.environ.get('BENCH_MODEL'),'experiment':'candidate_filter_default_snapshot_true','correctness_policy':'manual_review_only','tracecite':{'wall_seconds':ri('tracecite-wall-seconds.txt'),'exit':ri('tracecite-exit.txt'),**usage},'candidate_filter':{'calls':len(rows),'modes':modes,'seconds_total':round(sum(float(x.get('seconds') or 0) for x in rows),6),'max_seconds':round(max([float(x.get('seconds') or 0) for x in rows] or [0]),6)}}
+          (r/'objective-summary.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(payload,indent=2,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rcaeval-candidate-filter-gmi2-results
+          path: /tmp/rcaeval-candidate-filter/results
+          retention-days: 14
