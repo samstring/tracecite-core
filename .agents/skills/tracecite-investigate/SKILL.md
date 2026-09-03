@@ -172,4 +172,4 @@ TraceCite and this skill do not decide:
 - what the final conclusion should be;
 - when the Agent should stop.
 
-Read `../../../docs/agent-integration.md` for the canonical Host integration contract and `../../../docs/agent-global-setup.md` for the global installation/activation contract.
+This globally installed skill is self-contained. For source-repository integration details, see `docs/agent-integration.md` and `docs/agent-global-setup.md` in the TraceCite repository; do not rely on repository-relative paths from a user-level skill installation.
