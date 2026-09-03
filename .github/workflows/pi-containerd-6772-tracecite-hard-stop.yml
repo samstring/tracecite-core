@@ -32,7 +32,7 @@ jobs:
       RESULT_ROOT: /tmp/pi-containerd-6772-hard-stop
       SOURCE_ROOT: /tmp/pi-containerd-6772-source
       TRACECITE_NO_GROWTH_PATIENCE: "2"
-      TRACECITE_MAX_RETRIEVALS: "40"
+      TRACECITE_MAX_RETRIEVALS: "100"
       TRACECITE_RETRIEVAL_GUARD_ACTIVITY: /tmp/pi-containerd-6772-hard-stop/tracecite-retrieval-guard.jsonl
 
     steps:
@@ -132,7 +132,7 @@ jobs:
 
           start=$(date +%s)
           set +e
-          timeout -k 30s 900s pi \
+          timeout -k 30s 300s pi \
             --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
             --thinking off --mode text --print \
             --session-dir "$RESULT_ROOT/tracecite-session" \
