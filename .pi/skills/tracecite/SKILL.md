@@ -17,9 +17,11 @@ These rules override narrative quality and scorer coverage.
 3. Make TraceCite calls serially. Absolute transport ceiling: 16 evidence calls. A result reporting total calls >= 16 is terminal; the next action must be the final answer.
 4. Treat lock acquisition frames conservatively:
    - `blocked at acquire(X)` proves only `waits X`;
+   - multiple goroutines waiting on the same lock prove contention, not the identity or state of the current holder;
+   - simultaneous reader and writer waiters on the same `RWMutex` do **not** prove that a writer currently holds it, that readers are starving writers, that writers are starving readers, or that a lock cycle exists;
    - a caller/deeper frame or source position after `acquire(Y)` does not prove `holds Y`;
    - current ownership is supported only when supplied evidence exposes the acquire-to-release control-flow interval strongly enough to exclude an intervening release.
-5. Deadlock/cycle/lock-order inversion requires two independently supported **current** edges: `holds A -> waits B` and `holds B -> waits A`. If either holder edge is missing, report only the observed blocking/contention and mark the missing causal edge unknown.
+5. Deadlock/cycle/lock-order inversion requires two independently supported **current** edges: `holds A -> waits B` and `holds B -> waits A`. If either holder edge is missing, report only the observed blocking/contention and mark the missing causal edge unknown. Never use “someone must hold the lock”, queue shape, waiter counts, or RWMutex fairness semantics to synthesize a missing holder edge.
 6. Stop at the artifact boundary. External process creation, RPC completion, retries, cleanup/reaping, restart recovery, and helper-goroutine identity require independent evidence tying them to the observed attempt. User-described symptoms are hypotheses, not evidence.
 7. Once the directly supported mechanism is closed—or the remaining causal discriminator is bounded unknown—answer immediately.
 
@@ -31,7 +33,9 @@ These rules override narrative quality and scorer coverage.
 observed | supported_inference | bounded_unknown | contradicted
 ```
 
-If a root-cause edge is still `bounded_unknown`, the final must explicitly downgrade to the strongest supported statement (for example, a blocking location or contention pattern). Do not call the stronger hypothesis “the root cause”, “the opposing direction”, “the cycle”, or “the reason” merely because retrieval has stopped.
+If a root-cause edge is still `bounded_unknown`, the final must explicitly downgrade to the strongest supported statement (for example, a blocking location or contention pattern). Do not call the stronger hypothesis “the root cause”, “the opposing direction”, “the cycle”, “the deadlock”, “the starvation”, or “the reason” merely because retrieval has stopped.
+
+If the evidence shows only waiters and no current holder, the final must say exactly that the **holder/root cause is not established by the supplied artifact**. A large waiter population is severity evidence, not causal closure.
 
 ## Final deletion gate
 
@@ -40,7 +44,8 @@ Immediately before emitting the final, delete any sentence that does any of the 
 - converts a waiter into a holder;
 - infers current ownership from a past acquire, caller frame, deeper frame, or later source line;
 - names an unobserved holder or opposing causal edge;
-- claims deadlock/cycle/lock-order inversion without both current `holds -> waits` edges;
+- infers holder identity/state from waiter counts, queue ordering, reader/writer mix, or RWMutex implementation/fairness behavior;
+- claims deadlock/cycle/lock-order inversion/starvation without the required current ownership proof;
 - links a helper goroutine/process to the blocked request by name or temporal proximity alone;
 - explains downstream process/RPC/retry/restart/cleanup/reaping behavior;
 - uses a user-reported symptom to complete causality.
