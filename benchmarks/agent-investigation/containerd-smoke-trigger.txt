@@ -1,4 +1,4 @@
-trigger: 2026-09-03 stack-only hard-downgrade diagnostic
+trigger: 2026-09-03 stack-only hard-downgrade diagnostic after final-shape guard sync
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause-plus-final-evidence-discipline
