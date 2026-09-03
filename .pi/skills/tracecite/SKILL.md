@@ -109,15 +109,20 @@ A later caveat does not repair an earlier unsupported assertion. Remove the asse
 
 If either reciprocal path is missing in `stack_only`, the final mechanism must remain blocking/contention with root cause unclosed. In that case delete sentences that promote the mechanism using `deadlock`, `cycle`, `inversion`, `starvation`, `writer-preferred`/fairness, or current `held`/`holder` claims, and delete all process/retry/cleanup/restart consequences. The single lifecycle-boundary sentence is the only permitted downstream-lifecycle text.
 
+### Stack-only fixed final template
+
+For `stack_only`, free-form causal prose is forbidden after the claim ledger is built. Emit only the following four blocks, in this order, with short evidence-backed sentences:
+
+1. `Observed:` representative blocked path(s), with exact evidence lines.
+2. `Mechanism:` either (a) “The stacks support a structural lock-order inversion between <A> and <B>” **only when both reciprocal paths are directly observed**, or (b) “The artifact establishes blocking/contention, but the exact root cause remains unclosed.”
+3. `Uncertainty:` “Current lock holder/ownership is not established by this artifact.” Do not add a guessed holder, object cardinality, fairness/starvation, or pointer-based identity claim.
+4. `Boundary:` use the single lifecycle-boundary sentence from §4 when downstream lifecycle is not independently evidenced.
+
+After entering this template, do not add a diagram, subsystem narrative, “what this means”, symptom explanation, lifecycle scenario, alternative branch, or concluding restatement. In particular, do not infer `runc`, shim, retry, restart, recovery, cleanup, spawn, orphan, or process state from stack position. This template is a terminal serialization step, not a summary of exploratory reasoning.
+
 ## 6. Final answer shape
 
-Keep the answer compact and normal. For `stack_only`, use only:
-
-1. strongest supported in-process mechanism;
-2. minimum exact evidence for the representative path(s);
-3. holder/ownership uncertainty explicitly stated;
-4. direct artifact-visible impact only;
-5. lifecycle-boundary sentence if needed.
+Keep the answer compact and normal. For `stack_only`, the fixed template above overrides any desire to provide a longer explanation.
 
 If reciprocal paths are observed, say “the stacks support a structural lock-order inversion between A and B; current holders are not established by this artifact.” Do not replace that with a same-lock reader/writer convoy story.
 
