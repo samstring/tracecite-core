@@ -1,0 +1,216 @@
+name: Pi containerd-6772 TraceCite Hard Stop
+
+on:
+  push:
+    branches:
+      - feature_for_agent
+    paths:
+      - .github/workflows/pi-containerd-6772-tracecite-hard-stop.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-containerd-6772-tracecite-hard-stop
+  cancel-in-progress: true
+
+jobs:
+  tracecite-gmi2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      BENCH_MODEL: ${{ vars.GMI2_MODEL }}
+      BENCH_API_KEY: ${{ secrets.GMI2_API_KEY }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-containerd-6772-hard-stop
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      RESULT_ROOT: /tmp/pi-containerd-6772-hard-stop
+      SOURCE_ROOT: /tmp/pi-containerd-6772-source
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BENCH_MODEL"
+          test -n "$BENCH_API_KEY"
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -e ".[dev,diversity]"
+          python -m pytest -q \
+            tests/test_pi_four_public_strict_boundary.py \
+            tests/test_pi_tracecite_runtime_neutral.py
+
+      - name: Configure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PI_CODING_AGENT_DIR" "$RESULT_ROOT" "$SOURCE_ROOT"
+          printf '%s\n' "$BENCH_MODEL" > "$RESULT_ROOT/model.txt"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Run containerd-6772 TraceCite only
+        shell: bash
+        run: |
+          set -u
+          CASE_DIR="$GITHUB_WORKSPACE/benchmarks/agent-investigation/cases/containerd-6772"
+          PREP="$RESULT_ROOT/prepared"
+          EVIDENCE_ROOT="$SOURCE_ROOT/runtime-evidence"
+          mkdir -p "$PREP" "$SOURCE_ROOT/code" "$EVIDENCE_ROOT" "$RESULT_ROOT/tracecite-session"
+
+          python -m tracecite.benchmarking validate "$CASE_DIR" > "$RESULT_ROOT/validate.json" || exit 2
+          python -m tracecite.benchmarking prepare "$CASE_DIR" --work-dir "$PREP" > "$RESULT_ROOT/prepare.json" || exit 2
+          PREPARED="$(find "$PREP" -name prepared.json -type f -print -quit)"
+          test -n "$PREPARED" || exit 2
+
+          eval "$(python - "$PREPARED" <<'PY'
+          import json, shlex, sys
+          from pathlib import Path
+          data=json.loads(Path(sys.argv[1]).read_text())
+          files=[Path(x['path']).resolve() for x in data['inputs']]
+          print('QUESTION_FILE='+shlex.quote(str(Path(data['question']).resolve())))
+          print('PREPARED_INPUTS='+shlex.quote('\n'.join(str(p) for p in files)))
+          PY
+          )"
+          while IFS= read -r p; do cp "$p" "$EVIDENCE_ROOT/$(basename "$p")"; done <<< "$PREPARED_INPUTS"
+          INPUT_FILES="$(find "$EVIDENCE_ROOT" -maxdepth 1 -type f -printf '%f,' | sed 's/,$//')"
+          QUESTION="$(cat "$QUESTION_FILE")"
+
+          git init -q "$SOURCE_ROOT/code/containerd"
+          git -C "$SOURCE_ROOT/code/containerd" remote add origin https://github.com/containerd/containerd.git
+          git -C "$SOURCE_ROOT/code/containerd" fetch -q --depth=2 origin 449eb08b89b1854eaaec86f3233778d87c952e48
+          git -C "$SOURCE_ROOT/code/containerd" checkout -q 449eb08b89b1854eaaec86f3233778d87c952e48^
+          git -C "$SOURCE_ROOT/code/containerd" rev-parse HEAD > "$RESULT_ROOT/source-commit-containerd.txt"
+
+          cd "$SOURCE_ROOT"
+          export TRACECITE_BENCHMARK_MODE=tracecite
+          export TRACECITE_RUNTIME_EVIDENCE_ROOT="$EVIDENCE_ROOT"
+          export TRACECITE_RUNTIME_EVIDENCE_FILES="$INPUT_FILES"
+          export TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT_ROOT/tracecite-runtime-evidence-access.jsonl"
+          export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$RESULT_ROOT/tracecite-blocked-native-evidence-attempts.jsonl"
+
+          BASE_PROMPT="You are a coding agent investigating a real failure using both supplied runtime evidence and the checked-out pre-fix source code. Keep the investigation bounded. Once the root cause is sufficiently supported by logs and code, answer immediately instead of performing confirmatory searches. Before every additional TraceCite retrieval, emit a concise retrieval justification with exactly two short fields: claim: the one root-cause-relevant fact still unresolved or contradicted; discriminator: the concrete evidence that could change or settle that claim. If either field cannot be named, or if no root-cause-relevant question remains unanswered, do not retrieve again; answer immediately. Use source code to verify the mechanism rather than merely restating symptoms. Cite exact evidence lines for runtime claims and exact source file paths plus line numbers for code claims. Do not use external knowledge or the known fix."
+          TRACE_PROMPT="$BASE_PROMPT Runtime evidence is in ./runtime-evidence and must be accessed only through TraceCite tools. Pre-fix source code is in ./code and may be inspected with native read/grep/find/bash/ls tools. Do not use native tools to read runtime-evidence."
+          TRACE_REQUEST="用 tracecite 读取日志，并结合 ./code 里的 pre-fix 源码分析这个问题。${QUESTION}"
+
+          start=$(date +%s)
+          set +e
+          timeout -k 30s 900s pi \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT_ROOT/tracecite-session" \
+            --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+            --tools read,bash,grep,find,ls,tracecite_search,tracecite_expand \
+            --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+            --no-prompt-templates --no-context-files \
+            --system-prompt "$TRACE_PROMPT" "$TRACE_REQUEST" \
+            > "$RESULT_ROOT/tracecite-answer.md" 2> "$RESULT_ROOT/tracecite-stderr.log"
+          code=$?
+          set -e
+          echo "$code" > "$RESULT_ROOT/tracecite-exit.txt"
+          echo "$(( $(date +%s) - start ))" > "$RESULT_ROOT/tracecite-wall-seconds.txt"
+
+          cd "$GITHUB_WORKSPACE"
+          SESSION="$(find "$RESULT_ROOT/tracecite-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          if [[ -n "$SESSION" && -f "$RESULT_ROOT/tracecite-answer.md" ]]; then
+            python benchmarks/agent-investigation/pi_session_to_transcript.py \
+              "$SESSION" "$RESULT_ROOT/tracecite-answer.md" "$RESULT_ROOT/tracecite-transcript.jsonl" \
+              --mode pi-tracecite-code-logs-hard-stop --model "$BENCH_MODEL" || true
+            python -m tracecite.benchmarking score "$CASE_DIR" "$RESULT_ROOT/tracecite-transcript.jsonl" > "$RESULT_ROOT/tracecite-score.json" || true
+            python - "$RESULT_ROOT/tracecite-transcript.jsonl" "$RESULT_ROOT/tracecite-usage.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          totals={'input_tokens':0,'output_tokens':0,'cache_read_tokens':0,'model_calls':0,'tool_calls':0}
+          p=Path(sys.argv[1])
+          if p.is_file():
+              for line in p.read_text(errors='replace').splitlines():
+                  try: e=json.loads(line)
+                  except Exception: continue
+                  if e.get('type')=='model':
+                      u=e.get('usage') or {}
+                      totals['input_tokens']+=int(u.get('input_tokens') or 0)
+                      totals['output_tokens']+=int(u.get('output_tokens') or 0)
+                      totals['cache_read_tokens']+=int(u.get('cache_read_input_tokens') or u.get('cached_input_tokens') or 0)
+                      totals['model_calls']+=1
+                  elif e.get('type')=='tool':
+                      totals['tool_calls']+=1
+          Path(sys.argv[2]).write_text(json.dumps(totals,indent=2,sort_keys=True)+'\n')
+          PY
+          fi
+
+          trace_calls=0
+          blocked=0
+          [[ -f "$RESULT_ROOT/tracecite-runtime-evidence-access.jsonl" ]] && trace_calls="$(grep -cve '^$' "$RESULT_ROOT/tracecite-runtime-evidence-access.jsonl" || true)"
+          [[ -f "$RESULT_ROOT/tracecite-blocked-native-evidence-attempts.jsonl" ]] && blocked="$(grep -cve '^$' "$RESULT_ROOT/tracecite-blocked-native-evidence-attempts.jsonl" || true)"
+          printf '{"tracecite_evidence_calls":%s,"blocked_native_attempts":%s}\n' "$trace_calls" "$blocked" > "$RESULT_ROOT/channel.json"
+
+      - name: Build summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['RESULT_ROOT'])
+          def j(name):
+              p=root/name
+              try:return json.loads(p.read_text()) if p.is_file() else {}
+              except:return {}
+          def i(name):
+              p=root/name
+              try:return int(p.read_text().strip())
+              except:return None
+          score=j('tracecite-score.json')
+          summary={
+              'model': (root/'model.txt').read_text().strip() if (root/'model.txt').is_file() else None,
+              'case': 'containerd-6772',
+              'arm': 'tracecite-hard-stop',
+              'exit': i('tracecite-exit.txt'),
+              'wall_seconds': i('tracecite-wall-seconds.txt'),
+              'score_passed': score.get('passed'),
+              'quality': score.get('quality') if isinstance(score.get('quality'),dict) else {},
+              'usage': j('tracecite-usage.json'),
+              'channel': j('channel.json'),
+          }
+          (root/'summary.json').write_text(json.dumps(summary,indent=2,ensure_ascii=False)+'\n')
+          print(json.dumps(summary,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: containerd-6772-tracecite-hard-stop-gmi2
+          path: ${{ env.RESULT_ROOT }}
+          retention-days: 14
