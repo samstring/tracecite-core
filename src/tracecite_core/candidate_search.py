@@ -4,6 +4,11 @@ The first pass only locates physical lines that contain literals which every
 successful match must contain. Full query semantics are always re-checked on
 complete logical records afterwards. If Core cannot prove a no-false-negative
 candidate plan, callers must fall back to the ordinary segment-first path.
+
+For segmenters where one physical line is already one complete logical record,
+the candidate scan may retain the candidate line itself. This keeps the exact
+Matcher gate while avoiding a second whole-file pass merely to recover content
+that was already present during candidate discovery.
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ class CandidateScan:
     total_lines: int
     anchors: Tuple[str, ...]
     strategy: str
+    captured_lines: Tuple[Tuple[int, str], ...] = ()
 
 
 def _op_name(op: Any) -> str:
@@ -75,8 +81,6 @@ def _best_anchor_set(options: Iterable[Set[str]]) -> Optional[Set[str]]:
     prepared = [set(item) for item in options if item]
     if not prepared:
         return None
-    # Prefer the plan whose shortest alternative is longest. That usually makes
-    # the raw pass much sparser while preserving the no-false-negative rule.
     return max(
         prepared,
         key=lambda values: (
@@ -139,25 +143,14 @@ def _required_anchors(sequence: Any) -> Optional[Set[str]]:
                 else:
                     only_literals = False
                     break
-            # A one-character class can be a sound candidate but is normally so
-            # dense that the fast path loses. Keep it only when no better anchor
-            # is available; density gating below will usually reject it.
             if only_literals and literals:
                 options.append(set(literals))
-        # ASSERT / ASSERT_NOT / GROUPREF / ANY / CATEGORY / AT are deliberately
-        # ignored. A later mandatory consuming token can still provide a plan.
         index += 1
     return _best_anchor_set(options)
 
 
 def _has_scoped_ignorecase(sequence: Any) -> bool:
-    """Detect local ``(?i:...)`` regions that a global raw anchor cannot mirror.
-
-    A local IGNORECASE group may match text whose exact literal spelling does not
-    occur in the physical line. Unless the raw prefilter carries the same scoped
-    flag semantics, using that literal as a candidate anchor could create a false
-    negative. Conservatively fall back instead.
-    """
+    """Detect local ``(?i:...)`` regions that a global raw anchor cannot mirror."""
     for op, arg in _sequence_data(sequence):
         name = _op_name(op)
         if name == "SUBPATTERN":
@@ -191,9 +184,6 @@ def candidate_anchors(matcher: Matcher) -> Optional[Tuple[str, ...]]:
     if matcher.terms is not None:
         anchors: List[str] = []
         for term in matcher.terms:
-            # Literal matching uses the original AC/literal Matcher on each
-            # physical line. A literal spanning physical lines cannot therefore
-            # use this fast path without changing semantics.
             if "\n" in term or "\r" in term:
                 return None
             if not term:
@@ -203,11 +193,6 @@ def candidate_anchors(matcher: Matcher) -> Optional[Tuple[str, ...]]:
 
     if matcher.regex is None:
         return None
-    # Python's Unicode IGNORECASE has equivalences that are wider than a raw
-    # escaped-literal prefilter (for example ``k`` also matches Kelvin sign K).
-    # A narrower candidate scan would introduce false negatives, so only ASCII
-    # ignore-case regexes are eligible until candidate folding exactly mirrors
-    # the regex engine.
     if matcher.regex.flags & re.IGNORECASE and not matcher.regex.flags & re.ASCII:
         return None
     try:
@@ -240,6 +225,17 @@ def supports_candidate_records(segmenter: Segmenter) -> bool:
     return False
 
 
+def can_capture_candidate_lines(segmenter: Segmenter) -> bool:
+    """Whether a candidate physical line is already a complete logical record."""
+    if isinstance(segmenter, JsonLineSegmenter):
+        return True
+    if isinstance(segmenter, RawTextSegmenter):
+        return segmenter.mode == "line"
+    if isinstance(segmenter, FormatSegmenter):
+        return not segmenter.multiline
+    return False
+
+
 def _anchor_regex(matcher: Matcher, anchors: Sequence[str]) -> re.Pattern[str]:
     flags = 0
     if matcher.regex is not None:
@@ -252,17 +248,20 @@ def scan_candidate_lines(
     matcher: Matcher,
     *,
     encoding: str = "utf-8",
+    capture_lines: bool = False,
 ) -> Optional[CandidateScan]:
-    """Scan raw physical lines before any logical record construction.
+    """Scan raw physical lines before logical record construction.
 
-    None means the caller must use the old path. An empty line_numbers set means
-    Core proved there cannot be a match and can return zero hits without
-    invoking the segmenter.
+    When ``capture_lines`` is true, matched physical lines are retained together
+    with their line number. Callers may use them only when the selected segmenter
+    proves that each physical line is a complete logical record. The exact
+    Matcher must still be applied to the resulting Record.
     """
     anchors = candidate_anchors(matcher)
     if not anchors:
         return None
     line_numbers: Set[int] = set()
+    captured_lines: List[Tuple[int, str]] = []
     total_lines = 0
     literal_matcher = matcher if matcher.terms is not None else None
     anchor_re = None if literal_matcher is not None else _anchor_regex(matcher, anchors)
@@ -275,6 +274,8 @@ def scan_candidate_lines(
             )
             if matched:
                 line_numbers.add(total_lines)
+                if capture_lines:
+                    captured_lines.append((total_lines, line))
                 if len(line_numbers) > _MAX_CANDIDATE_LINES:
                     return None
             if (
@@ -287,6 +288,7 @@ def scan_candidate_lines(
         total_lines=total_lines,
         anchors=tuple(anchors),
         strategy="literal" if literal_matcher is not None else "required-literal",
+        captured_lines=tuple(captured_lines),
     )
 
 
@@ -381,9 +383,6 @@ def _iter_start_delimited_candidates(
     candidate_record = False
     pending_start = 1
     pending_rows: Optional[List[Tuple[int, str]]] = None
-    # Keep only one raw record prefix at a time. We deliberately avoid invoking
-    # the segmenter's Record construction for non-candidates; the prefix is
-    # needed only so a hit on a continuation line can recover its record header.
     prefix_rows: List[Tuple[int, str]] = []
     with Path(path).open("r", encoding=encoding, errors="replace") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -416,10 +415,24 @@ def iter_candidate_records(
     candidate_lines: Iterable[int],
     *,
     encoding: str = "utf-8",
+    captured_lines: Iterable[Tuple[int, str]] = (),
 ) -> Iterator[Record]:
-    """Yield only logical records intersecting previously located candidates."""
+    """Yield only complete logical records intersecting located candidates."""
     candidates = set(int(item) for item in candidate_lines)
     if not candidates:
+        return
+
+    captured = list(captured_lines)
+    if captured:
+        if not can_capture_candidate_lines(segmenter):
+            raise TypeError(
+                f"captured candidate lines are unsafe for segmenter: {type(segmenter).__name__}"
+            )
+        captured_numbers = {int(number) for number, _line in captured}
+        if captured_numbers != candidates:
+            raise ValueError("captured candidate lines do not match candidate line numbers")
+        for row in captured:
+            yield from _records_from_numbered_lines(segmenter, [row])
         return
 
     if isinstance(segmenter, JsonLineSegmenter):
