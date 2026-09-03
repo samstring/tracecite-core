@@ -43,7 +43,7 @@ Keep the investigation bounded. Once the root cause is sufficiently supported by
 
 Track only the smallest set of material claims required by the user's question. A TraceCite call is justified only when it targets one unresolved or contradicted material claim, or materializes an already-identified range needed to settle that claim.
 
-Before every additional TraceCite retrieval, emit a concise retrieval justification in this form:
+Before each TraceCite call identify internally the one material claim still unresolved or contradicted and the concrete discriminator that could change or settle it. Before every additional TraceCite retrieval, also emit a concise retrieval justification in this form:
 
 ```text
 claim: the one root-cause-relevant fact still unresolved or contradicted
