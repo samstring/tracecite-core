@@ -124,7 +124,7 @@ tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
 - 在 `Customize -> Rules` 中把 canonical 条件触发 Rule 添加成 Cursor **User Rule**（或等价 user-level rule 机制）；
 - 真正使用 TraceCite 时显式调用 `/tracecite-investigate`。
 
-仓库仍保留 `.cursor/rules/tracecite-investigation.mdc`，作为开发/兼容性资产。它不是推荐的生产安装方式，也不应该复制到每个业务项目。
+本仓库有意不再提供 `.cursor/rules/*.mdc` 形式的 TraceCite investigation rule。`.cursor/README.md` 明确记录这个边界，避免以后重新引入 project-level relevance 自动触发。
 
 Cursor 与 Codex 使用同一套 CLI/Runtime 语义，不创建 Cursor 专属的 Evidence / Coverage / correctness 模型。
 
@@ -206,8 +206,8 @@ tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
 执行状态和认识状态必须分开：
 
 ```text
-status  = operation 是否成功执行
-outcome = 返回 Evidence 对命题支持什么
+status  = operation 是否成功执行?
+outcome = 返回 Evidence 对命题支持什么?
 ```
 
 Agent 必须同时检查 Coverage / warnings / missing-evidence，不能因为一次成功的 zero-match 就推出全局不存在。
