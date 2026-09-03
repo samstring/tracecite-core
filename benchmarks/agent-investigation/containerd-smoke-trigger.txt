@@ -1,13 +1,13 @@
-trigger: 2026-09-03 terminal-transition diagnostic after stack-only ceiling failure
+trigger: 2026-09-03 symbol-directed reciprocal diagnostic after clean convergence failure
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause-plus-terminal-evidence-firewall
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-evidence-firewall-immediate-terminal-transition
+adaptive_stopping_skill: stack-only-symbol-directed-reciprocal-plus-terminal-card
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: after discriminator closure/bounded-unknown or evidence ceiling, transition immediately and irreversibly to the four-paragraph evidence-bounded final; no further tool calls or exploratory causal/lifecycle prose
+diagnostic_focus: after at most two orientation calls, stop broad discovery and target exact symbols/call-chain structure for reverse component nesting; after two non-advancing reciprocal attempts or ceiling, emit only the four-paragraph evidence-bounded final
 agent_timeout_seconds: 900
