@@ -43,6 +43,8 @@ This supports only the **structural inversion / cyclic-wait mechanism**. It does
 
 Once a path crosses from component A into component B, the next useful search is for the reverse B-to-A nesting. Prefer distinct component/frame names and call-chain structure over addresses or waiter counts. Do not spend calls proving that many equivalent waiters exist.
 
+Once concrete component symbols are known, reciprocal retrieval must be **symbol-directed**: search the representative opposite-side stack for the first component's type/method symbols (or the first-side stack for the opposite component's symbols) so the missing cross-component nesting can be observed or bounded unknown. Generic subsystem queries such as `Collect`, `metrics`, `prometheus`, `cgroup`, or `lock` are non-advancing after those symbols are known unless they directly expose the missing reciprocal nesting.
+
 If reciprocal paths are directly observed, that structural relation is the strongest mechanism to report. Do not replace it with a weaker same-lock convoy/contention story.
 
 ## 3. Bounded retrieval
@@ -104,6 +106,8 @@ Do **not** add narrative beyond those classes. In particular, do not assert or i
 - lifecycle facts inferred only from source-line position or remembered code ordering.
 
 A later caveat does not repair an earlier unsupported assertion. Remove the assertion and all downstream consequences that depend on it.
+
+If either reciprocal path is missing in `stack_only`, the final mechanism must remain blocking/contention with root cause unclosed. In that case delete sentences that promote the mechanism using `deadlock`, `cycle`, `inversion`, `starvation`, `writer-preferred`/fairness, or current `held`/`holder` claims, and delete all process/retry/cleanup/restart consequences. The single lifecycle-boundary sentence is the only permitted downstream-lifecycle text.
 
 ## 6. Final answer shape
 
