@@ -1,4 +1,4 @@
-trigger: 2026-09-04 fail-closed-stack-only-stopping diagnostic after guard alignment
+trigger: 2026-09-04 stack-only-ownership-firewall diagnostic with neutral transport cap aligned to skill budget
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-bounded-root-cause-firewall
@@ -7,8 +7,8 @@ compact_transport_metadata: true
 source_inventory_on_error: true
 adaptive_stopping_skill: stack-only-six-call-hard-stop-plus-exact-four-paragraph-final
 skill_activation: full-skill-text-injected-into-system-prompt
-runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
+runtime_transport_guard: diagnosis-neutral-max-evidence-calls-6
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: at most six combined TraceCite evidence calls; stop immediately after closure/non-advance/call6/refusal; whole answer must start Observed and contain exactly four short paragraphs; no pointer-derived object identity, waiter-as-holder/acquired promotion, starvation/deadlock promotion, or downstream lifecycle/restart story
+diagnostic_focus: at most six combined TraceCite evidence calls; no blocked Lock/RLock waiter pattern may be promoted into current writer ownership/lock mode; stop immediately after closure/non-advance/call6/refusal; whole answer must start Observed and contain exactly four short paragraphs; no pointer-derived object identity, unseen-holder inference, starvation/deadlock promotion, or downstream lifecycle/restart story
 agent_timeout_seconds: 900
