@@ -3,7 +3,7 @@ name: Pi containerd-6772 TraceCite Hard Stop + Guard
 on:
   push:
     branches:
-      - feature_for_agent
+      - exp/retrieval-guard-session-v2
     paths:
       - .github/workflows/pi-containerd-6772-tracecite-hard-stop.yml
       - .pi/skills/tracecite/SKILL.md
