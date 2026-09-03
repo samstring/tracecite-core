@@ -1,4 +1,4 @@
-trigger: 2026-09-04 fail-closed-stack-only-stopping diagnostic
+trigger: 2026-09-04 fail-closed-stack-only-stopping diagnostic after guard alignment
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-bounded-root-cause-firewall
