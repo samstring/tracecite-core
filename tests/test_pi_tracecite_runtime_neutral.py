@@ -66,11 +66,22 @@ def test_skill_uses_one_explicit_six_call_counter() -> None:
     assert "6 total TraceCite evidence calls" in skill
     assert "`tracecite_search` + `tracecite_expand` combined" in skill
     assert "Count locally from 1" in skill
-    assert "Calls 1-2: locate one representative blocked domain path" in skill
-    assert "Calls 3-6: only seek the exact reverse component nesting" in skill
+    assert "Calls 1-2 are only for source repair/orientation" in skill
+    assert "The first successful representative blocked path immediately ends orientation" in skill
+    assert "Every later call must seek the exact reverse component nesting" in skill
     assert "Never reset the count and never continue toward a higher Runtime ceiling" in skill
     assert "evidence_call_index" not in runtime
     assert "reciprocal-only" not in runtime
+
+
+def test_skill_repairs_invalid_source_without_changing_claim() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "`available_sources` is returned" in skill
+    assert "retry the same unresolved claim against an exact available source" in skill
+    assert "do not switch to a different query" in skill
+    assert "available_sources" in runtime
+    assert "recommended_source" not in runtime
 
 
 def test_skill_stops_after_nonadvancing_reciprocal_attempts() -> None:
