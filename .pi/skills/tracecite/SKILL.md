@@ -17,7 +17,7 @@ When the supplied artifact is `stack_only`, this rule overrides all stylistic, e
 - From that first prose token onward, emit exactly four short paragraphs with labels `Observed:`, `Mechanism:`, `Uncertainty:`, and `Boundary:` in that order. Any other paragraph, heading, bullet list, code block, diagram, causal narrative, or conclusion is invalid.
 - The four paragraphs must be reconstructed only from the final evidence ledger. Do not reuse prose drafted before terminal mode.
 - If the ledger does not contain two directly observed reciprocal cross-component paths, `Mechanism:` MUST use the bounded-unknown form. Same-lock reader/writer waiters, pointer equality, source-line position, fairness semantics, or runtime behavior can never substitute for the missing reciprocal path.
-- If the ledger lacks independent ownership evidence, no final sentence may assert or imply that any waiter is a holder or that a holder exists. If it lacks event chronology, no final sentence may explain spawn/retry/orphan/reap/restart/recovery.
+- If the ledger lacks independent ownership evidence, no final sentence may assert or imply that any waiter is a holder or that a holder exists. In particular, `blocked at Lock` / `blocked at acquire` may be serialized only as `waiting at` / `blocked while attempting`; never as `acquires`, `has acquired`, `holds`, or `while holding`. If it lacks event chronology, no final sentence may explain spawn/retry/orphan/reap/restart/recovery.
 - Raw pointer/address values must not appear in the final as proof that waits refer to one shared object/lock unless the evidence API supplies identity provenance.
 - Treat final-shape compliance as part of correctness, not presentation. When uncertain, omit detail rather than expand.
 
@@ -28,8 +28,9 @@ For a stack-only artifact, keep this card active for the whole run. **Every `tra
 1. Calls 1–2 are the entire orientation phase. Use at most two total TraceCite calls to locate one representative domain-specific blocked stack. After that stack is found, stop broad discovery queries such as `goroutine`, `Lock`, `semacquire`, `metadata`, generic subsystem nouns, pointer/address searches, or equivalent-waiter census.
 2. Starting with call 3, causal retrieval is reciprocal-only. Extract exact domain-specific component/frame symbols from the representative cross-component path; every remaining call must target symbol/call-chain structure that could expose the **reverse component nesting**. Generic lifecycle/symptom searches such as `runc`, `shim`, `process`, `RPC`, `FIFO`, or unrelated subsystem sweeps are prohibited unless that exact frame is already on the representative path and the call can expose the reverse nesting.
 3. Calls 3–6 are the complete reciprocal-discriminator budget. A call that expands another equivalent waiter, returns only the same acquisition direction, searches a raw address, or explores lifecycle/symptom state is non-advancing. After two non-advancing reverse-path attempts, finalize immediately; otherwise finalize after call 6 if the reverse path is still unclosed. Do not continue toward the Runtime ceiling merely because more transport is available.
-4. When reciprocal discovery closes or becomes bounded unknown, emit the required four-paragraph stack-only final immediately. Do not reconstruct a missing edge from memory and do not write any pre-final ledger, scratch summary, or stopping narration.
-5. In that final, same-lock reader/writer waiters never become a holder, starvation, deadlock, or cyclic-wait claim; lifecycle/process/restart facts never appear beyond the required boundary sentence.
+4. A reciprocal pair is closed only if the ledger can name **both cross-component transitions in opposite directions**: one observed path must contain an A-owned operation entering a B-owned operation/acquisition site, and another observed path must contain a B-owned operation entering an A-owned operation/acquisition site. Merely seeing two waiters on the same primitive/object, or one domain path plus a metrics/HTTP waiter, is not reciprocal proof. If the four component endpoints cannot be named from observed frames, keep the mechanism `bounded_unknown`.
+5. When reciprocal discovery closes or becomes bounded unknown, emit the required four-paragraph stack-only final immediately. Do not reconstruct a missing edge from memory and do not write any pre-final ledger, scratch summary, or stopping narration.
+6. In that final, same-lock reader/writer waiters never become a holder, starvation, deadlock, or cyclic-wait claim; lifecycle/process/restart facts never appear beyond the required boundary sentence.
 
 This execution card is Agent investigation/stopping policy. It must not be moved into Runtime.
 
@@ -60,7 +61,7 @@ Never upgrade classification from remembered code, line-number order, pointer va
 
 For `stack_only`:
 
-- `blocked at acquire(X)` proves only `waits X`; it never proves `holds X`.
+- `blocked at acquire(X)` proves only `waits X`; it never proves `holds X` or even that the blocked operation has successfully acquired X.
 - A deeper/caller frame, later source line, waiter count, reader/writer mix, fairness rule, or raw pointer does not prove current ownership.
 - Raw pointer-like arguments do not establish reliable object identity, singleton/global cardinality, or lock identity unless the evidence API exposes identity provenance.
 - Same-lock reader/writer waiters are contention only. They are not an opposing path, deadlock, starvation, or root-cause proof.
@@ -70,11 +71,13 @@ For `stack_only`:
 
 A **structural lock-order inversion** may be reported only when two observed stack paths directly show reversed component nesting across two distinct synchronization domains:
 
-`A operation -> B-side acquisition path`
+`A-owned operation -> B-owned operation/acquisition path`
 
 and
 
-`B operation -> A-side acquisition path`.
+`B-owned operation -> A-owned operation/acquisition path`.
+
+The proof is about reversed **component nesting**, not about two waits that happen to terminate at the same mutex/RWMutex or pointer. Before closing this discriminator, write the four observed endpoints privately as `A1 -> B1` and `B2 -> A2`; each endpoint must be a concrete observed frame/component, not an inferred owner, remembered call edge, or primitive identity. If either direction lacks its cross-component endpoint, the reciprocal mechanism is not closed.
 
 This establishes only the structural inversion. It does **not** establish current holder identity or a current deadlock cycle.
 
@@ -122,7 +125,7 @@ Exploratory reasoning is disposable. Before finalizing, discard it and rebuild o
 For `stack_only`, the final answer may contain only these claim classes:
 
 1. directly observed blocked/waiting paths and affected in-process call paths;
-2. a structural reciprocal lock-order statement only if both reversed component paths were directly observed;
+2. a structural reciprocal lock-order statement only if both reversed component paths were directly observed under the four-endpoint test above;
 3. explicit ownership uncertainty;
 4. direct in-process impact visible in the artifact, such as many parked goroutines/requests;
 5. the single lifecycle-boundary sentence above.
@@ -133,8 +136,9 @@ No other causal class is allowed without stronger supplied evidence.
 
 For `stack_only`, delete any sentence that does any of the following unless independently proven by stronger evidence:
 
-- turns a waiter into a holder (`holds`, `held by`, `while holding`, `current writer`, `lock holder`, `holder exists`);
+- turns a waiter into a holder (`holds`, `held by`, `while holding`, `current writer`, `lock holder`, `holder exists`) or describes a blocked acquisition as already acquired (`acquires`, `has acquired`, `owns`);
 - promotes structural inversion to a current deadlock/starvation/cycle;
+- treats two waits on the same primitive/object as reciprocal cross-component proof without the four observed component endpoints;
 - uses pointer equality to claim one shared/global/singleton object or lock;
 - asserts process/shim/runc spawn state, retry accumulation, orphaning, cleanup/reaping, restart/recovery, or similar lifecycle consequences;
 - derives event history from source-line position or remembered control flow.
@@ -145,9 +149,9 @@ A caveat cannot repair an earlier unsupported assertion. Remove the assertion an
 
 When the artifact is `stack_only`, emit **exactly four short paragraphs** and nothing else:
 
-`Observed:` cite representative directly observed blocked path(s).
+`Observed:` cite representative directly observed blocked path(s), using waiting language only for blocked acquisition sites.
 
-`Mechanism:` either “The stacks support a structural lock-order inversion between <A> and <B>.” when both reciprocal paths are directly observed, or “The artifact establishes blocking/contention, but the exact root cause remains unclosed.”
+`Mechanism:` either “The stacks support a structural lock-order inversion between <A> and <B>.” when both reciprocal paths pass the four-observed-endpoint test, or “The artifact establishes blocking/contention, but the exact root cause remains unclosed.”
 
 `Uncertainty:` “Current lock holder/ownership is not established by this artifact.”
 
@@ -155,7 +159,7 @@ When the artifact is `stack_only`, emit **exactly four short paragraphs** and no
 
 Do not add headings beyond these labels, diagrams, a subsystem narrative, a “smoking gun” section, symptom explanations, alternatives, conclusion restatements, or any fifth paragraph.
 
-Before sending, perform a literal scan. If a stack-only final contains `holder` outside the required uncertainty sentence, contains raw pointer/address values used to infer shared identity, or contains lifecycle verbs such as `spawn`, `fork`, `retry`, `orphan`, `reap`, `restart`, `recover`, `cleanup`, delete that material and rebuild the four paragraphs.
+Before sending, perform a literal scan. If a stack-only final contains `holder` outside the required uncertainty sentence, describes a blocked acquire as completed, contains raw pointer/address values used to infer shared identity, or contains lifecycle verbs such as `spawn`, `fork`, `retry`, `orphan`, `reap`, `restart`, `recover`, `cleanup`, delete that material and rebuild the four paragraphs.
 
 ## Runtime boundary
 
