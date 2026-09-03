@@ -18,7 +18,7 @@ const ACQUISITION_TOOLS = new Set([
 ]);
 
 let retrievals = 0;
-let consecutiveNoGrowth = 0;
+const noGrowthBySignature = new Map<string, number>();
 
 function positiveInt(value: unknown): number {
   const parsed = Number.parseInt(String(value || "0"), 10);
@@ -36,6 +36,25 @@ function isAcquisition(event: any): boolean {
   return true;
 }
 
+function signature(event: any): string {
+  const tool = String(event?.toolName || "");
+  const input = event?.input && typeof event.input === "object" ? event.input : {};
+  if (tool === "tracecite_search" || tool === "tracecite_retrieve") {
+    return JSON.stringify([
+      "retrieve",
+      String((input as any).file || ""),
+      String((input as any).query || ""),
+      Boolean((input as any).regex),
+    ]);
+  }
+  return JSON.stringify([
+    "materialize",
+    String((input as any).file || ""),
+    Number((input as any).line || 0),
+    Number((input as any).radius ?? 8),
+  ]);
+}
+
 async function record(payload: Record<string, unknown>) {
   if (!ACTIVITY_PATH) return;
   await mkdir(dirname(ACTIVITY_PATH), { recursive: true });
@@ -44,7 +63,7 @@ async function record(payload: Record<string, unknown>) {
 
 type Progress = {
   status?: string;
-  consecutive_no_growth?: number;
+  session_consecutive_no_growth?: number;
   delta?: {
     new_evidence?: number;
     new_lines?: number;
@@ -68,7 +87,7 @@ function progressFromContent(content: any): Progress | undefined {
       : undefined;
     return {
       status: parsed.status === undefined ? undefined : String(parsed.status),
-      consecutive_no_growth: Number.isFinite(Number(progress?.consecutive_no_growth))
+      session_consecutive_no_growth: Number.isFinite(Number(progress?.consecutive_no_growth))
         ? Math.max(0, Number(progress.consecutive_no_growth))
         : undefined,
       delta: progress?.delta && typeof progress.delta === "object"
@@ -87,24 +106,23 @@ function progressFromContent(content: any): Progress | undefined {
   return undefined;
 }
 
-function observeProgress(progress: Progress | undefined, isError: boolean) {
-  if (progress?.consecutive_no_growth !== undefined) {
-    consecutiveNoGrowth = progress.consecutive_no_growth;
-    return;
-  }
-
+function observeProgress(key: string, progress: Progress | undefined, isError: boolean): number {
+  const previous = noGrowthBySignature.get(key) || 0;
   const delta = progress?.delta;
   const grew = delta?.grew === true || Number(delta?.new_evidence || 0) > 0 || Number(delta?.new_lines || 0) > 0;
   if (grew) {
-    consecutiveNoGrowth = 0;
-    return;
+    noGrowthBySignature.set(key, 0);
+    return 0;
   }
 
   const explicitNoGrowth = delta?.grew === false ||
     (delta?.new_evidence === 0 && delta?.new_lines === 0);
-  if (explicitNoGrowth || isError || progress?.status === "error") {
-    consecutiveNoGrowth += 1;
+  if (explicitNoGrowth || isError || progress?.status === "error" || progress?.status === "no_match" || progress?.status === "no_new_evidence") {
+    const next = previous + 1;
+    noGrowthBySignature.set(key, next);
+    return next;
   }
+  return previous;
 }
 
 export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
@@ -112,7 +130,7 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
 
   pi.on("agent_start", async () => {
     retrievals = 0;
-    consecutiveNoGrowth = 0;
+    noGrowthBySignature.clear();
     await record({
       event: "agent_start",
       no_growth_patience: NO_GROWTH_PATIENCE,
@@ -122,6 +140,8 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
 
   pi.on("tool_call", async (event) => {
     if (!isAcquisition(event)) return undefined;
+    const key = signature(event);
+    const noGrowth = noGrowthBySignature.get(key) || 0;
 
     if (MAX_RETRIEVALS > 0 && retrievals >= MAX_RETRIEVALS) {
       await record({
@@ -130,7 +150,7 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
         decision: "block",
         reason: "max_retrievals",
         retrievals,
-        consecutive_no_growth: consecutiveNoGrowth,
+        signature_no_growth: noGrowth,
       });
       return {
         block: true,
@@ -138,18 +158,18 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
       } as any;
     }
 
-    if (NO_GROWTH_PATIENCE > 0 && consecutiveNoGrowth >= NO_GROWTH_PATIENCE) {
+    if (NO_GROWTH_PATIENCE > 0 && noGrowth >= NO_GROWTH_PATIENCE) {
       await record({
         event: "tool_call",
         tool: event.toolName,
         decision: "block",
-        reason: "consecutive_no_growth",
+        reason: "repeated_signature_no_growth",
         retrievals,
-        consecutive_no_growth: consecutiveNoGrowth,
+        signature_no_growth: noGrowth,
       });
       return {
         block: true,
-        reason: `TraceCite retrieval guard: ${consecutiveNoGrowth} consecutive evidence acquisitions added no new evidence. Do not retry TraceCite with a reformulated query. Use the evidence already acquired and produce the final answer.`,
+        reason: `TraceCite retrieval guard: this same evidence request has already produced no new evidence ${noGrowth} times. Do not retry it. Use existing evidence, choose a materially different unresolved evidence need, or produce the final answer.`,
       } as any;
     }
 
@@ -159,20 +179,21 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
       tool: event.toolName,
       decision: "allow",
       retrievals,
-      consecutive_no_growth: consecutiveNoGrowth,
+      signature_no_growth: noGrowth,
     });
     return undefined;
   });
 
   pi.on("tool_result", async (event) => {
     if (!isAcquisition(event)) return undefined;
+    const key = signature(event);
     const progress = progressFromContent(event.content);
-    observeProgress(progress, Boolean(event.isError));
+    const noGrowth = observeProgress(key, progress, Boolean(event.isError));
     await record({
       event: "tool_result",
       tool: event.toolName,
       retrievals,
-      consecutive_no_growth: consecutiveNoGrowth,
+      signature_no_growth: noGrowth,
       progress,
       is_error: Boolean(event.isError),
     });
@@ -183,7 +204,7 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
     await record({
       event: "agent_end",
       retrievals,
-      consecutive_no_growth: consecutiveNoGrowth,
+      tracked_signatures: noGrowthBySignature.size,
     });
   });
 }
