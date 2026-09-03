@@ -200,10 +200,27 @@ class JsonLineSegmenter(Segmenter):
 
     name = "jsonline"
 
-    def __init__(self, time_field=None, level_field=None, msg_field=None):
+    def __init__(
+        self,
+        time_field=None,
+        level_field=None,
+        msg_field=None,
+        *,
+        parse_timestamps: bool = True,
+    ):
         self._time_field = time_field
         self._level_field = level_field
         self._msg_field = msg_field
+        self._parse_timestamps = bool(parse_timestamps)
+
+    def with_timestamp_parsing(self, enabled: bool) -> "JsonLineSegmenter":
+        """Clone this JSONL segmenter with timestamp parsing toggled."""
+        return JsonLineSegmenter(
+            time_field=self._time_field,
+            level_field=self._level_field,
+            msg_field=self._msg_field,
+            parse_timestamps=enabled,
+        )
 
     def segment_lines(self, lines: Iterator[Tuple[int, str]]) -> Iterator[Record]:
         for line_number, line in lines:
@@ -242,7 +259,7 @@ class JsonLineSegmenter(Segmenter):
                     if k in obj:
                         ts = obj.get(k)
                         break
-            if ts is not None:
+            if ts is not None and self._parse_timestamps:
                 raw_timestamp = ts
                 raw_display = repr(raw_timestamp)
                 if len(raw_display) > 160:
@@ -298,6 +315,8 @@ class JsonLineSegmenter(Segmenter):
                     ts = None
                 if timestamp_parse_error is not None:
                     fields["timestamp_parse_error"] = timestamp_parse_error
+            if ts is not None and not self._parse_timestamps:
+                ts = None
             level_keys = (self._level_field,) if self._level_field else _JSON_LEVEL_KEYS
             for k in level_keys:
                 if k in obj:

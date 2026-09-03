@@ -26,7 +26,7 @@ from .candidate_search import (
     supports_candidate_records,
 )
 from .matcher import Matcher, PatternComponent, coerce_pattern_components
-from .segmenter import RawTextSegmenter, Segmenter
+from .segmenter import JsonLineSegmenter, RawTextSegmenter, Segmenter
 from . import text_filter as _legacy
 
 
@@ -82,6 +82,7 @@ def filter_text(
     template_threshold: int = 0,
     encoding: str = "utf-8",
     max_line_chars: Optional[int] = _legacy.DEFAULT_MAX_LINE_CHARS,
+    parse_record_timestamps: bool = True,
 ) -> FilterResult:
     """Filter text with a conservative raw-candidate → segment → re-check plan."""
     original = Path(input_path).expanduser().resolve()
@@ -179,6 +180,13 @@ def filter_text(
         else None
     )
     candidate_first = candidate_scan is not None
+    record_segmenter = selected_segmenter
+    if (
+        candidate_first
+        and not parse_record_timestamps
+        and isinstance(selected_segmenter, JsonLineSegmenter)
+    ):
+        record_segmenter = selected_segmenter.with_timestamp_parsing(False)
 
     work_total_lines = (
         candidate_scan.total_lines
@@ -242,7 +250,7 @@ def filter_text(
     if candidate_first:
         raw_records = iter_candidate_records(
             work_input,
-            selected_segmenter,
+            record_segmenter,
             candidate_scan.line_numbers,
             encoding=encoding,
             captured_lines=candidate_scan.captured_lines,
@@ -289,8 +297,12 @@ def filter_text(
                 )
                 if truncated:
                     lines_truncated += 1
-            ts = _legacy.record_timestamp(
-                record, ref=ref, segmenter=selected_segmenter
+            ts = (
+                _legacy.record_timestamp(
+                    record, ref=ref, segmenter=record_segmenter
+                )
+                if parse_record_timestamps
+                else None
             )
             metadata = {
                 "start_line": record.start_line,
