@@ -41,7 +41,7 @@ def test_skill_keeps_waiter_holder_and_current_ownership_boundary_in_skill_only(
     runtime = IMPL.read_text(encoding="utf-8")
     assert "`blocked at acquire(X)` proves only `waits X`" in skill
     assert "does not prove `holds Y`" in skill
-    assert "current ownership is supported only when supplied evidence exposes the acquire-to-release control-flow interval" in skill
+    assert "Current ownership needs independent supplied evidence that exposes the acquire-to-release interval strongly enough to exclude an intervening release" in skill
     assert "converts a waiter into a holder" in skill
     assert "blocked at acquire(X)" not in runtime
     assert "current ownership" not in runtime
