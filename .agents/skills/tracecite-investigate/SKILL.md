@@ -1,6 +1,6 @@
 ---
 name: tracecite-investigate
-description: Use only when the current task is already using TraceCite tools/skills or the user explicitly requests TraceCite. Do not auto-select this skill for ordinary debugging. Use TraceCite's canonical Evidence API to retrieve, materialize, replay, aggregate, traverse, verify, and cite evidence while preserving provenance, coverage, immutable source identity, novelty, and uncertainty.
+description: Use only when the current task is already using TraceCite tools/skills, a capability contributed by a TraceCite extension, or the user explicitly requests TraceCite. Do not auto-select this skill for ordinary debugging. Use TraceCite's canonical Evidence API to retrieve, materialize, replay, aggregate, traverse, verify, and cite evidence while preserving provenance, coverage, immutable source identity, novelty, and uncertainty.
 disable-model-invocation: true
 ---
 
@@ -10,9 +10,11 @@ disable-model-invocation: true
 
 This is a globally installable TraceCite skill, not a generic debugging policy.
 
-Do not activate it merely because a task involves logs, traces, incidents, support bundles, crash reports, or root-cause analysis. Activate it only when the user/host has chosen TraceCite or the current task is actually using TraceCite tools or TraceCite skills.
+Do not activate it merely because a task involves logs, traces, incidents, support bundles, crash reports, or root-cause analysis. Activate it only when the user/host has chosen TraceCite, the current task is actually using TraceCite tools or TraceCite skills, or the task invokes a capability contributed by a TraceCite extension such as TraceCite Mobile.
 
 While active, follow the host's TraceCite investigation mode: keep retrieval bounded, identify the unresolved material claim and discriminator before each new retrieval, stop confirmatory searching once the user's required conclusion is sufficiently supported, and cite exact materialized evidence ranges while separating observations from inferences.
+
+TraceCite extensions extend this same workflow. If an extension acquires diagnostic artifacts, treat those artifacts as TraceCite evidence sources. For large, live, or multi-source diagnostic evidence, prefer the canonical Evidence Runtime over broad native `cat`, `grep`, or full-file reads. Small already-bounded helper files may still be read directly when simpler.
 
 Use TraceCite as an Evidence Runtime, not as an investigator or conclusion generator.
 
