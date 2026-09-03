@@ -41,7 +41,7 @@ def test_skill_keeps_waiter_holder_and_current_ownership_boundary_in_skill_only(
     runtime = IMPL.read_text(encoding="utf-8")
     assert "`blocked at acquire(X)` proves only `waits X`" in skill
     assert "does not prove `holds Y`" in skill
-    assert "Current ownership needs independent supplied evidence that exposes the acquire-to-release interval strongly enough to exclude an intervening release" in skill
+    assert "Ask whether **independent supplied evidence** exposes the current holder or an acquire-to-release interval" in skill
     assert "converts a waiter into a holder" in skill
     assert "blocked at acquire(X)" not in runtime
     assert "current ownership" not in runtime
@@ -53,9 +53,9 @@ def test_skill_requires_two_current_opposing_edges_and_downgrades_incomplete_cyc
     assert "Deadlock/cycle/lock-order inversion requires two independently supported **current** edges" in skill
     assert "`holds A -> waits B`" in skill
     assert "`holds B -> waits A`" in skill
-    assert "If either holder edge is missing, report only the observed blocking/contention and mark the missing causal edge unknown" in skill
+    assert "If either holder edge is missing, report only observed blocking/contention and mark the missing causal edge unknown" in skill
     assert "names an unobserved holder or opposing causal edge" in skill
-    assert "claims deadlock/cycle/lock-order inversion/starvation without the required current ownership proof" in skill
+    assert "claims deadlock/cycle/lock-order inversion/starvation without required current ownership proof" in skill
     assert "Deadlock/cycle/lock-order inversion" not in runtime
     assert "bounded_unknown" not in runtime
 
@@ -75,7 +75,7 @@ def test_skill_owns_terminal_claim_classification_and_downgrade() -> None:
     runtime = IMPL.read_text(encoding="utf-8")
     assert "Terminal safety rule" in skill
     assert "observed | supported_inference | bounded_unknown | contradicted" in skill
-    assert "If a root-cause edge is still `bounded_unknown`, the final must explicitly downgrade to the strongest supported statement" in skill
+    assert "If a root-cause edge is still `bounded_unknown`, the final must downgrade to the strongest supported statement" in skill
     assert "Do not call the stronger hypothesis" in skill
     assert "supported_inference" not in runtime
     assert "bounded_unknown" not in runtime
@@ -96,11 +96,11 @@ def test_skill_serializes_and_bounds_tracecite_transport() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "Make TraceCite calls serially" in skill
-    assert "Absolute transport ceiling: 16 evidence calls" in skill
+    assert "absolute transport ceiling: 16 evidence calls" in skill
     assert "A result reporting total calls >= 16 is terminal; the next action must be the final answer" in skill
     assert "`tracecite_search`: `max_evidence <= 12`" in skill
     assert "`tracecite_expand`: normally `radius <= 16`" in skill
-    assert "target total calls `<= 12`; absolute ceiling `16`" in skill
+    assert "target total calls `<= 8`; absolute ceiling `16`" in skill
     assert "after two non-advancing calls for the same claim, mark it `bounded_unknown`" in skill
     assert "no equivalent-waiter census" in skill
     assert "no symptom sweep after the causal discriminator is bounded unknown" in skill
@@ -113,8 +113,8 @@ def test_skill_forces_final_when_mechanism_closed_or_remaining_edge_bounded_unkn
     assert "Once the directly supported mechanism is closed—or the remaining causal discriminator is bounded unknown—answer immediately" in skill
     assert "no confirmation pass for an already closed claim" in skill
     assert "strongest supported subsystem/blocking statement" in skill
-    assert "minimum exact evidence for the observed blocking path(s)" in skill
-    assert "explicitly identify any missing holder/opposing edge as unknown" in skill
+    assert "minimum exact evidence for representative observed blocking path(s)" in skill
+    assert "explicitly identify missing holder/opposing edge as unknown" in skill
     assert "direct impact visible in the artifact only" in skill
     assert "remaining causal discriminator" not in runtime
 
