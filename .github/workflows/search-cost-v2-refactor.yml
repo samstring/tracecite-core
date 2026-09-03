@@ -1,0 +1,51 @@
+name: Search Cost V2 Refactor
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence-search-cost-v2
+
+permissions:
+  contents: write
+
+jobs:
+  refactor-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: experiment/evidence-intelligence-search-cost-v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply refactor
+        run: python benchmarks/agent-investigation/apply_search_cost_v2.py
+
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Run focused regressions
+        run: |
+          python -m pytest -q \
+            tests/test_candidate_first_filter.py \
+            tests/test_search_cost_regressions.py \
+            tests/test_runtime_session_retrieval.py \
+            tests/test_session_novelty_regressions.py \
+            tests/test_signal_hint_routing.py \
+            tests/test_search_identity_integrity.py \
+            tests/test_canonical_evidence_contract.py
+
+      - name: Commit refactor
+        run: |
+          git rm benchmarks/agent-investigation/apply_search_cost_v2.py
+          git rm .github/workflows/search-cost-v2-refactor.yml
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add src tests docs
+          git commit -m 'reduce repeated evidence search costs'
+          git push origin HEAD:experiment/evidence-intelligence-search-cost-v2
