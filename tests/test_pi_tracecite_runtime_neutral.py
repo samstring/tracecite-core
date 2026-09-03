@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 IMPL = ROOT / "benchmarks" / "agent-investigation" / "pi_tracecite_extension_impl.ts"
+GUARD = ROOT / "benchmarks" / "agent-investigation" / "pi_tracecite_retrieval_guard.ts"
 SKILL = ROOT / ".pi" / "skills" / "tracecite" / "SKILL.md"
 
 
@@ -122,3 +123,32 @@ def test_runtime_remains_mechanical() -> None:
     assert "Runtime boundary" in skill
     assert "It does not know hypotheses, causality, proof claims, root cause, sufficiency, or stopping" in skill
     assert "proof claims" not in runtime
+
+
+def test_retrieval_budget_survives_low_level_agent_retry() -> None:
+    guard = GUARD.read_text(encoding="utf-8")
+    agent_start = guard.split('pi.on("agent_start"', 1)[1].split('pi.on("tool_call"', 1)[0]
+    assert "retrievals = 0" not in agent_start
+    assert "noGrowthBySignature.clear()" not in agent_start
+    assert "continued_investigation: retrievals > 0" in agent_start
+    assert "Provider retries do not reset this budget" in guard
+
+
+def test_retrieval_guard_blocks_only_mechanical_coverage_reuse() -> None:
+    guard = GUARD.read_text(encoding="utf-8")
+    assert "coveredRangesByFile" in guard
+    assert "rangeCovered" in guard
+    assert "context_start_line" in guard
+    assert "context_end_line" in guard
+    assert 'reason: "range_already_covered"' in guard
+    assert "hypothesis" not in guard.lower()
+    assert "causal sufficiency" in guard
+
+
+def test_no_match_is_not_cross_query_no_growth_and_errors_do_not_poison_novelty() -> None:
+    guard = GUARD.read_text(encoding="utf-8")
+    assert 'progress?.status === "no_match"' in guard
+    assert 'return "neutral_no_match"' in guard
+    assert "it never\n  // contributes to any cross-query/global no-growth decision" in guard
+    tool_result = guard.split('pi.on("tool_result"', 1)[1].split('pi.on("agent_end"', 1)[0]
+    assert "Boolean(event.isError)\n      ? (noGrowthBySignature.get(meta.key) || 0)" in tool_result
