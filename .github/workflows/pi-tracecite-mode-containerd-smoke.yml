@@ -25,6 +25,7 @@ jobs:
       PI_TELEMETRY: "0"
       RESULT: /tmp/pi-tracecite-mode-containerd
       CASE_DIR_REL: benchmarks/agent-investigation/cases/containerd-6772
+      TRACECITE_MAX_EVIDENCE_CALLS: "6"
 
     steps:
       - uses: actions/checkout@v4
