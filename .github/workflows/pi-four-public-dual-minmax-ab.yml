@@ -3,7 +3,7 @@ name: Pi Four Public Dual MinMax A/B
 on:
   push:
     branches:
-      - experiment/tracecite-adaptive-stopping
+      - feature_for_agent
     paths:
       - benchmarks/agent-investigation/four-public-dual-minmax-trigger.txt
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-four-public-dual-minmax-ab
+  group: pi-four-public-dual-minmax-ab-feature-for-agent
   cancel-in-progress: false
 
 jobs:
