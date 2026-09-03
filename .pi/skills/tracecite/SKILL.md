@@ -26,17 +26,18 @@ These rules override narrative quality and scorer coverage.
 6. Stop at the artifact boundary. External process creation, RPC completion, retries, cleanup/reaping, restart recovery, and helper-goroutine identity require independent evidence tying them to the observed attempt. User-described symptoms are hypotheses, not evidence.
 7. Once the directly supported mechanism is closed—or the remaining causal discriminator is bounded unknown—answer immediately.
 
-## Stack-only artifact rule
+## Stack-only hard downgrade
 
-When the supplied evidence is a goroutine/thread stack dump without source text, event history, or lock-owner metadata:
+If the supplied artifact is only a goroutine/thread stack dump and does not itself provide lock-owner metadata, event history, or source text proving an acquire-to-release interval, take this path **before** attempting a lock-cycle explanation:
 
-- report blocking locations and call paths as observed;
-- do not infer that an outer lock is still held merely because the stack is currently deeper in the same function/callback;
-- do not reconstruct acquire/release scopes from remembered source code or line numbers;
-- do not promote apparent lock-address/object-address matches from raw stack arguments into identity proof;
-- if holder identity is absent, explicitly say that the dump establishes contention/waiting but not the holder/root-cause edge, then stop.
+- retrieve only representative blocked call paths and enough context to identify the affected subsystem;
+- treat every acquire frame as a waiter observation;
+- do not infer current ownership from a deeper frame, a later source line, a receiver/pointer value, remembered source code, or the fact that execution appears to be “inside” a function after a lock call;
+- do not infer lock/object identity from raw stack argument addresses;
+- do not name a holder, opposing holder edge, deadlock, cycle, lock-order inversion, starvation, or exact root cause unless independent supplied evidence establishes the required current ownership;
+- once representative contention is established and owner metadata is absent, the causal discriminator is `bounded_unknown`; **stop retrieval and answer**.
 
-This rule is generic and applies regardless of whether the suspected mechanism would be plausible from source knowledge.
+For this stack-only path, the final may say that a subsystem is blocked/contended and show the observed call paths. It must say that the holder/root-cause edge is not established by the supplied artifact. It must not use phrases such as “holds”, “held by”, “while holding”, “the holder”, “deadlock”, “lock-order inversion”, or “root cause” as affirmative facts unless owner proof exists independently in the supplied evidence.
 
 ## Terminal safety rule
 
@@ -49,6 +50,12 @@ observed | supported_inference | bounded_unknown | contradicted
 If a root-cause edge is still `bounded_unknown`, the final must explicitly downgrade to the strongest supported statement (for example, a blocking location or contention pattern). Do not call the stronger hypothesis “the root cause”, “the opposing direction”, “the cycle”, “the deadlock”, “the starvation”, or “the reason” merely because retrieval has stopped.
 
 If the evidence shows only waiters and no current holder, the final must say exactly that the **holder/root cause is not established by the supplied artifact**. A large waiter population is severity evidence, not causal closure.
+
+## Lifecycle hard boundary
+
+The final must not explain shim/runc/process creation, request completion, retry accumulation, cleanup/reaping, termination progress, or restart recovery unless the supplied evidence independently ties that lifecycle fact to the observed attempt. A user-reported symptom may be repeated as context but cannot become a causal conclusion.
+
+Do not write a lifecycle story and then add a caveat. Delete the story first. When lifecycle is outside the artifact, use one sentence and stop: “The supplied evidence supports the in-process blocking pattern, but does not establish the downstream process/RPC/restart lifecycle.”
 
 ## Final deletion gate
 
@@ -66,8 +73,6 @@ Immediately before emitting the final, delete any sentence that does any of the 
 
 A caveat later in the answer does not repair an unsupported earlier claim: remove the claim.
 
-When lifecycle is outside the artifact, use one sentence and stop: “The supplied evidence supports the in-process blocking pattern, but does not establish the downstream process/RPC/restart lifecycle.”
-
 ## Retrieval bounds
 
 - `tracecite_search`: `max_evidence <= 12`
@@ -83,7 +88,7 @@ When lifecycle is outside the artifact, use one sentence and stop: “The suppli
 
 Keep the answer compact and normal:
 
-1. strongest supported mechanism/subsystem statement;
+1. strongest supported subsystem/blocking statement;
 2. minimum exact evidence for the observed blocking path(s);
 3. explicitly identify any missing holder/opposing edge as unknown;
 4. direct impact visible in the artifact only;
