@@ -150,6 +150,42 @@ def _required_anchors(sequence: Any) -> Optional[Set[str]]:
     return _best_anchor_set(options)
 
 
+def _has_scoped_ignorecase(sequence: Any) -> bool:
+    """Detect local ``(?i:...)`` regions that a global raw anchor cannot mirror.
+
+    A local IGNORECASE group may match text whose exact literal spelling does not
+    occur in the physical line. Unless the raw prefilter carries the same scoped
+    flag semantics, using that literal as a candidate anchor could create a false
+    negative. Conservatively fall back instead.
+    """
+    for op, arg in _sequence_data(sequence):
+        name = _op_name(op)
+        if name == "SUBPATTERN":
+            _group, add_flags, _del_flags, child = arg
+            if int(add_flags) & re.IGNORECASE:
+                return True
+            if _has_scoped_ignorecase(child):
+                return True
+        elif name == "ATOMIC_GROUP":
+            if _has_scoped_ignorecase(arg):
+                return True
+        elif name == "BRANCH":
+            if any(_has_scoped_ignorecase(branch) for branch in arg[1]):
+                return True
+        elif name in {"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"}:
+            if _has_scoped_ignorecase(arg[2]):
+                return True
+        elif name in {"ASSERT", "ASSERT_NOT"}:
+            if _has_scoped_ignorecase(arg[1]):
+                return True
+        elif name == "GROUPREF_EXISTS":
+            if _has_scoped_ignorecase(arg[1]):
+                return True
+            if arg[2] is not None and _has_scoped_ignorecase(arg[2]):
+                return True
+    return False
+
+
 def candidate_anchors(matcher: Matcher) -> Optional[Tuple[str, ...]]:
     """Build a conservative raw-line candidate plan for one Matcher."""
     if matcher.terms is not None:
@@ -177,6 +213,8 @@ def candidate_anchors(matcher: Matcher) -> Optional[Tuple[str, ...]]:
     try:
         parsed = _RE_PARSER.parse(matcher.pattern, matcher.regex.flags)
     except (re.error, RecursionError, TypeError, ValueError):
+        return None
+    if _has_scoped_ignorecase(parsed):
         return None
     anchors = _required_anchors(parsed)
     if not anchors:
