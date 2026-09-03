@@ -1,14 +1,14 @@
-trigger: 2026-09-03 rerun explicit TraceCite skill activation diagnostic after regression-guard fix
+trigger: 2026-09-03 hard reciprocal-phase and terminal-first-token diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-bounded-root-cause-firewall
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-symbol-directed-reciprocal-plus-fail-closed-terminal-serializer
+adaptive_stopping_skill: stack-only-hard-six-call-reciprocal-phase-plus-terminal-first-token
 skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: verify the agent actually receives and obeys the full Skill contract after the mechanical regression-guard fix: <=2 orientation calls before symbol-directed reciprocal search, no waiter-as-holder/pointer promotion, no unsupported lifecycle story, and exact four-paragraph terminal reconstruction
+diagnostic_focus: verify search+expand calls 1-2 are the entire orientation phase, calls 3-6 are reciprocal-only with no lifecycle/symptom sweep, missing reverse path finalizes by call 6, and terminal output starts immediately with exactly four evidence-bounded paragraphs without pointer identity or lifecycle promotion
 agent_timeout_seconds: 900
