@@ -1,0 +1,64 @@
+name: RCAEval TraceCite Search Profile
+
+on:
+  push:
+    branches:
+      - exp/rcaeval-source-cache-v1
+    paths:
+      - benchmarks/agent-investigation/profile_rcaeval_search_cost.py
+      - .github/workflows/rcaeval-tracecite-search-profile.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install TraceCite and dataset deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev,diversity]'
+          python -m pip install --quiet huggingface_hub pandas pyarrow
+      - name: Prepare the same RCAEval traces.jsonl
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import snapshot_download
+
+          case = 're3tt_ts-route-service_f3_6'
+          root = Path('/tmp/rcaeval-profile-source')
+          out = Path('/tmp/rcaeval-profile')
+          out.mkdir(parents=True, exist_ok=True)
+          snapshot_download(
+              repo_id='phamquiluan/RCAEval',
+              repo_type='dataset',
+              allow_patterns=[f'{case}/traces.parquet'],
+              local_dir=root,
+          )
+          traces = pd.read_parquet(root / case / 'traces.parquet')
+          traces.to_json(out / 'traces.jsonl', orient='records', lines=True, force_ascii=False)
+          p = out / 'traces.jsonl'
+          print({'rows': len(traces), 'bytes': p.stat().st_size})
+          PY
+      - name: Profile fixed search queries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python benchmarks/agent-investigation/profile_rcaeval_search_cost.py \
+            /tmp/rcaeval-profile/traces.jsonl \
+            --output /tmp/rcaeval-profile/search-profile.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rcaeval-tracecite-search-profile
+          path: /tmp/rcaeval-profile/search-profile.json
+          retention-days: 14
