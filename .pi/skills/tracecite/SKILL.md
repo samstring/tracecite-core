@@ -112,6 +112,7 @@ A caveat later in the answer does not repair an unsupported earlier claim: remov
 - target total calls `<= 8`; absolute ceiling `16`
 - after one representative blocker is found, use at most four additional evidence calls to locate a structurally distinct opposing path; if those calls do not advance that discriminator, mark it `bounded_unknown` and finalize
 - while testing structural lock order, search for a reciprocal component-acquisition path rather than another waiter on the first lock
+- after observing `component A operation -> component B operation/acquire(B)`, the next structural search must target a **B-side operation that reaches an A-side acquisition site**; do not keep searching B's lock address, B's generic lock routine, or more callers ending at the same `acquire(B)`. Hits ending at the already-known acquisition site are non-advancing for the reciprocal-path discriminator
 - after two non-advancing calls for the same claim, mark it `bounded_unknown`
 - no confirmation pass for an already closed claim
 - no equivalent-waiter census
