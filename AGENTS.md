@@ -23,33 +23,25 @@ TraceCite may own deterministic evidence acquisition, immutable source/version i
 
 TraceCite must not own or infer hypotheses, causal conclusions, root-cause likelihood, evidence sufficiency, or a recommendation that the Agent should stop.
 
-## Evidence investigation workflow for Codex/OpenAI-compatible agents
+## Repository rules versus installed TraceCite behavior
 
-When the task is to investigate logs, traces, support bundles, crash reports, or other diagnostic evidence, use the repository skill:
+This `AGENTS.md` governs development of the TraceCite repository. It is **not** the global investigation policy that TraceCite users should copy into application repositories.
+
+Do not enter TraceCite investigation mode merely because the current task involves logs, traces, debugging, incidents, or root-cause analysis. The installed TraceCite investigation mode activates only while the current task actually uses TraceCite tools or TraceCite skills.
+
+The reusable skill source is:
 
 ```text
 .agents/skills/tracecite-investigate/SKILL.md
 ```
 
-Use it when the question requires evidence-backed diagnosis/root-cause analysis, especially when the input is large or spans multiple sources. Keep this `AGENTS.md` short; detailed API semantics belong in the skill and `docs/agent-integration.md`.
-
-Operating rules:
-
-1. Work only from supplied evidence for factual incident claims; do not silently fill gaps from model memory or the web.
-2. Keep retrieval bounded. Before a new evidence operation, know which unresolved material claim it can change and what discriminator would change that claim.
-3. Prefer exact source/version identity and materialized line/range citations for material factual claims.
-4. Treat zero matches, truncation, missing sources, incomplete Coverage, and source changes as evidence-boundary facts, not proof of real-world absence.
-5. Reuse known Evidence refs/ranges. Use explicit replay when old evidence truly needs to be reconsidered.
-6. Do not perform a broad evidence census after the causal proof required by the user is already supported.
-7. The Agent, not TraceCite Runtime, decides whether the proof is sufficient and when to answer.
-
-Recommended task wording:
+The global installation contract and conditional rule are documented in:
 
 ```text
-Use $tracecite-investigate to investigate <problem> from the supplied evidence.
-Keep retrieval bounded. Cite exact materialized evidence for material factual claims.
-Do not fill evidence gaps with external knowledge; qualify unsupported parts explicitly.
+docs/agent-global-setup.md
 ```
+
+For general use, prefer installing the skill once at user scope (for example `~/.agents/skills/tracecite-investigate/`) and adding the short conditional rule to the host's global instructions. Do not add repository-local TraceCite policy unless the user explicitly requests it.
 
 ## Validation
 
