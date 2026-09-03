@@ -1,4 +1,4 @@
-name: Pi containerd-6772 TraceCite Hard Stop
+name: Pi containerd-6772 TraceCite Hard Stop + Guard
 
 on:
   push:
@@ -7,6 +7,8 @@ on:
     paths:
       - .github/workflows/pi-containerd-6772-tracecite-hard-stop.yml
       - .pi/skills/tracecite/SKILL.md
+      - benchmarks/agent-investigation/pi_tracecite_extension.ts
+      - benchmarks/agent-investigation/pi_tracecite_retrieval_guard.ts
   workflow_dispatch:
 
 permissions:
@@ -29,6 +31,9 @@ jobs:
       PI_TELEMETRY: "0"
       RESULT_ROOT: /tmp/pi-containerd-6772-hard-stop
       SOURCE_ROOT: /tmp/pi-containerd-6772-source
+      TRACECITE_NO_GROWTH_PATIENCE: "2"
+      TRACECITE_MAX_RETRIEVALS: "40"
+      TRACECITE_RETRIEVAL_GUARD_ACTIVITY: /tmp/pi-containerd-6772-hard-stop/tracecite-retrieval-guard.jsonl
 
     steps:
       - uses: actions/checkout@v4
@@ -147,7 +152,7 @@ jobs:
           if [[ -n "$SESSION" && -f "$RESULT_ROOT/tracecite-answer.md" ]]; then
             python benchmarks/agent-investigation/pi_session_to_transcript.py \
               "$SESSION" "$RESULT_ROOT/tracecite-answer.md" "$RESULT_ROOT/tracecite-transcript.jsonl" \
-              --mode pi-tracecite-code-logs-hard-stop --model "$BENCH_MODEL" || true
+              --mode pi-tracecite-code-logs-hard-stop-guard --model "$BENCH_MODEL" || true
             python -m tracecite.benchmarking score "$CASE_DIR" "$RESULT_ROOT/tracecite-transcript.jsonl" > "$RESULT_ROOT/tracecite-score.json" || true
             python - "$RESULT_ROOT/tracecite-transcript.jsonl" "$RESULT_ROOT/tracecite-usage.json" <<'PY'
           import json, sys
@@ -174,7 +179,7 @@ jobs:
           blocked=0
           [[ -f "$RESULT_ROOT/tracecite-runtime-evidence-access.jsonl" ]] && trace_calls="$(grep -cve '^$' "$RESULT_ROOT/tracecite-runtime-evidence-access.jsonl" || true)"
           [[ -f "$RESULT_ROOT/tracecite-blocked-native-evidence-attempts.jsonl" ]] && blocked="$(grep -cve '^$' "$RESULT_ROOT/tracecite-blocked-native-evidence-attempts.jsonl" || true)"
-          printf '{"tracecite_evidence_calls":%s,"blocked_native_attempts":%s}\n' "$trace_calls" "$blocked" > "$RESULT_ROOT/channel.json"
+          printf '{"tracecite_evidence_attempts":%s,"blocked_native_attempts":%s}\n' "$trace_calls" "$blocked" > "$RESULT_ROOT/channel.json"
 
       - name: Build summary
         if: always()
@@ -183,6 +188,7 @@ jobs:
           mkdir -p "$RESULT_ROOT"
           python - <<'PY'
           import json, os
+          from collections import Counter
           from pathlib import Path
           root=Path(os.environ['RESULT_ROOT'])
           def j(name):
@@ -193,17 +199,35 @@ jobs:
               p=root/name
               try:return int(p.read_text().strip())
               except:return None
+          def guard_summary():
+              p=root/'tracecite-retrieval-guard.jsonl'
+              events=[]
+              if p.is_file():
+                  for line in p.read_text(errors='replace').splitlines():
+                      try: events.append(json.loads(line))
+                      except: pass
+              calls=[e for e in events if e.get('event')=='tool_call']
+              allowed=[e for e in calls if e.get('decision')=='allow']
+              blocked=[e for e in calls if e.get('decision')=='block']
+              return {
+                  'no_growth_patience': int(os.environ.get('TRACECITE_NO_GROWTH_PATIENCE','0') or 0),
+                  'max_retrievals': int(os.environ.get('TRACECITE_MAX_RETRIEVALS','0') or 0),
+                  'allowed_retrievals': len(allowed),
+                  'blocked_retrieval_attempts': len(blocked),
+                  'block_reasons': dict(Counter(str(e.get('reason')) for e in blocked)),
+              }
           score=j('tracecite-score.json')
           summary={
               'model': (root/'model.txt').read_text().strip() if (root/'model.txt').is_file() else None,
               'case': 'containerd-6772',
-              'arm': 'tracecite-hard-stop',
+              'arm': 'tracecite-hard-stop-plus-retrieval-guard',
               'exit': i('tracecite-exit.txt'),
               'wall_seconds': i('tracecite-wall-seconds.txt'),
               'score_passed': score.get('passed'),
               'quality': score.get('quality') if isinstance(score.get('quality'),dict) else {},
               'usage': j('tracecite-usage.json'),
               'channel': j('channel.json'),
+              'retrieval_guard': guard_summary(),
           }
           (root/'summary.json').write_text(json.dumps(summary,indent=2,ensure_ascii=False)+'\n')
           print(json.dumps(summary,indent=2,ensure_ascii=False))
@@ -213,6 +237,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: containerd-6772-tracecite-hard-stop-gmi2
+          name: containerd-6772-tracecite-hard-stop-guard-gmi2
           path: ${{ env.RESULT_ROOT }}
           retention-days: 14
