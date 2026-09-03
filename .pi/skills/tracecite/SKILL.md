@@ -103,3 +103,4 @@ For root-cause questions, keep the answer to the minimum supported mechanism, ca
 
 TraceCite Runtime may remember evidence identities, ranges, source generations, novelty, coverage, diversity, and repetition. It does not know hypotheses, causality, proof claims, root cause, sufficiency, or stopping.
 
+
