@@ -179,6 +179,7 @@ jobs:
         if: always()
         shell: bash
         run: |
+          mkdir -p "$RESULT_ROOT"
           python - <<'PY'
           import json, os
           from pathlib import Path
