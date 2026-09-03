@@ -23,6 +23,27 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Remove persisted next_queries contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/tracecite/runtime/investigation.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              '                "next_queries": _text_list(item.get("next_queries", []), field_name="execution.next_queries"),\n',
+              '',
+          )
+          text = text.replace(
+              '''        bounded_next_queries, next_queries_truncated = _bounded_text_list(\n            result.get("next_queries", []),\n            field_name="next_queries",\n            max_items=MAX_EXECUTION_ITEMS,\n        )\n''',
+              '',
+          )
+          text = text.replace('            "next_queries": bounded_next_queries,\n', '')
+          text = text.replace('                "next_queries_truncated": next_queries_truncated,\n', '')
+          if 'next_queries' in text:
+              raise RuntimeError('investigation.py still contains next_queries')
+          path.write_text(text, encoding='utf-8')
+          PY
+
       - name: Apply refactor
         run: python benchmarks/agent-investigation/apply_search_cost_v2.py
 
