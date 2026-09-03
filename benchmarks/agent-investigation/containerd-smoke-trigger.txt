@@ -1,13 +1,13 @@
-trigger: 2026-09-03 stack-only early-final diagnostic after guard-sync repair
+trigger: 2026-09-03 structural-lock-order versus holder-identity diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause-plus-final-evidence-discipline
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-early-final-no-hidden-holder-pointer-cardinality-or-lifecycle-promotion
+adaptive_stopping_skill: structural-lock-order-without-waiter-holder-or-lifecycle-promotion
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: classify-stack-only-before-mechanism-and-finalize-at-bounded-unknown-without-hidden-holder-starvation-or-lifecycle-completion
+diagnostic_focus: recover-two-observed-opposite-lock-order-paths-while-keeping-current-holder-unknown-and-deleting-dependent-lifecycle-stories
 agent_timeout_seconds: 900
