@@ -1,0 +1,32 @@
+{
+  "source": {
+    "case": "re3tt_ts-route-service_f3_6",
+    "bytes": 76145385,
+    "lines": 242715
+  },
+  "baseline": {
+    "branch": "exp/rcaeval-source-cache-v1",
+    "workflow_run_id": 33763634916,
+    "queries": [
+      {"label": "no_match", "query": "statusCode error", "seconds": 59.432548},
+      {"label": "medium_match", "query": "503", "seconds": 59.739826},
+      {"label": "high_match", "query": "ts-route-service", "seconds": 59.109332}
+    ]
+  },
+  "current": {
+    "base_branch": "experiment/evidence-intelligence",
+    "base_sha": "c88a81cb3dfbc0d3fe02202ee6ddf9e6c6d8e1b7",
+    "benchmark_branch": "bench/rcaeval-candidate-first-search",
+    "workflow_run_id": 33781939490,
+    "queries": [
+      {"label": "no_match", "query": "statusCode error", "seconds": 7.396407, "status": "no_match", "match_records": 0, "evidence_returned": 0},
+      {"label": "medium_match", "query": "503", "seconds": 8.451925, "status": "ok", "match_records": 5879, "evidence_returned": 20},
+      {"label": "high_match", "query": "ts-route-service", "seconds": 11.899306, "status": "ok", "match_records": 23191, "evidence_returned": 20}
+    ]
+  },
+  "comparison": [
+    {"label": "no_match", "speedup_x": 8.0353, "time_reduction_percent": 87.555},
+    {"label": "medium_match", "speedup_x": 7.0682, "time_reduction_percent": 85.8521},
+    {"label": "high_match", "speedup_x": 4.9675, "time_reduction_percent": 79.869}
+  ]
+}
