@@ -112,7 +112,7 @@ def test_skill_forces_final_when_mechanism_closed_or_remaining_edge_bounded_unkn
     runtime = IMPL.read_text(encoding="utf-8")
     assert "Once the directly supported mechanism is closed—or the remaining causal discriminator is bounded unknown—answer immediately" in skill
     assert "no confirmation pass for an already closed claim" in skill
-    assert "strongest supported mechanism/subsystem statement" in skill
+    assert "strongest supported subsystem/blocking statement" in skill
     assert "minimum exact evidence for the observed blocking path(s)" in skill
     assert "explicitly identify any missing holder/opposing edge as unknown" in skill
     assert "direct impact visible in the artifact only" in skill
