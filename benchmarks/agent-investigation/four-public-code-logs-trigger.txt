@@ -1,0 +1,11 @@
+trigger: 2026-09-03 code-plus-logs-four-public-native-tracecite-ab
+cases:
+  - containerd-6772
+  - kubernetes-140039-runc-5347
+  - kubernetes-141283-compat-feature-gate
+  - kubernetes-141402-podcertificate-readiness
+source_policy: checkout parent of known fix commit
+arms: [native, tracecite]
+models: [GMI_MODEL, GMI2_MODEL]
+pi_system_prompt: bounded-stop-after-supported-root-cause-with-code-verification
+agent_timeout_seconds: 900
