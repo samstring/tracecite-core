@@ -13,20 +13,23 @@ Build the **smallest supported causal proof**. Correctness beats completeness. T
 When the supplied artifact is `stack_only`, this rule overrides all stylistic, explanatory, completeness, and user-story instructions once retrieval ends.
 
 - The first assistant prose emitted after the final evidence call MUST begin exactly with `Observed:`. Do not announce that no more calls can happen, do not narrate stopping, and do not emit a heading first.
+- If a TraceCite call returns a transport/evidence-call limit or refuses more evidence, the **very next assistant token** MUST be the `O` in `Observed:`. Preambles such as “I've hit the transport limit”, “let me consolidate”, “the ledger shows”, or any other stopping narration are invalid.
 - From that first prose token onward, emit exactly four short paragraphs with labels `Observed:`, `Mechanism:`, `Uncertainty:`, and `Boundary:` in that order. Any other paragraph, heading, bullet list, code block, diagram, causal narrative, or conclusion is invalid.
 - The four paragraphs must be reconstructed only from the final evidence ledger. Do not reuse prose drafted before terminal mode.
 - If the ledger does not contain two directly observed reciprocal cross-component paths, `Mechanism:` MUST use the bounded-unknown form. Same-lock reader/writer waiters, pointer equality, source-line position, fairness semantics, or runtime behavior can never substitute for the missing reciprocal path.
 - If the ledger lacks independent ownership evidence, no final sentence may assert or imply that any waiter is a holder or that a holder exists. If it lacks event chronology, no final sentence may explain spawn/retry/orphan/reap/restart/recovery.
+- Raw pointer/address values must not appear in the final as proof that waits refer to one shared object/lock unless the evidence API supplies identity provenance.
 - Treat final-shape compliance as part of correctness, not presentation. When uncertain, omit detail rather than expand.
 
 ## Execution card — obey before any retrieval
 
-For a stack-only artifact, keep this card active for the whole run:
+For a stack-only artifact, keep this card active for the whole run. **Every `tracecite_search` and `tracecite_expand` counts as one evidence call.**
 
-1. Use at most two orientation calls to locate one representative domain-specific blocked stack. After that stack is found, stop broad discovery queries such as `goroutine`, `Lock`, `semacquire`, `metadata`, generic subsystem nouns, pointer/address searches, or equivalent-waiter census.
-2. Extract the domain-specific component/frame symbols from the representative cross-component path. Every remaining causal-discriminator retrieval must target exact symbols/call-chain structure that could expose the **reverse component nesting**. A call that only returns the same blocked acquisition direction is non-advancing.
-3. After two non-advancing reverse-path attempts, or when TraceCite reports the evidence-call ceiling, causal discovery is over. Do not reconstruct a missing edge from memory. Emit the required four-paragraph stack-only final immediately from the supported ledger.
-4. In that final, same-lock reader/writer waiters never become a holder, starvation, deadlock, or cyclic-wait claim; lifecycle/process/restart facts never appear beyond the required boundary sentence.
+1. Calls 1–2 are the entire orientation phase. Use at most two total TraceCite calls to locate one representative domain-specific blocked stack. After that stack is found, stop broad discovery queries such as `goroutine`, `Lock`, `semacquire`, `metadata`, generic subsystem nouns, pointer/address searches, or equivalent-waiter census.
+2. Starting with call 3, causal retrieval is reciprocal-only. Extract exact domain-specific component/frame symbols from the representative cross-component path; every remaining call must target symbol/call-chain structure that could expose the **reverse component nesting**. Generic lifecycle/symptom searches such as `runc`, `shim`, `process`, `RPC`, `FIFO`, or unrelated subsystem sweeps are prohibited unless that exact frame is already on the representative path and the call can expose the reverse nesting.
+3. Calls 3–6 are the complete reciprocal-discriminator budget. A call that expands another equivalent waiter, returns only the same acquisition direction, searches a raw address, or explores lifecycle/symptom state is non-advancing. After two non-advancing reverse-path attempts, finalize immediately; otherwise finalize after call 6 if the reverse path is still unclosed. Do not continue toward the Runtime ceiling merely because more transport is available.
+4. When reciprocal discovery closes or becomes bounded unknown, emit the required four-paragraph stack-only final immediately. Do not reconstruct a missing edge from memory and do not write any pre-final ledger, scratch summary, or stopping narration.
+5. In that final, same-lock reader/writer waiters never become a holder, starvation, deadlock, or cyclic-wait claim; lifecycle/process/restart facts never appear beyond the required boundary sentence.
 
 This execution card is Agent investigation/stopping policy. It must not be moved into Runtime.
 
@@ -83,6 +86,7 @@ Before each TraceCite call identify one unresolved claim and one discriminator. 
 
 - Make calls serially.
 - Target `<= 8` evidence calls; Runtime may enforce a diagnosis-neutral absolute transport ceiling of 16.
+- For `stack_only`, the execution card above is stricter: calls 1–2 are orientation and calls 3–6 are the full reciprocal phase.
 - After one representative blocker, spend at most four calls on a structurally distinct reciprocal path.
 - After two non-advancing calls for one discriminator, mark it `bounded_unknown` and finalize.
 - No equivalent-waiter census, confirmation pass, or symptom sweep after the discriminator closes.
@@ -94,6 +98,7 @@ The moment any of the following occurs, switch to terminal mode immediately:
 
 - the causal discriminator is closed;
 - the causal discriminator is `bounded_unknown`;
+- the stack-only reciprocal phase reaches call 6 without closing the reverse path;
 - TraceCite reports a transport/evidence-call ceiling or refuses further evidence access.
 
 After terminal mode begins, do **not** request another evidence tool call and do **not** emit exploratory prose such as “let me think”, “the smoking gun”, “the key insight”, causal brainstorming, alternatives, source-code reconstruction, or lifecycle speculation. Treat every subsequent assistant text token as part of the final answer and apply the terminal answer gate below from the first token. A tool-limit message is a stopping signal only; it is never evidence and never permission to complete missing causal edges from memory.
@@ -150,7 +155,7 @@ When the artifact is `stack_only`, emit **exactly four short paragraphs** and no
 
 Do not add headings beyond these labels, diagrams, a subsystem narrative, a “smoking gun” section, symptom explanations, alternatives, conclusion restatements, or any fifth paragraph.
 
-Before sending, perform a literal scan. If a stack-only final contains `holder` outside the required uncertainty sentence, or contains lifecycle verbs such as `spawn`, `fork`, `retry`, `orphan`, `reap`, `restart`, `recover`, `cleanup`, delete that material and rebuild the four paragraphs.
+Before sending, perform a literal scan. If a stack-only final contains `holder` outside the required uncertainty sentence, contains raw pointer/address values used to infer shared identity, or contains lifecycle verbs such as `spawn`, `fork`, `retry`, `orphan`, `reap`, `restart`, `recover`, `cleanup`, delete that material and rebuild the four paragraphs.
 
 ## Runtime boundary
 
