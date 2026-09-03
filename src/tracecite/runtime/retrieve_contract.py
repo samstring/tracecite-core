@@ -575,18 +575,9 @@ def _append_gap(
             "identifier_key": identifier_key,
             "identifier_value": identifier_value,
             "source": source,
-            "recommended_action": {
-                "operation": "search",
-                "query": identifier_value,
-                "purpose": "verify_identifier_uniqueness_across_scopes",
-            },
         }
     )
     canonical["missing_evidence"] = rows
-    next_queries = [str(item) for item in canonical.get("next_queries") or [] if str(item).strip()]
-    if identifier_value not in next_queries:
-        next_queries.append(identifier_value)
-    canonical["next_queries"] = next_queries
 
 
 def _attach_identity_verification(

@@ -158,12 +158,6 @@ def _scope_uniqueness_hints(
                 "scoped_entities": entities[:member_limit],
                 "scopes": scopes[:member_limit],
                 "visible_lines": lines[: member_limit * 2],
-                "recommended_search": value,
-                "recommended_action": {
-                    "operation": "search",
-                    "query": value,
-                    "purpose": "verify_identifier_uniqueness_across_scopes",
-                },
                 "verification": (
                     "Verify this identifier across the source and compare nearby scoped "
                     "entities. Do not correlate records by this identifier alone until "
@@ -221,7 +215,6 @@ def scoped_identity_fanout_hints(
                 "family": f"{family}-*",
                 "member_count": len(ordered),
                 "members": ordered[:member_limit],
-                "navigation_query": f"{scope}/{family}-",
             }
         )
     fanout_hints.sort(

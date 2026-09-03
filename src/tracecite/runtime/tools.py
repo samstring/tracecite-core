@@ -555,8 +555,15 @@ def search(
         if prepared.get("budget_error") is not None:
             return prepared["budget_error"]
         kind = detect_segmenter_kind(source) if segmenter == "auto" else segmenter
-        source_sha256 = _sha256(source)
-        source_refs = [{"path": str(source), "sha256": source_sha256}]
+        cache_identity_needed = bool(
+            investigation_path is not None and cache and cache_safe
+        )
+        source_sha256 = _sha256(source) if cache_identity_needed else ""
+        source_refs = (
+            [{"path": str(source), "sha256": source_sha256}]
+            if source_sha256
+            else []
+        )
         _lookup_linked_cache(
             prepared,
             investigation_path,
@@ -605,7 +612,11 @@ def search(
             max_line_chars=max_line_chars,
         )
         evidence_source = Path(result.work_input).resolve()
-        digest = _sha256(evidence_source)
+        digest = (
+            source_sha256
+            if source_sha256 and evidence_source == source
+            else _sha256(evidence_source)
+        )
         evidence: List[Dict[str, Any]] = []
         if result.records_path and result.records_path.is_file():
             with result.records_path.open("r", encoding="utf-8") as handle:
@@ -676,7 +687,9 @@ def search(
             },
         ).to_dict()
         cache_meta = prepared.get("cache_meta")
-        cache_source_changed = bool(cache_safe and digest != source_sha256)
+        cache_source_changed = bool(
+            cache_identity_needed and digest != source_sha256
+        )
         if cache_source_changed:
             cache_meta = {
                 "status": "bypass",

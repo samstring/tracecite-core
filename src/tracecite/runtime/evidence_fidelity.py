@@ -204,11 +204,6 @@ def _gap_from_verification(item: Mapping[str, Any]) -> dict[str, Any] | None:
         "identifier_key": key,
         "identifier_value": identifier,
         "source": item.get("source"),
-        "recommended_action": {
-            "operation": "search",
-            "query": identifier,
-            "purpose": "verify_identifier_uniqueness_across_scopes",
-        },
     }
 
 
@@ -231,16 +226,6 @@ def _append_unique_gap(result: dict[str, Any], gap: Mapping[str, Any]) -> None:
             return
     rows.append(dict(gap))
     result["missing_evidence"] = rows
-
-
-def _append_next_query(result: dict[str, Any], query: str) -> None:
-    value = str(query or "").strip()
-    if not value:
-        return
-    rows = [str(item) for item in result.get("next_queries") or [] if str(item).strip()]
-    if value not in rows:
-        rows.append(value)
-    result["next_queries"] = rows
 
 
 def _attach_search_identity_integrity(
@@ -295,7 +280,6 @@ def _attach_search_identity_integrity(
                 gap = _gap_from_verification(item)
                 if gap is not None:
                     _append_unique_gap(result, gap)
-                    _append_next_query(result, str(item.get("identifier_value") or ""))
         else:
             for hint in hints[:DEFAULT_SEARCH_IDENTITY_VERIFICATIONS]:
                 identifier = str(hint.get("identifier_value") or "").strip()
@@ -317,7 +301,6 @@ def _attach_search_identity_integrity(
                         "recommended_action": dict(hint.get("recommended_action") or {}),
                     },
                 )
-                _append_next_query(result, identifier)
 
     if not integrity_rows:
         return

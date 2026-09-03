@@ -437,7 +437,12 @@ class InvestigationCacheStore:
         return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _source_refs_valid(source_refs: Sequence[Mapping[str, Any]]) -> tuple[bool, str]:
+    def _source_refs_valid(
+        source_refs: Sequence[Mapping[str, Any]],
+        *,
+        digest_cache: Optional[Dict[str, str]] = None,
+    ) -> tuple[bool, str]:
+        verified = digest_cache if digest_cache is not None else {}
         for item in source_refs:
             path = Path(str(item.get("path") or "")).expanduser()
             expected = str(item.get("sha256") or "")
@@ -445,8 +450,12 @@ class InvestigationCacheStore:
                 return False, "source_missing"
             if not re.fullmatch(r"[0-9a-fA-F]{64}", expected):
                 return False, "source_sha256_missing"
+            key = str(path.resolve())
             try:
-                actual = _path_sha256(path)
+                actual = verified.get(key)
+                if actual is None:
+                    actual = _path_sha256(path)
+                    verified[key] = actual
             except OSError:
                 return False, "source_unreadable"
             if actual != expected:
@@ -458,7 +467,10 @@ class InvestigationCacheStore:
         sources = entry.get("sources") or []
         if not isinstance(sources, list) or len(sources) > MAX_CACHE_SOURCES:
             return False, "invalid_sources"
-        valid, reason = cls._source_refs_valid(sources)
+        digest_cache: Dict[str, str] = {}
+        valid, reason = cls._source_refs_valid(
+            sources, digest_cache=digest_cache
+        )
         if not valid:
             return False, reason
         evidence_sources = entry.get("evidence_sources") or []
@@ -467,7 +479,9 @@ class InvestigationCacheStore:
         for item in evidence_sources:
             if not isinstance(item, Mapping):
                 return False, "invalid_evidence"
-            valid, reason = cls._source_refs_valid([item])
+            valid, reason = cls._source_refs_valid(
+                [item], digest_cache=digest_cache
+            )
             if not valid:
                 return False, "evidence_" + reason
         artifacts = entry.get("artifacts") or []
@@ -558,6 +572,8 @@ class InvestigationCacheStore:
         if len(safe_result.get("artifacts") or []) > MAX_CACHE_ARTIFACTS:
             raise InvestigationError("缓存 artifact 数量超过限制")
         evidence_sources: List[Dict[str, Any]] = []
+        evidence_source_keys: set[tuple[str, str]] = set()
+        verified_evidence_paths: Dict[str, str] = {}
         for item in safe_result.get("evidence") or []:
             if not isinstance(item, Mapping):
                 continue
@@ -568,13 +584,20 @@ class InvestigationCacheStore:
             path = Path(path_text).expanduser()
             if not path.is_file():
                 raise InvestigationError(f"缓存 Evidence 来源不存在: {path}")
+            resolved_path = str(path.resolve())
             try:
-                actual = _path_sha256(path)
+                actual = verified_evidence_paths.get(resolved_path)
+                if actual is None:
+                    actual = _path_sha256(path)
+                    verified_evidence_paths[resolved_path] = actual
             except OSError as exc:
                 raise InvestigationError(f"缓存 Evidence 来源不可读: {path}") from exc
             if actual != digest:
                 raise InvestigationError(f"缓存 Evidence 来源摘要不匹配: {path}")
-            evidence_sources.append({"path": str(path), "sha256": digest})
+            identity = (resolved_path, digest)
+            if identity not in evidence_source_keys:
+                evidence_source_keys.add(identity)
+                evidence_sources.append({"path": resolved_path, "sha256": digest})
         artifacts: List[Dict[str, Any]] = []
         for item in safe_result.get("artifacts") or []:
             if not isinstance(item, Mapping):
@@ -1492,7 +1515,6 @@ def _validate_and_normalize(raw: Mapping[str, Any]) -> Dict[str, Any]:
                 "coverage": _json_object(item.get("coverage") or {}, field_name="execution.coverage"),
                 "missing_evidence": _strict_json_value(item.get("missing_evidence") or [], field_name="execution.missing_evidence"),
                 "warnings": _text_list(item.get("warnings", []), field_name="execution.warnings", max_items=MAX_EXECUTION_WARNINGS),
-                "next_queries": _text_list(item.get("next_queries", []), field_name="execution.next_queries"),
                 "error": _bounded_error(item.get("error"), strict=True),
                 "verification": _json_object(item.get("verification") or {}, field_name="execution.verification"),
                 "run_id": _optional_text(item.get("run_id"), field_name="execution.run_id", limit=256),
@@ -2416,11 +2438,6 @@ class InvestigationStore:
             field_name="warnings",
             max_items=MAX_EXECUTION_WARNINGS,
         )
-        bounded_next_queries, next_queries_truncated = _bounded_text_list(
-            result.get("next_queries", []),
-            field_name="next_queries",
-            max_items=MAX_EXECUTION_ITEMS,
-        )
         bounded_verification, verification_truncated = _bounded_external_object(
             result.get("verification") or {}, field_name="verification"
         )
@@ -2441,7 +2458,6 @@ class InvestigationStore:
             "coverage": bounded_coverage,
             "missing_evidence": bounded_missing,
             "warnings": bounded_warnings,
-            "next_queries": bounded_next_queries,
             "error": bounded_error,
             "verification": bounded_verification,
             "run_id": _optional_text(result.get("run_id"), field_name="run_id", limit=256),
@@ -2461,7 +2477,6 @@ class InvestigationStore:
                 "coverage_truncated": coverage_truncated,
                 "missing_evidence_truncated": missing_truncated,
                 "warnings_truncated": warnings_truncated,
-                "next_queries_truncated": next_queries_truncated,
                 "verification_truncated": verification_truncated,
                 "error_truncated": error_truncated,
             },

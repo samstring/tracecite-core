@@ -305,13 +305,28 @@ def _already_covered_range(
     state: RetrievalSessionState,
 ) -> tuple[str, int, int, dict[str, Any] | None] | None:
     target = request.target
-    identity = _range_source_identity(request, state)
-    if not isinstance(target, RangeTarget) or identity is None:
+    if not isinstance(target, RangeTarget):
         return None
-    source_key, observation = identity
     selected_end = target.end_line or target.start_line
     start = max(1, target.start_line - max(0, target.before))
     end = selected_end + max(0, target.after)
+
+    if target.expected_sha256:
+        path = Path(target.source).expanduser().resolve()
+        if not path.is_file():
+            return None
+        expected = str(target.expected_sha256).strip().lower()
+        source_key = file_source_version(str(path), expected).key
+        if not tracker.range_is_covered(source_key, start, end):
+            return None
+        if _sha256(path).lower() != expected:
+            return None
+        return source_key, start, end, None
+
+    identity = _range_source_identity(request, state)
+    if identity is None:
+        return None
+    source_key, observation = identity
     if tracker.range_is_covered(source_key, start, end):
         return source_key, start, end, observation
     return None
