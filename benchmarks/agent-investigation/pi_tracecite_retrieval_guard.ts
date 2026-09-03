@@ -49,6 +49,7 @@ let retrievals = 0;
 const noGrowthBySignature = new Map<string, number>();
 const coveredRangesByFile = new Map<string, LineRange[]>();
 const pendingCalls = new Map<string, CallMeta>();
+const ignoredCallIds = new Set<string>();
 
 function positiveInt(value: unknown): number {
   const parsed = Number.parseInt(String(value || "0"), 10);
@@ -75,6 +76,9 @@ function signature(event: any): string {
       String((input as any).file || ""),
       String((input as any).query || ""),
       Boolean((input as any).regex),
+      Number((input as any).max_evidence || 0),
+      String((input as any).glob || ""),
+      Boolean((input as any).recursive),
     ]);
   }
   return JSON.stringify([
@@ -82,6 +86,7 @@ function signature(event: any): string {
     String((input as any).file || ""),
     Number((input as any).line || 0),
     Number((input as any).radius ?? 8),
+    String((input as any).sha256 || ""),
   ]);
 }
 
@@ -237,7 +242,11 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event) => {
-    if (!isAcquisition(event)) return undefined;
+    const id = String(event.toolCallId || "");
+    if (!isAcquisition(event)) {
+      if (ACQUISITION_TOOLS.has(String(event?.toolName || ""))) ignoredCallIds.add(id);
+      return undefined;
+    }
     const meta = callMeta(event);
     const noGrowth = noGrowthBySignature.get(meta.key) || 0;
 
@@ -288,7 +297,7 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
     }
 
     retrievals += 1;
-    pendingCalls.set(String(event.toolCallId || ""), meta);
+    pendingCalls.set(id, meta);
     await record({
       event: "tool_call",
       tool: event.toolName,
@@ -301,9 +310,11 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
   });
 
   pi.on("tool_result", async (event) => {
-    if (!ACQUISITION_TOOLS.has(String(event?.toolName || ""))) return undefined;
     const id = String(event.toolCallId || "");
-    const meta = pendingCalls.get(id) || callMeta(event);
+    if (ignoredCallIds.delete(id)) return undefined;
+    if (!ACQUISITION_TOOLS.has(String(event?.toolName || ""))) return undefined;
+    const meta = pendingCalls.get(id);
+    if (!meta) return undefined;
     pendingCalls.delete(id);
     const progress = progressFromContent(event.content);
     const noGrowth = Boolean(event.isError)
@@ -331,6 +342,8 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
   });
 
   pi.on("agent_end", async () => {
+    pendingCalls.clear();
+    ignoredCallIds.clear();
     await record({
       event: "agent_end",
       retrievals,
