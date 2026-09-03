@@ -94,14 +94,17 @@ def test_skill_execution_card_forces_symbol_directed_reverse_search_and_terminal
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "## Execution card — obey before any retrieval" in skill
-    assert "Use at most two orientation calls to locate one representative domain-specific blocked stack" in skill
+    assert "Every `tracecite_search` and `tracecite_expand` counts as one evidence call" in skill
+    assert "Calls 1–2 are the entire orientation phase" in skill
+    assert "Use at most two total TraceCite calls to locate one representative domain-specific blocked stack" in skill
     assert "stop broad discovery queries such as `goroutine`, `Lock`, `semacquire`, `metadata`" in skill
-    assert "Every remaining causal-discriminator retrieval must target exact symbols/call-chain structure that could expose the **reverse component nesting**" in skill
-    assert "A call that only returns the same blocked acquisition direction is non-advancing" in skill
-    assert "After two non-advancing reverse-path attempts, or when TraceCite reports the evidence-call ceiling, causal discovery is over" in skill
+    assert "Starting with call 3, causal retrieval is reciprocal-only" in skill
+    assert "Generic lifecycle/symptom searches such as `runc`, `shim`, `process`, `RPC`, `FIFO`" in skill
+    assert "Calls 3–6 are the complete reciprocal-discriminator budget" in skill
+    assert "Do not continue toward the Runtime ceiling merely because more transport is available" in skill
     assert "This execution card is Agent investigation/stopping policy. It must not be moved into Runtime" in skill
-    assert "orientation calls" not in runtime
-    assert "reverse component nesting" not in runtime
+    assert "orientation phase" not in runtime
+    assert "reciprocal-discriminator budget" not in runtime
 
 
 def test_skill_serializes_and_bounds_tracecite_transport() -> None:
@@ -109,11 +112,12 @@ def test_skill_serializes_and_bounds_tracecite_transport() -> None:
     runtime = IMPL.read_text(encoding="utf-8")
     assert "Make calls serially" in skill
     assert "Target `<= 8` evidence calls; Runtime may enforce a diagnosis-neutral absolute transport ceiling of 16" in skill
+    assert "For `stack_only`, the execution card above is stricter: calls 1–2 are orientation and calls 3–6 are the full reciprocal phase" in skill
     assert "After one representative blocker, spend at most four calls on a structurally distinct reciprocal path" in skill
     assert "After two non-advancing calls for one discriminator, mark it `bounded_unknown` and finalize" in skill
     assert "No equivalent-waiter census, confirmation pass, or symptom sweep after the discriminator closes" in skill
     assert "Runtime call exhaustion never upgrades evidence" in skill
-    assert "diagnosis-neutral absolute transport ceiling" not in runtime
+    assert "reciprocal phase" not in runtime
 
 
 def test_skill_forces_fixed_stack_only_final_after_mechanism_closes_or_bounds() -> None:
@@ -124,6 +128,9 @@ def test_skill_forces_fixed_stack_only_final_after_mechanism_closes_or_bounds() 
     assert "the only downstream-lifecycle sentence allowed" in skill
     assert "### Required stack-only final format" in skill
     assert "emit **exactly four short paragraphs** and nothing else" in skill
+    assert "the **very next assistant token** MUST be the `O` in `Observed:`" in skill
+    assert "Preambles such as “I've hit the transport limit”" in skill
+    assert "Raw pointer/address values must not appear in the final as proof that waits refer to one shared object/lock" in skill
     assert "`Observed:` cite representative directly observed blocked path(s)" in skill
     assert "`Mechanism:` either" in skill
     assert "`Uncertainty:` “Current lock holder/ownership is not established by this artifact.”" in skill
