@@ -55,7 +55,7 @@ def test_skill_requires_two_current_opposing_edges_and_downgrades_incomplete_cyc
     assert "`holds B -> waits A`" in skill
     assert "If either holder edge is missing, report only the observed blocking/contention and mark the missing causal edge unknown" in skill
     assert "names an unobserved holder or opposing causal edge" in skill
-    assert "claims deadlock/cycle/lock-order inversion without both current `holds -> waits` edges" in skill
+    assert "claims deadlock/cycle/lock-order inversion/starvation without the required current ownership proof" in skill
     assert "Deadlock/cycle/lock-order inversion" not in runtime
     assert "bounded_unknown" not in runtime
 
