@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 IMPL = ROOT / "benchmarks" / "agent-investigation" / "pi_tracecite_extension_impl.ts"
 SKILL = ROOT / ".pi" / "skills" / "tracecite" / "SKILL.md"
+SMOKE = ROOT / ".github" / "workflows" / "pi-tracecite-mode-containerd-smoke.yml"
 
 
 def test_tracecite_runtime_returns_evidence_without_investigation_policy() -> None:
@@ -128,6 +129,14 @@ def test_skill_forces_fixed_stack_only_final_after_mechanism_closes_or_bounds() 
     assert "`Uncertainty:` “Current lock holder/ownership is not established by this artifact.”" in skill
     assert "`Boundary:` “The supplied evidence supports the in-process blocking pattern, but does not establish the downstream process/RPC/restart lifecycle.”" in skill
     assert "remaining causal discriminator" not in runtime
+
+
+def test_smoke_system_override_includes_full_skill_contract() -> None:
+    smoke = SMOKE.read_text(encoding="utf-8")
+    assert 'SKILL_PROMPT="$(cat "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md")"' in smoke
+    assert "The following TraceCite Skill contract is mandatory for this run:" in smoke
+    assert '${SKILL_PROMPT}' in smoke
+    assert '--system-prompt "$SYSTEM_PROMPT"' in smoke
 
 
 def test_runtime_remains_mechanical() -> None:
