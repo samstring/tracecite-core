@@ -1,0 +1,374 @@
+name: Pi RCAEval MB Pilot A/B
+
+on:
+  push:
+    branches:
+      - exp/retrieval-guard-session-v2
+    paths:
+      - .github/workflows/pi-rcaeval-mb-pilot-ab.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-rcaeval-mb-pilot-ab
+  cancel-in-progress: false
+
+jobs:
+  prepare-evidence:
+    name: prepare neutral MB evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download one RCAEval case and remove label leakage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet huggingface_hub pandas pyarrow
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import snapshot_download
+
+          # This source id encodes the ground-truth service/fault. It must never
+          # be copied into the evidence artifact or passed to the agent job.
+          source_case = "re3tt_ts-route-service_f3_6"
+          download_root = Path("/tmp/rcaeval-source")
+          evidence_root = Path("/tmp/rcaeval-neutral-evidence")
+          evidence_root.mkdir(parents=True, exist_ok=True)
+
+          snapshot_download(
+              repo_id="phamquiluan/RCAEval",
+              repo_type="dataset",
+              allow_patterns=[f"{source_case}/*"],
+              local_dir=download_root,
+          )
+          src = download_root / source_case
+          if not src.is_dir():
+              raise SystemExit(f"missing downloaded case directory: {src}")
+
+          metrics = pd.read_parquet(src / "metrics.parquet")
+          logs = pd.read_parquet(src / "logs.parquet")
+          traces = pd.read_parquet(src / "traces.parquet")
+          inject_time = int((src / "inject_time.txt").read_text().strip())
+
+          metrics.to_csv(evidence_root / "metrics.csv", index=False)
+          logs.to_json(
+              evidence_root / "logs.jsonl",
+              orient="records",
+              lines=True,
+              force_ascii=False,
+          )
+          traces.to_json(
+              evidence_root / "traces.jsonl",
+              orient="records",
+              lines=True,
+              force_ascii=False,
+          )
+          (evidence_root / "incident.txt").write_text(
+              "System: Train Ticket microservices\n"
+              f"Known incident onset (Unix seconds): {inject_time}\n"
+              "Telemetry covers the normal and faulty window around this onset.\n",
+              encoding="utf-8",
+          )
+
+          files = ["metrics.csv", "logs.jsonl", "traces.jsonl", "incident.txt"]
+          byte_counts = {name: (evidence_root / name).stat().st_size for name in files}
+          manifest = {
+              "format_version": 1,
+              "system": "Train Ticket",
+              "incident_onset_unix": inject_time,
+              "files": byte_counts,
+              "total_bytes": sum(byte_counts.values()),
+              "rows": {
+                  "metrics": int(len(metrics)),
+                  "logs": int(len(logs)),
+                  "traces": int(len(traces)),
+              },
+              "metric_series": max(0, int(len(metrics.columns)) - 1),
+              "correctness": None,
+              "correctness_source": "manual_review",
+          }
+          (evidence_root / "evidence-manifest.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(manifest, indent=2, sort_keys=True))
+          if manifest["total_bytes"] < 5 * 1024 * 1024:
+              raise SystemExit("pilot evidence is below 5 MiB; choose a larger case before model calls")
+          PY
+
+      - name: Upload neutral evidence only
+        uses: actions/upload-artifact@v4
+        with:
+          name: rcaeval-pilot-neutral-evidence
+          path: /tmp/rcaeval-neutral-evidence
+          if-no-files-found: error
+          retention-days: 7
+
+  run-ab:
+    name: gmi2 native then TraceCite
+    needs: prepare-evidence
+    runs-on: ubuntu-latest
+    env:
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      BENCH_MODEL: ${{ vars.GMI2_MODEL }}
+      BENCH_API_KEY: ${{ secrets.GMI2_API_KEY }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-rcaeval-mb-pilot
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      EVIDENCE_ROOT: /tmp/rcaeval-mb-pilot/evidence
+      RESULT_ROOT: /tmp/rcaeval-mb-pilot/results
+      TRACECITE_NO_GROWTH_PATIENCE: "2"
+      TRACECITE_NO_MATCH_CAUTION_AFTER: "2"
+      TRACECITE_MAX_RETRIEVALS: "100"
+
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BENCH_MODEL"
+          test -n "$BENCH_API_KEY"
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          mkdir -p "$PI_CODING_AGENT_DIR" "$RESULT_ROOT" "$EVIDENCE_ROOT"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Download neutral evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: rcaeval-pilot-neutral-evidence
+          path: /tmp/rcaeval-mb-pilot/evidence
+
+      - name: Verify evidence has no encoded case label
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$EVIDENCE_ROOT/evidence-manifest.json"
+          test "$(python -c 'import json,os; print(json.load(open(os.environ["EVIDENCE_ROOT"]+"/evidence-manifest.json"))["total_bytes"])')" -ge 5242880
+          if grep -R -n -E 're3tt_ts-route-service_f3_6|root_cause_service|code-level fault F3' "$EVIDENCE_ROOT"; then
+            echo "ground-truth label leaked into neutral evidence" >&2
+            exit 3
+          fi
+          find "$EVIDENCE_ROOT" -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+
+      - name: Run Native before repository checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULT_ROOT/native-session"
+          cd "$EVIDENCE_ROOT"
+          PROMPT="A production incident occurred in a Train Ticket microservice deployment. The supplied telemetry covers the incident window and incident.txt gives the known onset time. Determine the root-cause service and the concrete failure mechanism. Explain the causal chain from the root cause to downstream symptoms. Use only supplied evidence, cite exact evidence lines for material claims, and stop once the root cause is sufficiently supported rather than performing confirmatory searches. Use only evidence files in the current working directory and do not use external knowledge."
+          start=$(date +%s)
+          set +e
+          pi \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT_ROOT/native-session" \
+            --tools read,bash,grep,find,ls \
+            --no-extensions --no-skills --no-prompt-templates --no-context-files \
+            --system-prompt "$PROMPT" \
+            "Investigate this incident and report the root cause." \
+            > "$RESULT_ROOT/native-answer.md" 2> "$RESULT_ROOT/native-stderr.log"
+          code=$?
+          set -e
+          echo "$code" > "$RESULT_ROOT/native-exit.txt"
+          echo "$(( $(date +%s) - start ))" > "$RESULT_ROOT/native-wall-seconds.txt"
+
+      - name: Checkout TraceCite after Native finishes
+        uses: actions/checkout@v4
+        with:
+          path: tracecite-core
+
+      - name: Install TraceCite and guard tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e "${GITHUB_WORKSPACE}/tracecite-core[dev,diversity]"
+          cd "$GITHUB_WORKSPACE/tracecite-core"
+          python -m pytest -q \
+            tests/test_pi_four_public_strict_boundary.py \
+            tests/test_pi_tracecite_runtime_neutral.py \
+            tests/test_session_novelty_regressions.py
+
+      - name: Convert Native session to transcript
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          SESSION="$(find "$RESULT_ROOT/native-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          if [[ -n "$SESSION" && -f "$RESULT_ROOT/native-answer.md" ]]; then
+            python "$GITHUB_WORKSPACE/tracecite-core/benchmarks/agent-investigation/pi_session_to_transcript.py" \
+              "$SESSION" "$RESULT_ROOT/native-answer.md" "$RESULT_ROOT/native-transcript.jsonl" \
+              --mode pi-native --model "$BENCH_MODEL" || true
+          fi
+
+      - name: Run TraceCite on the same neutral evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 30
+          mkdir -p "$RESULT_ROOT/tracecite-session"
+          export TRACECITE_EVIDENCE_ROOT="$EVIDENCE_ROOT"
+          export TRACECITE_EVIDENCE_FILES="metrics.csv,logs.jsonl,traces.jsonl,incident.txt"
+          export TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT_ROOT/tracecite-runtime-evidence-access.jsonl"
+          export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$RESULT_ROOT/tracecite-blocked-native-evidence-attempts.jsonl"
+          export TRACECITE_RETRIEVAL_GUARD_ACTIVITY="$RESULT_ROOT/tracecite-retrieval-guard.jsonl"
+          PROMPT="A production incident occurred in a Train Ticket microservice deployment. The supplied telemetry covers the incident window and incident.txt gives the known onset time. Determine the root-cause service and the concrete failure mechanism. Explain the causal chain from the root cause to downstream symptoms. Use only supplied evidence, cite exact evidence lines for material claims, and stop once the root cause is sufficiently supported rather than performing confirmatory searches. All telemetry content must be obtained through TraceCite tools; do not use native file-access tools for the evidence."
+          cd "$EVIDENCE_ROOT"
+          start=$(date +%s)
+          set +e
+          pi \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT_ROOT/tracecite-session" \
+            --extension "$GITHUB_WORKSPACE/tracecite-core/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+            --tools tracecite_search,tracecite_expand \
+            --no-skills --skill "$GITHUB_WORKSPACE/tracecite-core/.pi/skills/tracecite/SKILL.md" \
+            --no-prompt-templates --no-context-files \
+            --system-prompt "$PROMPT" \
+            "用 tracecite 调查这个 incident 并报告根因。" \
+            > "$RESULT_ROOT/tracecite-answer.md" 2> "$RESULT_ROOT/tracecite-stderr.log"
+          code=$?
+          set -e
+          echo "$code" > "$RESULT_ROOT/tracecite-exit.txt"
+          echo "$(( $(date +%s) - start ))" > "$RESULT_ROOT/tracecite-wall-seconds.txt"
+
+      - name: Convert TraceCite session and collect objective telemetry
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          SESSION="$(find "$RESULT_ROOT/tracecite-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          if [[ -n "$SESSION" && -f "$RESULT_ROOT/tracecite-answer.md" ]]; then
+            python "$GITHUB_WORKSPACE/tracecite-core/benchmarks/agent-investigation/pi_session_to_transcript.py" \
+              "$SESSION" "$RESULT_ROOT/tracecite-answer.md" "$RESULT_ROOT/tracecite-transcript.jsonl" \
+              --mode pi-tracecite --model "$BENCH_MODEL" || true
+          fi
+
+          python - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+
+          root = Path(os.environ['RESULT_ROOT'])
+          evidence = json.loads((Path(os.environ['EVIDENCE_ROOT']) / 'evidence-manifest.json').read_text())
+
+          def read_int(name):
+              p = root / name
+              try: return int(p.read_text().strip())
+              except Exception: return None
+
+          def usage(arm):
+              totals = {'input_tokens':0,'output_tokens':0,'cache_read_tokens':0,'model_calls':0,'tool_calls':0}
+              p = root / f'{arm}-transcript.jsonl'
+              if not p.is_file(): return totals
+              for line in p.read_text(errors='replace').splitlines():
+                  try: e=json.loads(line)
+                  except Exception: continue
+                  if e.get('type') == 'model':
+                      u=e.get('usage') or {}
+                      totals['input_tokens'] += int(u.get('input_tokens') or 0)
+                      totals['output_tokens'] += int(u.get('output_tokens') or 0)
+                      totals['cache_read_tokens'] += int(u.get('cache_read_input_tokens') or u.get('cached_input_tokens') or 0)
+                      totals['model_calls'] += 1
+                  elif e.get('type') == 'tool':
+                      totals['tool_calls'] += 1
+              return totals
+
+          guard_events=[]
+          gp=root/'tracecite-retrieval-guard.jsonl'
+          if gp.is_file():
+              for line in gp.read_text(errors='replace').splitlines():
+                  try: guard_events.append(json.loads(line))
+                  except Exception: pass
+          guard_calls=[e for e in guard_events if e.get('event')=='tool_call']
+          guard_results=[e for e in guard_events if e.get('event')=='tool_result']
+          guard={
+              'allowed_retrievals':sum(1 for e in guard_calls if e.get('decision')=='allow'),
+              'blocked_retrieval_attempts':sum(1 for e in guard_calls if e.get('decision')=='block'),
+              'block_reasons':dict(Counter(str(e.get('reason')) for e in guard_calls if e.get('decision')=='block')),
+              'mechanical_outcomes':dict(Counter(str(e.get('mechanical_outcome')) for e in guard_results)),
+              'constrained_notices':sum(1 for e in guard_results if e.get('constrained_notice')),
+          }
+
+          payload={
+              'model':os.environ.get('BENCH_MODEL'),
+              'benchmark':'rcaeval-mb-pilot',
+              'correctness_policy':'manual_review_only',
+              'evidence':evidence,
+              'guard_config':{
+                  'no_growth_patience':int(os.environ.get('TRACECITE_NO_GROWTH_PATIENCE','0') or 0),
+                  'no_match_caution_after':int(os.environ.get('TRACECITE_NO_MATCH_CAUTION_AFTER','0') or 0),
+                  'max_retrievals':int(os.environ.get('TRACECITE_MAX_RETRIEVALS','0') or 0),
+                  'per_task_timeout':None,
+              },
+              'rows':[
+                  {
+                      'arm':'native',
+                      'exit':read_int('native-exit.txt'),
+                      'wall_seconds':read_int('native-wall-seconds.txt'),
+                      'usage':usage('native'),
+                      'answer_file':'native-answer.md',
+                      'transcript_file':'native-transcript.jsonl',
+                      'correctness':None,
+                      'correctness_source':'manual_review',
+                  },
+                  {
+                      'arm':'tracecite',
+                      'exit':read_int('tracecite-exit.txt'),
+                      'wall_seconds':read_int('tracecite-wall-seconds.txt'),
+                      'usage':usage('tracecite'),
+                      'answer_file':'tracecite-answer.md',
+                      'transcript_file':'tracecite-transcript.jsonl',
+                      'correctness':None,
+                      'correctness_source':'manual_review',
+                      'retrieval_guard':guard,
+                  },
+              ],
+          }
+          (root/'summary.json').write_text(json.dumps(payload,indent=2,ensure_ascii=False)+'\n')
+          print(json.dumps(payload,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Upload pilot results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rcaeval-mb-pilot-gmi2-results
+          path: ${{ env.RESULT_ROOT }}
+          if-no-files-found: error
+          retention-days: 14
