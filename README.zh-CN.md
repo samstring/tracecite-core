@@ -73,56 +73,51 @@ tracecite verify .tracecite/runs/<run-id>/manifest.json
 
 要求 Python 3.10+。当前支持 Linux / macOS；Windows 不在当前支持范围。主包默认没有 Python 标准库之外的运行时依赖。
 
-## Agent 怎么使用
+## Agent 使用：全局装一次，实际使用 TraceCite 时才启用
 
-### Pi：当前正式验证方法
+TraceCite 应当作为跨项目能力，在用户/全局范围安装一次。**不要把 TraceCite investigation rule 复制到每个项目。**
 
-仓库中的 Pi A/B 使用 `.pi/skills/tracecite/SKILL.md`，并通过 Pi extension 只暴露 `tracecite_search` / `tracecite_expand`。验证时使用的 bounded system prompt 是：
+当 Codex、Cursor、Pi 或其他 Coding Agent 正在执行 TraceCite 安装时，应当：
 
-```text
-You are a coding agent investigating supplied runtime evidence. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims.
+1. 安装 TraceCite 本身；
+2. 全局安装 canonical `tracecite-investigate` skill，优先把 `.agents/skills/tracecite-investigate/` 复制或 symlink 到 `~/.agents/skills/tracecite-investigate/`；
+3. 把下面的条件触发 Rule 追加到当前 Host 的全局/user instructions，保留已有内容，不要整文件覆盖；
+4. 除非用户明确要求 project-local policy，否则不要向当前项目写 TraceCite rule。
+
+优先使用 `~/.agents/skills/`，因为当前 Codex、Cursor、Pi 都能发现这个用户级 Agent Skills 目录。
+
+### TraceCite investigation mode
+
+下面这段应该安装成 **全局 Agent Rule**：
+
+```md
+## TraceCite investigation mode
+
+Only while performing a task that uses TraceCite tools or TraceCite skills.
+Do not apply this mode to unrelated tasks, and do not select TraceCite solely because a task is a debugging or investigation task.
+
+- Use the `tracecite-investigate` skill for TraceCite evidence work.
+- Keep retrieval bounded.
+- Before each new retrieval, identify the unresolved material claim and the discriminator that could change it.
+- Once evidence sufficiently supports the root cause or other conclusion required by the user, answer without confirmatory searches.
+- Cite exact materialized evidence ranges for material factual claims and separate observations from inferences.
 ```
 
-TraceCite arm 再追加：
+Skill 名称统一，但各 Host 的显式调用语法不同：
 
-```text
-Follow the user's explicit request to use TraceCite. All runtime-evidence content must be obtained through TraceCite tools; do not use native file-access tools for the evidence.
-```
+| Host | 全局 Skill | 全局 Rule | 显式调用 |
+|---|---|---|---|
+| Codex | `~/.agents/skills/tracecite-investigate/` | 追加到 `~/.codex/AGENTS.md` | `$tracecite-investigate` |
+| Cursor | `~/.agents/skills/tracecite-investigate/` | 在 **Customize -> Rules** 中添加 User Rule | `/tracecite-investigate` |
+| Pi | `~/.agents/skills/tracecite-investigate/` | 追加到 `~/.pi/agent/AGENTS.md` | `/skill:tracecite-investigate` |
 
-仓库内可复现实验式调用：
+在支持该能力的 Host 上，`tracecite-investigate` 被设置成 explicit-only。仅仅安装 TraceCite，不能让普通 debugging 自动进入 TraceCite mode。
 
-```bash
-BASE_PROMPT='You are a coding agent investigating supplied runtime evidence. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims.'
-TRACE_PROMPT="$BASE_PROMPT Follow the user's explicit request to use TraceCite. All runtime-evidence content must be obtained through TraceCite tools; do not use native file-access tools for the evidence."
+完整安装约定见 [全局 Agent 安装](docs/agent-global-setup.zh-CN.md)，Host/Runtime 细节见 [Agent integration](docs/agent-integration.zh-CN.md)。
 
-pi \
-  --extension ./benchmarks/agent-investigation/pi_tracecite_extension.ts \
-  --tools tracecite_search,tracecite_expand \
-  --no-skills --skill ./.pi/skills/tracecite/SKILL.md \
-  --no-prompt-templates --no-context-files \
-  --system-prompt "$TRACE_PROMPT" \
-  "用 tracecite 分析这个问题。${QUESTION}"
-```
+### TraceCite mode 启用后的 Evidence 使用方式
 
-这里的 extension 路径是当前仓库用于验证的 Pi adapter；`.pi/skills/tracecite/SKILL.md` 才是 Agent 的证据使用/停止契约。生产 Host 可以把相同 canonical Evidence 语义暴露成自己的 tool surface。
-
-### Codex：推荐项目级方法
-
-仓库根目录 `AGENTS.md` 保存必须长期生效的工程边界；TraceCite 调查工作流放在：
-
-```text
-.agents/skills/tracecite-investigate/SKILL.md
-```
-
-推荐请求：
-
-```text
-Use $tracecite-investigate to investigate <problem> from the supplied evidence.
-Keep retrieval bounded. Cite exact materialized evidence for material factual claims.
-Do not fill evidence gaps with external knowledge; qualify unsupported parts explicitly.
-```
-
-Codex 可以直接通过 shell 调用 TraceCite CLI。对于大输入，推荐：
+Codex、Cursor、Pi 或其他 Host 可以直接暴露 canonical Evidence API，也可以通过 shell 使用 TraceCite CLI。大输入常用方式：
 
 ```bash
 tracecite probe ./logs --glob "*.log" --recursive
@@ -134,27 +129,9 @@ tracecite search app.log "<discriminator>" --snapshot \
 tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
 ```
 
-规则是：**先提出一个会改变当前判断的 discriminator，再取最小证据；已经闭合的事实不要为了“更确认”重新搜索。**
+核心规则是：**先明确一个还没闭合的 material claim，以及一个会改变该 claim 的 discriminator；只取最小需要的证据；已经闭合的 claim 不要为了“再确认一下”重新搜索。**
 
-### Cursor：推荐 Project Rule 方法
-
-仓库提供：
-
-```text
-.cursor/rules/tracecite-investigation.mdc
-```
-
-它是项目级、版本控制的 Cursor Rule。对日志/trace/support bundle/root-cause 调查时让 Cursor 按 relevance 应用该 Rule，或者在 Agent 中手动引用它。Cursor 仍通过 shell 使用同一套 TraceCite CLI，不创建另一套 Evidence 语义。
-
-推荐请求：
-
-```text
-Use the TraceCite investigation rule for this incident.
-Investigate only from the supplied evidence, keep retrieval bounded,
-and cite exact evidence ranges for the causal claims in the final answer.
-```
-
-Pi、Codex、Cursor 的差异只在 Host/Prompt/Tool adapter；**Evidence、Coverage、Provenance、RetrievalSession 和恢复语义保持一致**。完整说明见 [Agent integration](docs/agent-integration.zh-CN.md)。
+仓库里的 `.pi/`、`.cursor/`、`.agents/` 继续保留，作为开发、兼容性、验证和 benchmark 复现资产。正式 Pi A/B 仍会使用 repository-local Pi skill 和 adapter，以保证历史验证条件可复现；这不代表日常使用应该把这些目录复制进每个业务项目。
 
 ## 对比数据
 
@@ -252,6 +229,7 @@ Agent owns: hypothesis -> causal reasoning -> sufficiency -> answer -> stop
 
 - `architecture*.md`：当前规范架构。
 - `agent-integration*.md`：Pi / Codex / Cursor / CLI / Host 接入。
+- `agent-global-setup*.md`：全局 skill/rule 安装与 activation boundary。
 - `benchmark-results*.md`：当前正式 Agent A/B 数据。
 - `context-engine*.md`：跨轮 Evidence delta 与恢复。
 - `extension-contract.md`：领域扩展契约。

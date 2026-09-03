@@ -73,56 +73,51 @@ tracecite verify .tracecite/runs/<run-id>/manifest.json
 
 TraceCite requires Python 3.10+. Linux and macOS are currently supported; Windows is not currently supported. The default package has no runtime dependency outside the Python standard library.
 
-## Agent usage
+## Agent usage: install once, activate only when used
 
-### Pi: validated bounded setup
+TraceCite is intended to be installed once at user/global scope and reused across repositories. Do **not** copy a TraceCite investigation rule into every project.
 
-The repository's paired Pi A/B runs use `.pi/skills/tracecite/SKILL.md` and expose only `tracecite_search` / `tracecite_expand` through the Pi extension. The validated bounded system prompt is:
+When an AI coding agent is performing the TraceCite setup, it should:
 
-```text
-You are a coding agent investigating supplied runtime evidence. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims.
+1. install TraceCite itself;
+2. install the canonical `tracecite-investigate` skill globally, preferably by copying or symlinking `.agents/skills/tracecite-investigate/` to `~/.agents/skills/tracecite-investigate/`;
+3. append the conditional rule below to the host's global/user instructions without overwriting existing instructions;
+4. avoid adding repository-local TraceCite rules unless the user explicitly requests repository-specific policy.
+
+`~/.agents/skills/` is the preferred shared user-level skill location because current Codex, Cursor, and Pi releases all discover Agent Skills there.
+
+### TraceCite investigation mode
+
+Install the following as a **global** agent rule:
+
+```md
+## TraceCite investigation mode
+
+Only while performing a task that uses TraceCite tools or TraceCite skills.
+Do not apply this mode to unrelated tasks, and do not select TraceCite solely because a task is a debugging or investigation task.
+
+- Use the `tracecite-investigate` skill for TraceCite evidence work.
+- Keep retrieval bounded.
+- Before each new retrieval, identify the unresolved material claim and the discriminator that could change it.
+- Once evidence sufficiently supports the root cause or other conclusion required by the user, answer without confirmatory searches.
+- Cite exact materialized evidence ranges for material factual claims and separate observations from inferences.
 ```
 
-The TraceCite arm appends:
+The skill name is shared; explicit invocation syntax differs by host:
 
-```text
-Follow the user's explicit request to use TraceCite. All runtime-evidence content must be obtained through TraceCite tools; do not use native file-access tools for the evidence.
-```
+| Host | Global skill | Global rule | Explicit skill invocation |
+|---|---|---|---|
+| Codex | `~/.agents/skills/tracecite-investigate/` | append to `~/.codex/AGENTS.md` | `$tracecite-investigate` |
+| Cursor | `~/.agents/skills/tracecite-investigate/` | add as a User Rule in **Customize -> Rules** | `/tracecite-investigate` |
+| Pi | `~/.agents/skills/tracecite-investigate/` | append to `~/.pi/agent/AGENTS.md` | `/skill:tracecite-investigate` |
 
-Repository-local reproduction pattern:
+The `tracecite-investigate` skill is intentionally explicit-only on hosts that support that control. Having TraceCite installed must not make ordinary debugging tasks automatically enter TraceCite mode.
 
-```bash
-BASE_PROMPT='You are a coding agent investigating supplied runtime evidence. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims.'
-TRACE_PROMPT="$BASE_PROMPT Follow the user's explicit request to use TraceCite. All runtime-evidence content must be obtained through TraceCite tools; do not use native file-access tools for the evidence."
+See [Global agent setup](docs/agent-global-setup.md) for the installation contract and [Agent integration](docs/agent-integration.md) for host/runtime details.
 
-pi \
-  --extension ./benchmarks/agent-investigation/pi_tracecite_extension.ts \
-  --tools tracecite_search,tracecite_expand \
-  --no-skills --skill ./.pi/skills/tracecite/SKILL.md \
-  --no-prompt-templates --no-context-files \
-  --system-prompt "$TRACE_PROMPT" \
-  "Use TraceCite to investigate this problem: ${QUESTION}"
-```
+### Evidence-use pattern while TraceCite mode is active
 
-The extension path above is the adapter currently used by this repository's validation harness. `.pi/skills/tracecite/SKILL.md` is the evidence-use/stopping contract. A production host can expose the same canonical evidence semantics through its own tool adapter.
-
-### Codex: recommended repository setup
-
-Stable repository-wide constraints live in root `AGENTS.md`. The reusable investigation workflow lives at:
-
-```text
-.agents/skills/tracecite-investigate/SKILL.md
-```
-
-Recommended request:
-
-```text
-Use $tracecite-investigate to investigate <problem> from the supplied evidence.
-Keep retrieval bounded. Cite exact materialized evidence for material factual claims.
-Do not fill evidence gaps with external knowledge; qualify unsupported parts explicitly.
-```
-
-Codex can call the TraceCite CLI through shell tools. For large evidence, a useful pattern is:
+Codex, Cursor, Pi, or another host can expose the canonical Evidence API directly or call the TraceCite CLI through shell tools. A common large-input pattern is:
 
 ```bash
 tracecite probe ./logs --glob "*.log" --recursive
@@ -134,27 +129,9 @@ tracecite search app.log "<discriminator>" --snapshot \
 tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
 ```
 
-The operating rule is: **name one discriminator that can change the current material claim, fetch the minimum evidence needed for it, and do not reopen a closed claim merely for reassurance.**
+The operating rule is: **name one unresolved material claim and one discriminator that can change it, fetch the minimum evidence needed, and do not reopen a closed claim merely for reassurance.**
 
-### Cursor: recommended Project Rule setup
-
-This repository ships:
-
-```text
-.cursor/rules/tracecite-investigation.mdc
-```
-
-It is a version-controlled project rule for log/trace/support-bundle/root-cause investigation. Let Cursor apply it by relevance or explicitly reference the rule in Agent. Cursor still invokes the same TraceCite CLI through shell tools; it does not define a second evidence model.
-
-Recommended request:
-
-```text
-Use the TraceCite investigation rule for this incident.
-Investigate only from the supplied evidence, keep retrieval bounded,
-and cite exact evidence ranges for the causal claims in the final answer.
-```
-
-Pi, Codex, and Cursor differ only in host/prompt/tool adapters. **Evidence, Coverage, Provenance, RetrievalSession, and recovery semantics remain shared.** See [Agent integration](docs/agent-integration.md).
+The repository's `.pi/`, `.cursor/`, and `.agents/` files remain development, compatibility, and validation assets. In particular, the formal Pi A/B harness still uses the repository-local Pi skill and adapter so historical benchmark conditions stay reproducible. Those repository files are not a recommendation to install TraceCite policy separately into every application repository.
 
 ## Measured comparisons
 
@@ -252,6 +229,7 @@ See [docs/README.md](docs/README.md) for the current documentation map.
 
 - `architecture*.md`: normative current architecture.
 - `agent-integration*.md`: Pi / Codex / Cursor / CLI / host integration.
+- `agent-global-setup.md`: global skill/rule installation and activation boundary.
 - `benchmark-results*.md`: current formal agent A/B measurements.
 - `context-engine*.md`: cross-turn evidence delta and recovery.
 - `extension-contract.md`: domain extension contract.
