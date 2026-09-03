@@ -167,6 +167,13 @@ def candidate_anchors(matcher: Matcher) -> Optional[Tuple[str, ...]]:
 
     if matcher.regex is None:
         return None
+    # Python's Unicode IGNORECASE has equivalences that are wider than a raw
+    # escaped-literal prefilter (for example ``k`` also matches Kelvin sign K).
+    # A narrower candidate scan would introduce false negatives, so only ASCII
+    # ignore-case regexes are eligible until candidate folding exactly mirrors
+    # the regex engine.
+    if matcher.regex.flags & re.IGNORECASE and not matcher.regex.flags & re.ASCII:
+        return None
     try:
         parsed = _RE_PARSER.parse(matcher.pattern, matcher.regex.flags)
     except (re.error, RecursionError, TypeError, ValueError):
