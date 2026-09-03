@@ -95,8 +95,8 @@ from .live_cut import (
 )
 from .text_filter import (
     FilterError,
-    FilterResult,
-    filter_text,
+    FilterResult as _LegacyFilterResult,
+    filter_text as _legacy_filter_text,
     filter_texts,
     pattern_from_terms,
     parse_time_arg,
@@ -105,6 +105,15 @@ from .text_filter import (
     text_time_range,
     top_terms_in_text,
 )
+# Candidate-first is the canonical filter engine. Patch the already-loaded
+# text_filter module as well as the package export so direct submodule imports,
+# filter_texts(), scenarios and Agent runtime all share one implementation.
+from . import text_filter as _text_filter_module
+from .candidate_filter import FilterResult, filter_text
+
+_text_filter_module.FilterResult = FilterResult
+_text_filter_module.filter_text = filter_text
+
 from .matcher import PatternComponent, coerce_pattern_components
 from .survey import (
     SurveyError,
