@@ -124,7 +124,7 @@ For user-level Cursor setup:
 - add the canonical conditional rule as a Cursor **User Rule** in `Customize -> Rules` (or the equivalent user-level rule mechanism);
 - explicitly invoke the skill as `/tracecite-investigate` when TraceCite is actually being used.
 
-The repository still contains `.cursor/rules/tracecite-investigation.mdc` as a development/compatibility asset. It is not the recommended production pattern and should not be copied into every application repository.
+This repository intentionally does not ship a `.cursor/rules/*.mdc` TraceCite investigation rule. `.cursor/README.md` records that boundary so project-level relevance triggering is not reintroduced.
 
 Cursor uses the same CLI/Runtime semantics as Codex. Do not create Cursor-specific notions of Evidence, Coverage, or correctness.
 
