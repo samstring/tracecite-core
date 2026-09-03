@@ -114,7 +114,12 @@ jobs:
           set -euo pipefail
           QUESTION="$(cat "$QUESTION_FILE")"
           REQUEST="用 tracecite 分析这个问题。${QUESTION}"
-          SYSTEM_PROMPT="You are a coding agent investigating supplied runtime evidence. Follow the user's explicit request to use TraceCite. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims. Final evidence discipline: state only what the supplied artifact directly supports for the observed object or attempt. A frame blocked acquiring a lock is only a waiter, and a caller frame elsewhere in the same callback is not proof that it currently holds a lock acquired in a callee. If the current holder or a downstream lifecycle fact is not directly established, mark it unknown and stop at the artifact boundary instead of completing a plausible story. Prefer a smaller supported mechanism over starvation, deadlock, cycle, retry, cleanup, or recovery claims that require missing evidence."
+          SKILL_PROMPT="$(cat "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md")"
+          BASE_SYSTEM_PROMPT="You are a coding agent investigating supplied runtime evidence. Follow the user's explicit request to use TraceCite. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims. Final evidence discipline: state only what the supplied artifact directly supports for the observed object or attempt. A frame blocked acquiring a lock is only a waiter, and a caller frame elsewhere in the same callback is not proof that it currently holds a lock acquired in a callee. If the current holder or a downstream lifecycle fact is not directly established, mark it unknown and stop at the artifact boundary instead of completing a plausible story. Prefer a smaller supported mechanism over starvation, deadlock, cycle, retry, cleanup, or recovery claims that require missing evidence."
+          SYSTEM_PROMPT="${BASE_SYSTEM_PROMPT}
+
+The following TraceCite Skill contract is mandatory for this run:
+${SKILL_PROMPT}"
           mkdir -p "$RESULT/session"
           cd "$INPUT_ROOT"
           unset TRACECITE_BENCHMARK_MODE || true
