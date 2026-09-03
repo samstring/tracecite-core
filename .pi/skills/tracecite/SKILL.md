@@ -8,6 +8,17 @@ compatibility: Requires the TraceCite Pi extension and tracecite_search/tracecit
 
 Build the **smallest supported causal proof**. Correctness beats completeness. TraceCite transports evidence; it never supplies hidden ownership, lifecycle, or causal facts.
 
+## Execution card — obey before any retrieval
+
+For a stack-only artifact, keep this card active for the whole run:
+
+1. Use at most two orientation calls to locate one representative domain-specific blocked stack. After that stack is found, stop broad discovery queries such as `goroutine`, `Lock`, `semacquire`, `metadata`, generic subsystem nouns, pointer/address searches, or equivalent-waiter census.
+2. Extract the domain-specific component/frame symbols from the representative cross-component path. Every remaining causal-discriminator retrieval must target exact symbols/call-chain structure that could expose the **reverse component nesting**. A call that only returns the same blocked acquisition direction is non-advancing.
+3. After two non-advancing reverse-path attempts, or when TraceCite reports the evidence-call ceiling, causal discovery is over. Do not reconstruct a missing edge from memory. Emit the required four-paragraph stack-only final immediately from the supported ledger.
+4. In that final, same-lock reader/writer waiters never become a holder, starvation, deadlock, or cyclic-wait claim; lifecycle/process/restart facts never appear beyond the required boundary sentence.
+
+This execution card is Agent investigation/stopping policy. It must not be moved into Runtime.
+
 ## Non-negotiable evidence firewall
 
 These rules override the user's request for a complete causal story. If the supplied artifact cannot prove a requested causal/lifecycle step, say that it is not established and omit the story. Never satisfy a requested explanation by filling evidence gaps from model memory, source-code plausibility, runtime semantics, symptoms, pointer values, or likely control flow.
