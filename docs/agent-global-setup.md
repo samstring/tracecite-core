@@ -2,7 +2,7 @@
 
 TraceCite is a cross-project Evidence Runtime. Installing TraceCite should configure the agent once at user scope; it should not require copying investigation rules into every repository.
 
-The activation boundary is equally important: merely having TraceCite installed must not change unrelated coding or debugging tasks. TraceCite investigation mode becomes active only while the current task actually uses TraceCite tools or TraceCite skills.
+The activation boundary is equally important: merely having TraceCite installed must not change unrelated coding or debugging tasks. TraceCite investigation mode becomes active only while the current task actually uses TraceCite tools, TraceCite skills, or capabilities contributed by a TraceCite extension such as TraceCite Mobile.
 
 ## Install contract for coding agents
 
@@ -12,7 +12,7 @@ When an AI coding agent is asked to install or configure TraceCite for general u
 2. Install the canonical `tracecite-investigate` skill at user scope, preferably by copying or symlinking this repository's `.agents/skills/tracecite-investigate/` directory to `~/.agents/skills/tracecite-investigate/`.
 3. Add the global rule below to the host's user-level/global instruction mechanism. Preserve existing user instructions; append or merge rather than overwrite.
 4. Do **not** add a TraceCite rule to the current repository unless the user explicitly asks for repository-local policy.
-5. Do **not** activate TraceCite investigation mode merely because the task involves logs, debugging, incidents, traces, or root-cause analysis. Activation requires actual TraceCite tool/skill use.
+5. Do **not** activate TraceCite investigation mode merely because the task involves logs, debugging, incidents, traces, or root-cause analysis. Activation requires actual TraceCite tool/skill use or use of a capability contributed by an installed TraceCite extension.
 
 `~/.agents/skills/` is the preferred shared skill location because current Codex, Cursor, and Pi releases all discover user-level Agent Skills there.
 
@@ -23,10 +23,11 @@ Add this rule to the agent's global instructions:
 ```md
 ## TraceCite investigation mode
 
-Only while performing a task that uses TraceCite tools or TraceCite skills.
+Only while performing a task that uses TraceCite tools, TraceCite skills, or capabilities contributed by a TraceCite extension.
 Do not apply this mode to unrelated tasks, and do not select TraceCite solely because a task is a debugging or investigation task.
 
 - Use the `tracecite-investigate` skill for TraceCite evidence work.
+- Treat diagnostic artifacts produced by TraceCite extensions as TraceCite evidence sources and prefer the canonical Evidence Runtime for large, live, or multi-source evidence instead of broad native reads/grep.
 - Keep retrieval bounded.
 - Before each new retrieval, identify the unresolved material claim and the discriminator that could change it.
 - Once evidence sufficiently supports the root cause or other conclusion required by the user, answer without confirmatory searches.
@@ -54,6 +55,12 @@ The `tracecite-investigate` skill defines the detailed Evidence API, provenance,
 
 For Codex/OpenAI-compatible hosts, the skill metadata disables implicit invocation. Cursor-specific skill metadata also marks the skill explicit-only. Other hosts should treat the conservative skill description and this global activation rule as the boundary: do not auto-select TraceCite for ordinary debugging.
 
+## Extension handoff rule
+
+TraceCite extensions extend the Core workflow; they do not create a parallel investigation path. An extension may acquire device logs, traces, crash reports, support bundles, or other domain artifacts. Once those artifacts are available, large/live/multi-source diagnostic evidence should flow into the canonical Evidence Runtime (`retrieve`, `materialize`, `replay`, `aggregate`, `traverse`, `verify`) for evidence access and citation. The Agent still owns hypotheses, causal reasoning, sufficiency, and stopping.
+
+Small already-bounded helper files may still be read directly when that is simpler. The rule is specifically intended to prevent a TraceCite extension from acquiring a large diagnostic artifact and then bypassing TraceCite with a broad `cat`, `grep`, or full-file read.
+
 ## Repository files are source/validation assets
 
 This repository still contains `.agents/`, `.pi/`, and `.cursor/` files for development, validation, and host compatibility. Their presence in this repository is not a recommendation to copy those directories into every target project.
@@ -67,5 +74,5 @@ install tracecite-investigate globally
         +
 append one conditional global rule
         ->
-activate only when TraceCite is actually used
+activate when TraceCite or a TraceCite extension is actually used
 ```
