@@ -1,14 +1,14 @@
-trigger: 2026-09-04 first-success-orientation-exit diagnostic with neutral transport cap aligned to skill budget
+trigger: 2026-09-04 synchronization-first six-call diagnostic after early-stop miss
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-bounded-root-cause-firewall
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-six-call-hard-stop-plus-first-success-orientation-exit-plus-exact-four-paragraph-final
+adaptive_stopping_skill: stack-only-six-call-hard-stop-plus-synchronization-first-orientation-plus-single-call-reciprocal-search-plus-exact-four-paragraph-final
 skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-6
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: invalid-source repair must preserve the same unresolved claim; orientation ends immediately after the first successful representative blocked path; every later call must target reverse component nesting only; whole answer must start Observed and contain exactly four short paragraphs; no pointer-derived object identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
+diagnostic_focus: source repair preserves the same unresolved claim; orientation must land on a synchronization-bearing causal path rather than generic chan/logger/fifo symptoms; after orientation each call targets one missing reciprocal endpoint with no duplicate expansions or parallel speculative searches; whole answer must start Observed and contain exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
 agent_timeout_seconds: 900
