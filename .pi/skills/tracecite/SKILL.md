@@ -30,6 +30,17 @@ If the artifact is `stack_only`, use this exact reasoning state machine:
 
 For `stack_only`, a final that affirmatively names a holder, current ownership, starvation direction, hidden writer/reader state, or a specific waiter as holder is invalid unless independent supplied evidence establishes that claim. A structural lock-order inversion/cyclic-wait mechanism is different from current-holder identity: it may be reported only when two independent observed stack paths directly materialize opposite nested acquisition order.
 
+### Reciprocal component-lock test
+
+Do not confuse **same-lock queue shape** with **reciprocal lock-order structure**.
+
+- Reader and writer waiters on the same lock are one contention fact, not two opposing paths.
+- Two opposite structural paths require two different blocked acquisition sites associated with two distinct synchronization domains/components, with the higher-level call structure reversed across the two observed stacks. Abstractly: one observed stack is `component A operation -> component B lock acquisition`, while another is `component B operation -> component A lock acquisition`.
+- The reciprocal relationship must come from the materialized stack frames themselves. Do not invent an outer lock hold, receiver identity, or source-code acquire/release scope that is not present in supplied evidence.
+- When this reciprocal pattern is directly materialized, report it as a **structural lock-order inversion / cyclic-wait risk or mechanism supported by the observed stacks**, while keeping current holder identity unknown unless ownership-capable evidence exists.
+- Prefer testing this reciprocal discriminator over counting additional waiters, discussing RWMutex fairness, or explaining downstream symptoms. Once both reciprocal paths are materialized, stop retrieval.
+- If the second reciprocal path is not directly observed within the bounded search, do not substitute reader/writer mix on one lock; downgrade to observed contention.
+
 ## Mandatory protocol
 
 These rules override narrative quality and scorer coverage.
@@ -47,6 +58,7 @@ These rules override narrative quality and scorer coverage.
 5. Separate **current-holder proof** from **structural lock-order proof**:
    - a definitive claim that a particular current deadlock edge is `holds A -> waits B` requires independent current-ownership evidence;
    - a structural lock-order inversion/cyclic-wait mechanism may be reported from `stack_only` evidence only when two independent observed stacks directly materialize opposite nested acquisition paths `A -> acquire(B)` and `B -> acquire(A)`;
+   - reader-vs-writer waits on one synchronization object do not satisfy the two-path rule; the two paths must be reciprocal across distinct synchronization domains/components;
    - structural-path evidence never identifies the current holder and never allows converting either waiter into a holder. If only one direction is observed, report blocking/contention and mark the opposing path unknown.
 6. A lock being unavailable implies only that acquisition cannot proceed at that instant. Do not infer which goroutine holds it, whether the holder is a reader or writer, whether the holder is itself blocked, or whether starvation/fairness behavior explains the wait.
 7. Stop at the artifact boundary. External process creation, RPC completion, retries, cleanup/reaping, restart recovery, and helper-goroutine identity require independent evidence tying them to the observed attempt. User-described symptoms are hypotheses, not evidence.
@@ -85,6 +97,7 @@ Immediately before emitting the final, delete any sentence that does any of the 
 - promotes an unobserved sibling function/path into the mechanism merely because remembered code says it uses the same lock;
 - equates lock/object identity, singleton/shared cardinality, or receiver identity from raw stack pointers without reliable provenance;
 - infers holder identity/state from waiter counts, queue ordering, reader/writer mix, or RWMutex fairness behavior;
+- treats reader/writer waits on one lock as the two reciprocal paths required for structural lock-order proof;
 - claims a structural lock-order inversion/cyclic-wait mechanism without two independent observed opposite nested acquisition paths;
 - links a helper goroutine/process to the blocked request by name or temporal proximity alone;
 - explains downstream process/RPC/retry/restart/cleanup/reaping behavior;
@@ -98,6 +111,7 @@ A caveat later in the answer does not repair an unsupported earlier claim: remov
 - `tracecite_expand`: normally `radius <= 16`
 - target total calls `<= 8`; absolute ceiling `16`
 - after one representative blocker is found, use at most four additional evidence calls to locate a structurally distinct opposing path; if those calls do not advance that discriminator, mark it `bounded_unknown` and finalize
+- while testing structural lock order, search for a reciprocal component-acquisition path rather than another waiter on the first lock
 - after two non-advancing calls for the same claim, mark it `bounded_unknown`
 - no confirmation pass for an already closed claim
 - no equivalent-waiter census
@@ -114,7 +128,7 @@ Keep the answer compact and normal:
 4. direct impact visible in the artifact only;
 5. one artifact-boundary sentence if downstream lifecycle is not established.
 
-For `stack_only`, write the bounded conclusion first. Do not include a speculative “most likely synchronization failure” section after acknowledging that ownership is unknown.
+For `stack_only`, write the bounded conclusion first. If two reciprocal component-acquisition paths are observed, state that structural inversion first and then immediately state that current holders are unknown. Do not replace that reciprocal mechanism with a same-lock reader/writer convoy narrative. Do not include a speculative “most likely synchronization failure” section after acknowledging that ownership is unknown.
 
 If the exact root cause is not closed, say so. A precise bounded conclusion is a successful outcome; an unsupported complete story is not.
 
