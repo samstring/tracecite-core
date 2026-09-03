@@ -6,6 +6,7 @@ on:
       - feature_for_agent
     paths:
       - .github/workflows/pi-containerd-6772-tracecite-hard-stop.yml
+      - .pi/skills/tracecite/SKILL.md
   workflow_dispatch:
 
 permissions:
@@ -120,7 +121,7 @@ jobs:
           export TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT_ROOT/tracecite-runtime-evidence-access.jsonl"
           export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$RESULT_ROOT/tracecite-blocked-native-evidence-attempts.jsonl"
 
-          BASE_PROMPT="You are a coding agent investigating a real failure using both supplied runtime evidence and the checked-out pre-fix source code. Keep the investigation bounded. Once the root cause is sufficiently supported by logs and code, answer immediately instead of performing confirmatory searches. Before every additional TraceCite retrieval, emit a concise retrieval justification with exactly two short fields: claim: the one root-cause-relevant fact still unresolved or contradicted; discriminator: the concrete evidence that could change or settle that claim. If either field cannot be named, or if no root-cause-relevant question remains unanswered, do not retrieve again; answer immediately. Use source code to verify the mechanism rather than merely restating symptoms. Cite exact evidence lines for runtime claims and exact source file paths plus line numbers for code claims. Do not use external knowledge or the known fix."
+          BASE_PROMPT="You are a coding agent investigating a real failure using both supplied runtime evidence and the checked-out pre-fix source code. Keep the investigation bounded. Once the root cause is sufficiently supported by logs and code, answer immediately instead of performing confirmatory searches. Before every additional TraceCite retrieval, emit a concise retrieval justification with exactly two short fields: claim: the one root-cause-relevant fact still unresolved or contradicted; discriminator: the concrete result that could change that claim. If either field cannot be named, or if no root-cause-relevant question remains unanswered, do not retrieve again; answer immediately. Use source code to verify the mechanism rather than merely restating symptoms. Cite exact evidence lines for runtime claims and exact source file paths plus line numbers for code claims. Do not use external knowledge or the known fix."
           TRACE_PROMPT="$BASE_PROMPT Runtime evidence is in ./runtime-evidence and must be accessed only through TraceCite tools. Pre-fix source code is in ./code and may be inspected with native read/grep/find/bash/ls tools. Do not use native tools to read runtime-evidence."
           TRACE_REQUEST="用 tracecite 读取日志，并结合 ./code 里的 pre-fix 源码分析这个问题。${QUESTION}"
 
