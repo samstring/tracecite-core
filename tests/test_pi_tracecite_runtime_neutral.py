@@ -85,8 +85,8 @@ def test_skill_has_pre_call_claim_discriminator_and_causal_priority() -> None:
     runtime = IMPL.read_text(encoding="utf-8")
     assert "Before every TraceCite call identify one unresolved claim and one discriminator" in skill
     assert "If the next call cannot change the conclusion, stop" in skill
-    assert "After the first cross-component path, search only for the reciprocal component path" in skill
-    assert "Do not spend calls on more equivalent waiters or same-lock queue shape" in skill
+    assert "Once a path crosses from component A into component B, the next useful search is for the reverse B-to-A nesting" in skill
+    assert "Do not spend calls proving that many equivalent waiters exist" in skill
     assert "discriminator" not in runtime
 
 
@@ -111,7 +111,7 @@ def test_skill_forces_final_when_mechanism_closed_or_remaining_edge_bounded_unkn
     assert "minimum exact evidence for the representative path(s)" in skill
     assert "holder/ownership uncertainty explicitly stated" in skill
     assert "direct artifact-visible impact only" in skill
-    assert "If the exact root cause is not closed, say so" in skill
+    assert "the exact root cause remains unclosed" in skill
     assert "remaining causal discriminator" not in runtime
 
 
