@@ -29,12 +29,18 @@
 // - benchmark: TRACECITE_BENCHMARK_MODE=tracecite forces strict evidence isolation;
 // - product: an explicit user request such as "用 tracecite" / "use tracecite" activates
 //   the same native-evidence guard for that Pi agent run when an evidence root is configured.
+//
+// Optional retrieval guard:
+// - disabled by default;
+// - when configured, applies only mechanical no-growth and total-call limits at the Host layer.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import traceciteTools from "./pi_tracecite_extension_impl.ts";
 import traceciteEvidenceGuard from "./pi_strict_evidence_boundary.ts";
+import traceciteRetrievalGuard from "./pi_tracecite_retrieval_guard.ts";
 
 export default function traceciteExtension(pi: ExtensionAPI) {
   traceciteEvidenceGuard(pi);
+  traceciteRetrievalGuard(pi);
   traceciteTools(pi);
 }
