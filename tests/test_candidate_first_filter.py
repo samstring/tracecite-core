@@ -151,6 +151,27 @@ def test_scoped_ignorecase_falls_back_without_missing_match(tmp_path: Path) -> N
     assert segmenter.built_records == 2
 
 
+def test_ascii_global_ignorecase_remains_candidate_first(tmp_path: Path) -> None:
+    source = tmp_path / "ascii-ignorecase.log"
+    source.write_text(
+        "2026-08-08 14:10:00 NEEDLE target\n"
+        "2026-08-08 14:10:01 ordinary\n",
+        encoding="utf-8",
+    )
+    segmenter = CountingFormatSegmenter()
+
+    result = filter_text(
+        source,
+        pattern=r"(?ai)needle target",
+        output_path=tmp_path / "out.log",
+        segmenter=segmenter,
+    )
+
+    assert result.match_records == 1
+    assert result.candidate_strategy == "candidate-first:required-literal"
+    assert segmenter.built_records == 1
+
+
 def test_unmatched_summary_is_not_published(tmp_path: Path) -> None:
     source = tmp_path / "schema.log"
     _write_records(source, 3, hit_at=1)
