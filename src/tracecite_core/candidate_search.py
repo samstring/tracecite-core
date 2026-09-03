@@ -14,12 +14,9 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 try:
-    from re import _constants as _RE_CONSTANTS  # type: ignore[attr-defined]
     from re import _parser as _RE_PARSER  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover
     import sre_parse as _RE_PARSER  # type: ignore[no-redef]
-
-    _RE_CONSTANTS = _RE_PARSER  # type: ignore[assignment]
 
 from .matcher import Matcher
 from .records import Record
@@ -158,12 +155,14 @@ def candidate_anchors(matcher: Matcher) -> Optional[Tuple[str, ...]]:
     if matcher.terms is not None:
         anchors: List[str] = []
         for term in matcher.terms:
-            # Pure literal OR means every branch must be representable by the
-            # line scanner. A literal containing only a newline cannot be.
-            anchor = _split_anchor(term)
-            if not anchor:
+            # Literal matching uses the original AC/literal Matcher on each
+            # physical line. A literal spanning physical lines cannot therefore
+            # use this fast path without changing semantics.
+            if "\n" in term or "\r" in term:
                 return None
-            anchors.append(anchor)
+            if not term:
+                return None
+            anchors.append(term)
         return tuple(dict.fromkeys(anchors)) or None
 
     if matcher.regex is None:
@@ -330,17 +329,16 @@ def _iter_start_delimited_candidates(
     *,
     encoding: str,
 ) -> Iterator[Record]:
-    """Index boundaries cheaply, materialising text only for candidate records."""
+    """Scan boundaries, constructing Record objects only for candidate records."""
     pattern = getattr(segmenter, "pattern", None)
     if pattern is None:
         return
     candidate_record = False
     pending_start = 1
     pending_rows: Optional[List[Tuple[int, str]]] = None
-
-    # We intentionally retain only candidate record text. Before the first hit
-    # in a record, only line numbers are tracked; once a candidate is seen we
-    # reconstruct the prefix from a tiny line-number cache below.
+    # Keep only one raw record prefix at a time. We deliberately avoid invoking
+    # the segmenter's Record construction for non-candidates; the prefix is
+    # needed only so a hit on a continuation line can recover its record header.
     prefix_rows: List[Tuple[int, str]] = []
     with Path(path).open("r", encoding=encoding, errors="replace") as handle:
         for line_number, line in enumerate(handle, start=1):
