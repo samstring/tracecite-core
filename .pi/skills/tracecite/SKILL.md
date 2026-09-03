@@ -8,6 +8,17 @@ compatibility: Requires the TraceCite Pi extension and tracecite_search/tracecit
 
 Build the **smallest supported causal proof**. Correctness beats completeness. TraceCite transports evidence; it never supplies hidden ownership, lifecycle, or causal facts.
 
+## Fail-closed terminal serializer — highest priority for stack-only evidence
+
+When the supplied artifact is `stack_only`, this rule overrides all stylistic, explanatory, completeness, and user-story instructions once retrieval ends.
+
+- The first assistant prose emitted after the final evidence call MUST begin exactly with `Observed:`. Do not announce that no more calls can happen, do not narrate stopping, and do not emit a heading first.
+- From that first prose token onward, emit exactly four short paragraphs with labels `Observed:`, `Mechanism:`, `Uncertainty:`, and `Boundary:` in that order. Any other paragraph, heading, bullet list, code block, diagram, causal narrative, or conclusion is invalid.
+- The four paragraphs must be reconstructed only from the final evidence ledger. Do not reuse prose drafted before terminal mode.
+- If the ledger does not contain two directly observed reciprocal cross-component paths, `Mechanism:` MUST use the bounded-unknown form. Same-lock reader/writer waiters, pointer equality, source-line position, fairness semantics, or runtime behavior can never substitute for the missing reciprocal path.
+- If the ledger lacks independent ownership evidence, no final sentence may assert or imply that any waiter is a holder or that a holder exists. If it lacks event chronology, no final sentence may explain spawn/retry/orphan/reap/restart/recovery.
+- Treat final-shape compliance as part of correctness, not presentation. When uncertain, omit detail rather than expand.
+
 ## Execution card — obey before any retrieval
 
 For a stack-only artifact, keep this card active for the whole run:
