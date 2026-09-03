@@ -6,6 +6,8 @@
 
 TraceCite 是 **Evidence Runtime**，不是自治调查 Agent。Host 把确定性的 TraceCite Evidence 能力暴露给外部 Agent；Agent 负责假设、调查顺序、因果推理、证据是否足够、最终答案和停止时机。
 
+对于日常使用，TraceCite 应当在 user/global scope 安装一次。Investigation workflow 不应该变成每个仓库都默认生效的 debugging rule。完整约定见 [全局 Agent 安装](agent-global-setup.zh-CN.md)。
+
 ## 1. Host Contract
 
 ```text
@@ -52,24 +54,91 @@ TraceCite **不负责**：
 
 CLI/Host 可以暴露 `probe`、`search`、`expand`、`expand-many` 等便利名字；这些 wrapper 不拥有第二套 Evidence 或 stopping 语义。
 
-## 3. 所有 Agent 都应遵守的 Evidence 规则
+## 3. Activation 与 Evidence 使用规则
 
-1. Incident 事实只能来自 supplied artifacts，除非用户明确授权外部来源。
-2. 每次继续 retrieval 前，先明确一个未闭合的 material claim，以及会改变它的 discriminator。
-3. 优先获取能支持/反驳该 claim 的最小代表性证据。
-4. Material factual claim 尽量引用精确 materialized line/range。
-5. Search match 是 Observation，不自动等于 causal proof。
-6. No-match 是 retrieval fact，不自动等于真实世界不存在。
-7. Truncation、missing evidence、Coverage 不完整、source change 必须显式保留。
-8. 复用已知 ref/range；真的需要重新考虑旧证据时使用 replay。
-9. 用户要求的最小 causal proof 已闭合后，不做 evidence census 或确认性搜索。
-10. 是否足够、何时停止由 Agent 决定，不由 TraceCite Runtime 决定。
+TraceCite investigation mode 是条件触发的：只有当前任务实际使用 TraceCite tool 或 TraceCite skill 时才启用。不要仅仅因为任务涉及 debugging、log、trace、incident 或 root-cause analysis 就自动启用 TraceCite。
 
-## 4. Pi
+TraceCite mode 启用后：
 
-### 已验证方法
+1. TraceCite Evidence 工作使用 `tracecite-investigate` skill。
+2. Incident 事实只能来自 supplied artifacts，除非用户明确授权外部来源。
+3. 每次继续 retrieval 前，先明确一个未闭合的 material claim，以及会改变它的 discriminator。
+4. 优先获取能支持/反驳该 claim 的最小代表性证据。
+5. Material factual claim 尽量引用精确 materialized line/range。
+6. Search match 是 Observation，不自动等于 causal proof。
+7. No-match 是 retrieval fact，不自动等于真实世界不存在。
+8. Truncation、missing evidence、Coverage 不完整、source change 必须显式保留。
+9. 复用已知 ref/range；真的需要重新考虑旧证据时使用 replay。
+10. 当证据已经足够支持用户要求的 root cause 或其他结论时，直接回答，不继续做确认性搜索。
+11. 是否足够、何时停止由 Agent 决定，不由 TraceCite Runtime 决定。
 
-仓库正式 Pi A/B 使用：
+建立这个 activation boundary 的全局 Rule 见 [全局 Agent 安装](agent-global-setup.zh-CN.md)。
+
+## 4. 共享的全局 Skill
+
+本仓库 canonical reusable skill source：
+
+```text
+.agents/skills/tracecite-investigate/SKILL.md
+```
+
+日常本地使用建议安装到：
+
+```text
+~/.agents/skills/tracecite-investigate/SKILL.md
+```
+
+当前 Codex、Cursor、Pi 都会发现 `~/.agents/skills/` 下的 user-level skills，因此优先使用这一个共享位置，而不是为每个 Host、每个项目维护一份重复副本。
+
+在 Host 支持 invocation policy 时，这个 skill 应当 explicit-only。它不能变成一个只要看到 debugging 任务就自动启用的通用 skill。
+
+## 5. Codex / OpenAI-compatible Agent
+
+用户级 Codex 配置建议：
+
+- 把共享 skill 安装到 `~/.agents/skills/tracecite-investigate/`；
+- 把 canonical 条件触发 Rule 追加到 `~/.codex/AGENTS.md`；
+- 保留用户原有 global instructions，不要整文件覆盖；
+- 真正使用 TraceCite 时显式调用 `$tracecite-investigate`。
+
+仓库根目录的 `AGENTS.md` 只约束 TraceCite 仓库开发，不是用户级 TraceCite investigation policy。
+
+Codex 可以直接通过 shell 调 TraceCite CLI：
+
+```bash
+tracecite probe ./logs --glob "*.log" --recursive
+tracecite search app.log "<discriminator>" --snapshot \
+  --agent-profile stateful-index \
+  --ledger-dir .tracecite/ledger \
+  --context-id incident-42
+tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
+```
+
+输入很小、已经有界时直接 read 仍然合理；TraceCite 主要解决 evidence volume、provenance、重复上下文和跨 source correlation 带来的成本与可信问题。
+
+## 6. Cursor
+
+用户级 Cursor 配置建议：
+
+- 把共享 skill 安装到 `~/.agents/skills/tracecite-investigate/`；
+- 在 `Customize -> Rules` 中把 canonical 条件触发 Rule 添加成 Cursor **User Rule**（或等价 user-level rule 机制）；
+- 真正使用 TraceCite 时显式调用 `/tracecite-investigate`。
+
+仓库仍保留 `.cursor/rules/tracecite-investigation.mdc`，作为开发/兼容性资产。它不是推荐的生产安装方式，也不应该复制到每个业务项目。
+
+Cursor 与 Codex 使用同一套 CLI/Runtime 语义，不创建 Cursor 专属的 Evidence / Coverage / correctness 模型。
+
+## 7. Pi
+
+用户级 Pi 配置建议：
+
+- 把共享 skill 安装到 `~/.agents/skills/tracecite-investigate/`；
+- 把 canonical 条件触发 Rule 追加到 `~/.pi/agent/AGENTS.md`；
+- 真正使用 TraceCite 时显式调用 `/skill:tracecite-investigate`。
+
+### 已验证 Benchmark 方法
+
+仓库正式 Pi A/B 为了复现性，继续保留历史 repository-local setup：
 
 - `.pi/skills/tracecite/SKILL.md`；
 - `benchmarks/agent-investigation/pi_tracecite_extension.ts`；
@@ -88,7 +157,7 @@ TraceCite 追加：
 Follow the user's explicit request to use TraceCite. All runtime-evidence content must be obtained through TraceCite tools; do not use native file-access tools for the evidence.
 ```
 
-仓库内复现方式：
+仓库内 benchmark 复现方式：
 
 ```bash
 BASE_PROMPT='You are a coding agent investigating supplied runtime evidence. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims.'
@@ -103,60 +172,9 @@ pi \
   "用 tracecite 分析这个问题。${QUESTION}"
 ```
 
-Benchmark extension 是 Adapter，不是新的 Evidence 层。生产 Pi Host 可以把同样的 canonical Evidence 语义包装成独立 adapter。
+这个 benchmark setup 是验证 fixture，不是推荐的日常全局安装布局。生产 Pi Host 可以把同样的 canonical Evidence 语义包装成自己的 adapter。
 
-## 5. Codex / OpenAI-compatible Agent
-
-长期生效的仓库工程约束放在根目录 `AGENTS.md`。可复用的 Evidence 调查工作流放在：
-
-```text
-.agents/skills/tracecite-investigate/SKILL.md
-```
-
-这样 `AGENTS.md` 保持短而稳定，详细 Evidence API / trust semantics 只在相关任务需要时进入上下文。
-
-推荐请求：
-
-```text
-Use $tracecite-investigate to investigate <problem> from the supplied evidence.
-Keep retrieval bounded. Cite exact materialized evidence for material factual claims.
-Do not fill evidence gaps with external knowledge; qualify unsupported parts explicitly.
-```
-
-Codex 可以直接通过 shell 调 TraceCite CLI：
-
-```bash
-tracecite probe ./logs --glob "*.log" --recursive
-tracecite search app.log "<discriminator>" --snapshot \
-  --agent-profile stateful-index \
-  --ledger-dir .tracecite/ledger \
-  --context-id incident-42
-tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
-```
-
-输入很小、已经有界时直接 read 仍然合理；TraceCite 主要解决的是 evidence volume、provenance、重复上下文和跨 source correlation 带来的成本与可信问题。
-
-## 6. Cursor
-
-仓库提供 Project Rule：
-
-```text
-.cursor/rules/tracecite-investigation.mdc
-```
-
-该 Rule 使用 `alwaysApply: false`，用于 logs、traces、support bundle、crash report 和 root-cause 调查。Cursor 可以按 relevance 自动应用，也可以由用户在 Agent 中显式引用。
-
-推荐请求：
-
-```text
-Use the TraceCite investigation rule for this incident.
-Investigate only from the supplied evidence, keep retrieval bounded,
-and cite exact evidence ranges for the causal claims in the final answer.
-```
-
-Cursor 与 Codex 使用同一套 CLI/Runtime 语义，不创建 Cursor 专属的 Evidence / Coverage / correctness 模型。
-
-## 7. CLI transport 与 Context Engine
+## 8. CLI transport 与 Context Engine
 
 一次性调用：
 
@@ -183,7 +201,7 @@ tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
 
 详见 [Context Engine](context-engine.zh-CN.md)。
 
-## 8. Result 解释
+## 9. Result 解释
 
 执行状态和认识状态必须分开：
 
@@ -194,13 +212,13 @@ outcome = 返回 Evidence 对命题支持什么
 
 Agent 必须同时检查 Coverage / warnings / missing-evidence，不能因为一次成功的 zero-match 就推出全局不存在。
 
-## 9. Extension
+## 10. Extension
 
 Domain Extension 通过公开 TraceCite contract 提供领域事实/能力；不得拥有 model-specific token policy、seen-evidence state、root-cause conclusion 或 Agent stopping policy。
 
 详见 [Extension Contract](extension-contract.md)。
 
-## 10. Agent Host Benchmark
+## 11. Agent Host Benchmark
 
 评估 Agent Host 时：
 
