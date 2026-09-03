@@ -59,11 +59,11 @@ def test_skill_requires_two_observed_reciprocal_component_paths() -> None:
     assert "reversed component nesting" not in runtime
 
 
-def test_skill_uses_one_explicit_eight_call_counter() -> None:
+def test_skill_uses_one_explicit_six_call_counter() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "## Highest-priority stack-only stop contract" in skill
-    assert "8 total TraceCite evidence calls" in skill
+    assert "6 total TraceCite evidence calls" in skill
     assert "`tracecite_search` + `tracecite_expand` combined" in skill
     assert "Count locally from 1" in skill
     assert "Calls 1-2 are only for source repair/orientation" in skill
@@ -88,7 +88,7 @@ def test_skill_stops_after_nonadvancing_reciprocal_attempts() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "two **well-targeted** reciprocal attempts fail to advance" in skill
-    assert "call 8 returns" in skill
+    assert "call 6 returns" in skill
     assert "stop all tool use immediately" in skill
     assert "Broad waiter census, pointer searches, lifecycle searches, symptom sweeps, and duplicate expansions are forbidden after orientation" in skill
     assert "Issue at most one evidence call per model turn after orientation" in skill
