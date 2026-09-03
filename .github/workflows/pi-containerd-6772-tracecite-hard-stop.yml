@@ -134,7 +134,7 @@ jobs:
 
           start=$(date +%s)
           set +e
-          timeout -k 30s 300s pi \
+          timeout -k 30s 600s pi \
             --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
             --thinking off --mode text --print \
             --session-dir "$RESULT_ROOT/tracecite-session" \
