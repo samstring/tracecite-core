@@ -1,9 +1,18 @@
 ---
 name: tracecite-investigate
-description: Use TraceCite's canonical Evidence API to retrieve, materialize, replay, aggregate, traverse, verify, and cite evidence while preserving provenance, coverage, immutable source identity, novelty, and uncertainty. TraceCite does not choose hypotheses, causal conclusions, investigation order, sufficiency, or stopping.
+description: Use only when the current task is already using TraceCite tools/skills or the user explicitly requests TraceCite. Do not auto-select this skill for ordinary debugging. Use TraceCite's canonical Evidence API to retrieve, materialize, replay, aggregate, traverse, verify, and cite evidence while preserving provenance, coverage, immutable source identity, novelty, and uncertainty.
+disable-model-invocation: true
 ---
 
 # TraceCite Canonical Evidence API
+
+## Activation boundary
+
+This is a globally installable TraceCite skill, not a generic debugging policy.
+
+Do not activate it merely because a task involves logs, traces, incidents, support bundles, crash reports, or root-cause analysis. Activate it only when the user/host has chosen TraceCite or the current task is actually using TraceCite tools or TraceCite skills.
+
+While active, follow the host's TraceCite investigation mode: keep retrieval bounded, identify the unresolved material claim and discriminator before each new retrieval, stop confirmatory searching once the user's required conclusion is sufficiently supported, and cite exact materialized evidence ranges while separating observations from inferences.
 
 Use TraceCite as an Evidence Runtime, not as an investigator or conclusion generator.
 
@@ -163,4 +172,4 @@ TraceCite and this skill do not decide:
 - what the final conclusion should be;
 - when the Agent should stop.
 
-Read `../../../docs/agent-integration.md` for the canonical Host integration contract.
+Read `../../../docs/agent-integration.md` for the canonical Host integration contract and `../../../docs/agent-global-setup.md` for the global installation/activation contract.
