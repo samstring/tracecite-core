@@ -182,15 +182,6 @@ jobs:
                 python benchmarks/agent-investigation/pi_session_to_transcript.py \
                   "$SESSION" "$ANSWER" "$CASE_RESULT/${arm}-transcript.jsonl" \
                   --mode "pi-${arm}" --model "$BENCH_MODEL" || true
-                python - "$CASE_DIR" "$CASE_RESULT/${arm}-transcript.jsonl" "$CASE_RESULT/${arm}-score.json" <<'PY'
-          import json, subprocess, sys
-          from pathlib import Path
-          case_dir=Path(sys.argv[1]); transcript=Path(sys.argv[2]); out=Path(sys.argv[3])
-          gold=json.loads((case_dir/'gold.json').read_text())
-          module='tracecite.root_cause_benchmarking' if 'root_cause_schema_version' in gold else 'tracecite.benchmarking'
-          p=subprocess.run([sys.executable,'-m',module,'score',str(case_dir),str(transcript)],text=True,capture_output=True)
-          out.write_text(p.stdout or json.dumps({'available':False,'returncode':p.returncode,'stderr':p.stderr[-2000:]}))
-          PY
                 python - "$CASE_RESULT/${arm}-transcript.jsonl" "$CASE_RESULT/${arm}-usage.json" <<'PY'
           import json, sys
           from pathlib import Path
@@ -219,7 +210,7 @@ jobs:
             printf '{"tracecite_evidence_calls":%s,"blocked_native_attempts":%s}\n' "$trace_calls" "$blocked" > "$CASE_RESULT/channel.json"
           done
 
-      - name: Build summary
+      - name: Build objective telemetry summary
         if: always()
         shell: bash
         run: |
@@ -256,21 +247,22 @@ jobs:
               'constrained_notices': sum(1 for e in guard_results if e.get('constrained_notice')),
             }
             for arm in ['native','tracecite']:
-              score=read_json(f'{arm}-score.json')
-              q=score.get('quality') if isinstance(score.get('quality'),dict) else {}
               row={
                 'case':case,
                 'arm':arm,
                 'exit':read_int(f'{arm}-exit.txt'),
                 'wall_seconds':read_int(f'{arm}-wall-seconds.txt'),
-                'score_passed':score.get('passed'),
-                'quality':q,
                 'usage':read_json(f'{arm}-usage.json'),
+                'answer_file':f'{arm}-answer.md',
+                'transcript_file':f'{arm}-transcript.jsonl',
+                'correctness':None,
+                'correctness_source':'manual_review',
               }
               if arm=='tracecite': row['retrieval_guard']=guard
               rows.append(row)
           payload={
             'model':(root/'model.txt').read_text().strip() if (root/'model.txt').is_file() else None,
+            'correctness_policy':'manual_review_only',
             'guard_config':{
               'no_growth_patience':int(os.environ.get('TRACECITE_NO_GROWTH_PATIENCE','0') or 0),
               'no_match_caution_after':int(os.environ.get('TRACECITE_NO_MATCH_CAUTION_AFTER','0') or 0),
