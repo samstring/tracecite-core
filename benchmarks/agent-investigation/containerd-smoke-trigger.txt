@@ -1,13 +1,13 @@
-trigger: 2026-09-03 fixed stack-only final template diagnostic after run 99 guard sync
+trigger: 2026-09-03 evidence-firewall stack-only diagnostic after run 100 semantic failure
 tracecite_only_tools: true
 runtime_agent_steering: false
-pi_agent_system_steering: bounded-root-cause-plus-final-evidence-discipline
+pi_agent_system_steering: bounded-root-cause-plus-terminal-evidence-firewall
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-fixed-final-template
+adaptive_stopping_skill: stack-only-evidence-firewall-four-paragraph-terminal
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: serialize stack-only final strictly from observed paths, supported reciprocal structure, holder uncertainty, and one lifecycle boundary; forbid post-template causal expansion
+diagnostic_focus: obey evidence class over requested narrative; never promote waiters to holders or stack position to lifecycle; emit exactly four evidence-bounded stack-only paragraphs
 agent_timeout_seconds: 900
