@@ -110,13 +110,14 @@ def test_skill_forces_final_when_mechanism_closed_or_remaining_edge_bounded_unkn
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "No confirmation pass for a closed claim" in skill
-    assert "strongest supported in-process mechanism" in skill
-    assert "minimum exact evidence for the representative path(s)" in skill
-    assert "holder/ownership uncertainty explicitly stated" in skill
-    assert "direct artifact-visible impact only" in skill
-    assert "the exact root cause remains unclosed" in skill
     assert "If either reciprocal path is missing in `stack_only`, the final mechanism must remain blocking/contention with root cause unclosed" in skill
     assert "The single lifecycle-boundary sentence is the only permitted downstream-lifecycle text" in skill
+    assert "### Stack-only fixed final template" in skill
+    assert "`Observed:` representative blocked path(s), with exact evidence lines" in skill
+    assert "`Mechanism:` either (a)" in skill
+    assert "`Uncertainty:` “Current lock holder/ownership is not established by this artifact.”" in skill
+    assert "`Boundary:` use the single lifecycle-boundary sentence from §4" in skill
+    assert "This template is a terminal serialization step, not a summary of exploratory reasoning" in skill
     assert "remaining causal discriminator" not in runtime
 
 
