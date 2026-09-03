@@ -86,7 +86,10 @@ def test_skill_has_pre_call_claim_discriminator_and_causal_priority() -> None:
     assert "Before every TraceCite call identify one unresolved claim and one discriminator" in skill
     assert "If the next call cannot change the conclusion, stop" in skill
     assert "Once a path crosses from component A into component B, the next useful search is for the reverse B-to-A nesting" in skill
+    assert "reciprocal retrieval must be **symbol-directed**" in skill
+    assert "Generic subsystem queries such as `Collect`, `metrics`, `prometheus`, `cgroup`, or `lock` are non-advancing" in skill
     assert "Do not spend calls proving that many equivalent waiters exist" in skill
+    assert "symbol-directed" not in runtime
     assert "discriminator" not in runtime
 
 
@@ -112,6 +115,8 @@ def test_skill_forces_final_when_mechanism_closed_or_remaining_edge_bounded_unkn
     assert "holder/ownership uncertainty explicitly stated" in skill
     assert "direct artifact-visible impact only" in skill
     assert "the exact root cause remains unclosed" in skill
+    assert "If either reciprocal path is missing in `stack_only`, the final mechanism must remain blocking/contention with root cause unclosed" in skill
+    assert "The single lifecycle-boundary sentence is the only permitted downstream-lifecycle text" in skill
     assert "remaining causal discriminator" not in runtime
 
 
