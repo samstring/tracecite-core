@@ -6,6 +6,8 @@ Status: current host integration contract for `feature_for_agent` / CA258 baseli
 
 TraceCite is an **Evidence Runtime**, not an autonomous investigator. A host exposes deterministic TraceCite evidence operations to an external agent; the agent owns hypotheses, investigation order, causal reasoning, sufficiency, the final answer, and stopping.
 
+For general user setup, TraceCite should be installed once at user/global scope. The investigation workflow must not become a generic repository debugging rule. See [Global agent setup](agent-global-setup.md).
+
 ## 1. Host contract
 
 ```text
@@ -52,24 +54,91 @@ The long-term Evidence API is expressed as six mechanical primitives:
 
 CLI/host adapters may expose convenience names such as `probe`, `search`, `expand`, and `expand-many`; those wrappers do not own a second evidence or stopping model.
 
-## 3. Evidence-use rules for every agent
+## 3. Activation and evidence-use rules
 
-1. Only supplied artifacts are evidence for incident-specific factual claims unless the user explicitly authorizes an external source.
-2. Before another retrieval, identify one unresolved material claim and a discriminator that can change it.
-3. Prefer the minimum representative evidence needed to support or contradict that claim.
-4. Cite exact materialized line/range evidence for material factual claims.
-5. A search match is an observation, not causal proof.
-6. A no-match is a retrieval fact, not proof of real-world absence.
-7. Truncation, missing evidence, incomplete Coverage, and source changes must remain explicit.
-8. Reuse known refs/ranges; use replay when reconsideration is genuinely needed.
-9. Do not perform an evidence census after the required causal proof is already supported.
-10. The agent decides when evidence is sufficient and when to stop.
+TraceCite investigation mode is conditional. It is active only while the current task actually uses TraceCite tools or TraceCite skills. Do not activate TraceCite solely because a task involves debugging, logs, traces, incidents, or root-cause analysis.
 
-## 4. Pi
+While TraceCite mode is active:
 
-### Validated setup
+1. Use the `tracecite-investigate` skill for TraceCite evidence work.
+2. Only supplied artifacts are evidence for incident-specific factual claims unless the user explicitly authorizes an external source.
+3. Before another retrieval, identify one unresolved material claim and a discriminator that can change it.
+4. Prefer the minimum representative evidence needed to support or contradict that claim.
+5. Cite exact materialized line/range evidence for material factual claims.
+6. A search match is an observation, not causal proof.
+7. A no-match is a retrieval fact, not proof of real-world absence.
+8. Truncation, missing evidence, incomplete Coverage, and source changes must remain explicit.
+9. Reuse known refs/ranges; use replay when reconsideration is genuinely needed.
+10. Once the evidence sufficiently supports the root cause or other conclusion required by the user, answer instead of performing confirmatory searches.
+11. The agent decides when evidence is sufficient and when to stop; TraceCite Runtime does not.
 
-The repository's formal Pi A/B harness uses:
+The global rule that establishes this activation boundary is defined in [Global agent setup](agent-global-setup.md).
+
+## 4. Shared global skill
+
+The canonical reusable skill source in this repository is:
+
+```text
+.agents/skills/tracecite-investigate/SKILL.md
+```
+
+For general local use, install it at:
+
+```text
+~/.agents/skills/tracecite-investigate/SKILL.md
+```
+
+Current Codex, Cursor, and Pi releases all discover user-level skills from `~/.agents/skills/`, so this is the preferred shared location instead of maintaining separate copies per host or per repository.
+
+The skill is designed to be explicit-only where the host supports invocation policy. It must not become a generic “debugging skill” that auto-activates simply because a task looks investigative.
+
+## 5. Codex / OpenAI-compatible agents
+
+For user-level Codex setup:
+
+- install the shared skill at `~/.agents/skills/tracecite-investigate/`;
+- append the canonical conditional TraceCite rule to `~/.codex/AGENTS.md`;
+- preserve any existing global instructions;
+- explicitly invoke the skill as `$tracecite-investigate` when TraceCite is actually being used.
+
+The repository root `AGENTS.md` is only a development contract for this TraceCite repository. It is not the user-level TraceCite investigation policy.
+
+Codex can use the TraceCite CLI through shell tools:
+
+```bash
+tracecite probe ./logs --glob "*.log" --recursive
+tracecite search app.log "<discriminator>" --snapshot \
+  --agent-profile stateful-index \
+  --ledger-dir .tracecite/ledger \
+  --context-id incident-42
+tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
+```
+
+For small, already-bounded evidence, direct reads remain legitimate; TraceCite is most useful when evidence volume, provenance, repetition, or cross-source correlation makes raw reads expensive or unsafe.
+
+## 6. Cursor
+
+For user-level Cursor setup:
+
+- install the shared skill at `~/.agents/skills/tracecite-investigate/`;
+- add the canonical conditional rule as a Cursor **User Rule** in `Customize -> Rules` (or the equivalent user-level rule mechanism);
+- explicitly invoke the skill as `/tracecite-investigate` when TraceCite is actually being used.
+
+The repository still contains `.cursor/rules/tracecite-investigation.mdc` as a development/compatibility asset. It is not the recommended production pattern and should not be copied into every application repository.
+
+Cursor uses the same CLI/Runtime semantics as Codex. Do not create Cursor-specific notions of Evidence, Coverage, or correctness.
+
+## 7. Pi
+
+For user-level Pi setup:
+
+- install the shared skill at `~/.agents/skills/tracecite-investigate/`;
+- append the canonical conditional rule to `~/.pi/agent/AGENTS.md`;
+- explicitly invoke the skill as `/skill:tracecite-investigate` when TraceCite is actually being used.
+
+### Validated benchmark setup
+
+The repository's formal Pi A/B harness intentionally keeps its repository-local historical setup for reproducibility:
 
 - `.pi/skills/tracecite/SKILL.md`;
 - `benchmarks/agent-investigation/pi_tracecite_extension.ts`;
@@ -88,7 +157,7 @@ TraceCite addition:
 Follow the user's explicit request to use TraceCite. All runtime-evidence content must be obtained through TraceCite tools; do not use native file-access tools for the evidence.
 ```
 
-Repository-local invocation pattern:
+Repository-local benchmark invocation:
 
 ```bash
 BASE_PROMPT='You are a coding agent investigating supplied runtime evidence. Keep the investigation bounded. Once the root cause is sufficiently supported, answer immediately instead of performing confirmatory searches. Cite exact evidence lines for material factual claims.'
@@ -103,60 +172,9 @@ pi \
   "Use TraceCite to investigate this problem: ${QUESTION}"
 ```
 
-The benchmark extension is an adapter, not a new evidence layer. A production Pi host can expose the same semantics through a separately packaged adapter.
+This benchmark setup is a validation fixture, not the recommended general installation layout. A production Pi host can expose the same canonical evidence semantics through its own adapter.
 
-## 5. Codex / OpenAI-compatible agents
-
-Repository-wide durable constraints live in root `AGENTS.md`. The reusable evidence workflow lives in:
-
-```text
-.agents/skills/tracecite-investigate/SKILL.md
-```
-
-The skill documents canonical Evidence API/trust semantics and is intentionally separate from `AGENTS.md` so detailed workflow context is loaded only when relevant.
-
-Recommended request:
-
-```text
-Use $tracecite-investigate to investigate <problem> from the supplied evidence.
-Keep retrieval bounded. Cite exact materialized evidence for material factual claims.
-Do not fill evidence gaps with external knowledge; qualify unsupported parts explicitly.
-```
-
-Codex can use the TraceCite CLI through shell tools:
-
-```bash
-tracecite probe ./logs --glob "*.log" --recursive
-tracecite search app.log "<discriminator>" --snapshot \
-  --agent-profile stateful-index \
-  --ledger-dir .tracecite/ledger \
-  --context-id incident-42
-tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
-```
-
-For small, already-bounded evidence, direct reads remain legitimate; TraceCite is most useful when evidence volume, provenance, repetition, or cross-source correlation makes raw reads expensive or unsafe.
-
-## 6. Cursor
-
-This repository ships a project rule:
-
-```text
-.cursor/rules/tracecite-investigation.mdc
-```
-
-The rule is relevance-triggered (`alwaysApply: false`) and is intended for logs, traces, support bundles, crash reports, and root-cause investigations. Cursor can apply it intelligently or the user can reference the rule explicitly.
-
-Recommended request:
-
-```text
-Use the TraceCite investigation rule for this incident.
-Investigate only from the supplied evidence, keep retrieval bounded,
-and cite exact evidence ranges for the causal claims in the final answer.
-```
-
-Cursor uses the same CLI/Runtime semantics as Codex. Do not create Cursor-specific notions of Evidence, Coverage, or correctness.
-
-## 7. CLI transport and Context Engine
+## 8. CLI transport and Context Engine
 
 For one-shot use:
 
@@ -183,7 +201,7 @@ tracecite expand-many .tracecite/ledger RESULT_ID '#L120' '#L188-L190'
 
 See [Context Engine](context-engine.md).
 
-## 8. Result interpretation
+## 9. Result interpretation
 
 Execution state and epistemic state are separate:
 
@@ -194,13 +212,13 @@ outcome = what does the returned evidence support?
 
 Agents must inspect Coverage/warnings/missing-evidence and must not infer global absence from a successful zero-match operation.
 
-## 9. Extensions
+## 10. Extensions
 
 Domain extensions provide domain facts/capabilities through public TraceCite extension contracts. They must not own model-specific token policy, seen-evidence state, root-cause conclusions, or Agent stopping policy.
 
 See [Extension Contract](extension-contract.md).
 
-## 10. Benchmarking hosts
+## 11. Benchmarking hosts
 
 When evaluating an Agent host:
 
