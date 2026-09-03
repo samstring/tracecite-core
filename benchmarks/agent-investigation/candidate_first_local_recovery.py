@@ -6,6 +6,10 @@ import time
 from pathlib import Path
 
 from tracecite.runtime import tools as runtime_tools
+from tracecite.runtime.candidate_filter import (
+    CandidateFilterUnsupported,
+    filter_literal_single_line,
+)
 from tracecite.runtime.candidate_search import candidate_first_literal_search
 from tracecite_core.segmenter import build_segmenter, detect_segmenter_kind
 
@@ -16,8 +20,39 @@ def _timed(fn):
     return value, time.perf_counter() - start
 
 
-def _legacy_search(path: Path, query: str, max_evidence: int) -> dict[str, object]:
-    result = runtime_tools.search(
+def _project(result: dict[str, object]) -> dict[str, object]:
+    coverage = result.get("coverage") or {}
+    evidence = result.get("evidence") or []
+    data = result.get("data") or {}
+    return {
+        "status": result.get("status"),
+        "match_records": coverage.get("match_records"),
+        "match_lines": coverage.get("match_lines"),
+        "evidence_returned": coverage.get("evidence_returned"),
+        "evidence_truncated": coverage.get("evidence_truncated"),
+        "unmatched": coverage.get("unmatched"),
+        "ranges": [
+            [item.get("start_line"), item.get("end_line")]
+            for item in evidence
+            if isinstance(item, dict)
+        ],
+        "uris": [
+            item.get("uri") for item in evidence if isinstance(item, dict)
+        ],
+        "next_queries": result.get("next_queries") or [],
+        "engine": data.get("engine"),
+        "segmenter": data.get("segmenter"),
+        "source_sha256": data.get("source_sha256"),
+        "artifact_roles": sorted(
+            str(item.get("role"))
+            for item in result.get("artifacts") or []
+            if isinstance(item, dict) and item.get("role")
+        ),
+    }
+
+
+def _public_search(path: Path, query: str, max_evidence: int) -> dict[str, object]:
+    return runtime_tools.search(
         path,
         query,
         regex=False,
@@ -26,19 +61,24 @@ def _legacy_search(path: Path, query: str, max_evidence: int) -> dict[str, objec
         investigation_path=None,
         cache=False,
     )
-    coverage = result.get("coverage") or {}
-    evidence = result.get("evidence") or []
-    return {
-        "status": result.get("status"),
-        "match_records": coverage.get("match_records"),
-        "match_lines": coverage.get("match_lines"),
-        "evidence_returned": coverage.get("evidence_returned"),
-        "ranges": [
-            [item.get("start_line"), item.get("end_line")]
-            for item in evidence
-            if isinstance(item, dict)
-        ],
-    }
+
+
+def _public_search_with_candidate_filter(
+    path: Path, query: str, max_evidence: int
+) -> dict[str, object]:
+    legacy_filter = runtime_tools.filter_text
+
+    def candidate_or_legacy(*args, **kwargs):
+        try:
+            return filter_literal_single_line(*args, **kwargs)
+        except CandidateFilterUnsupported:
+            return legacy_filter(*args, **kwargs)
+
+    runtime_tools.filter_text = candidate_or_legacy
+    try:
+        return _public_search(path, query, max_evidence)
+    finally:
+        runtime_tools.filter_text = legacy_filter
 
 
 def _candidate_search(path: Path, query: str, max_evidence: int) -> dict[str, object]:
@@ -79,26 +119,43 @@ def main() -> int:
     )
     rows = []
     for label, query in queries:
-        legacy, legacy_seconds = _timed(
-            lambda q=query: _legacy_search(source, q, args.max_evidence)
+        legacy_result, legacy_seconds = _timed(
+            lambda q=query: _public_search(source, q, args.max_evidence)
         )
+        fast_result, fast_seconds = _timed(
+            lambda q=query: _public_search_with_candidate_filter(
+                source, q, args.max_evidence
+            )
+        )
+        legacy = _project(legacy_result)
+        fast = _project(fast_result)
         candidate = _candidate_search(source, query, args.max_evidence)
-        parity = {
+        parity = {key: legacy.get(key) == fast.get(key) for key in legacy}
+        low_level_parity = {
             "status": legacy.get("status") == candidate.get("status"),
             "match_records": legacy.get("match_records") == candidate.get("match_records"),
             "match_lines": legacy.get("match_lines") == candidate.get("match_lines"),
-            "evidence_returned": legacy.get("evidence_returned") == candidate.get("evidence_returned"),
+            "evidence_returned": legacy.get("evidence_returned")
+            == candidate.get("evidence_returned"),
             "ranges": legacy.get("ranges") == candidate.get("ranges"),
         }
         rows.append(
             {
                 "label": label,
                 "query": query,
-                "legacy": {**legacy, "seconds": round(legacy_seconds, 6)},
-                "candidate_first": candidate,
-                "parity": parity,
-                "speedup": round(
-                    legacy_seconds / max(float(candidate["seconds"]), 1e-9), 3
+                "legacy_public_search": {
+                    **legacy,
+                    "seconds": round(legacy_seconds, 6),
+                },
+                "candidate_filter_public_search": {
+                    **fast,
+                    "seconds": round(fast_seconds, 6),
+                },
+                "candidate_core": candidate,
+                "public_parity": parity,
+                "low_level_parity": low_level_parity,
+                "public_speedup": round(
+                    legacy_seconds / max(fast_seconds, 1e-9), 3
                 ),
             }
         )
