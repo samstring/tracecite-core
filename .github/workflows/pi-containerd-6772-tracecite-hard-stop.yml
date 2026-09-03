@@ -32,6 +32,7 @@ jobs:
       RESULT_ROOT: /tmp/pi-containerd-6772-hard-stop
       SOURCE_ROOT: /tmp/pi-containerd-6772-source
       TRACECITE_NO_GROWTH_PATIENCE: "2"
+      TRACECITE_NO_MATCH_CAUTION_AFTER: "2"
       TRACECITE_MAX_RETRIEVALS: "100"
       TRACECITE_RETRIEVAL_GUARD_ACTIVITY: /tmp/pi-containerd-6772-hard-stop/tracecite-retrieval-guard.jsonl
 
@@ -207,14 +208,18 @@ jobs:
                       try: events.append(json.loads(line))
                       except: pass
               calls=[e for e in events if e.get('event')=='tool_call']
+              results=[e for e in events if e.get('event')=='tool_result']
               allowed=[e for e in calls if e.get('decision')=='allow']
               blocked=[e for e in calls if e.get('decision')=='block']
               return {
                   'no_growth_patience': int(os.environ.get('TRACECITE_NO_GROWTH_PATIENCE','0') or 0),
+                  'no_match_caution_after': int(os.environ.get('TRACECITE_NO_MATCH_CAUTION_AFTER','0') or 0),
                   'max_retrievals': int(os.environ.get('TRACECITE_MAX_RETRIEVALS','0') or 0),
                   'allowed_retrievals': len(allowed),
                   'blocked_retrieval_attempts': len(blocked),
                   'block_reasons': dict(Counter(str(e.get('reason')) for e in blocked)),
+                  'mechanical_outcomes': dict(Counter(str(e.get('mechanical_outcome')) for e in results)),
+                  'constrained_notices': sum(1 for e in results if e.get('constrained_notice')),
               }
           score=j('tracecite-score.json')
           summary={
