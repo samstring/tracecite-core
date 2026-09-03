@@ -20,10 +20,23 @@ These rules override narrative quality and scorer coverage.
    - multiple goroutines waiting on the same lock prove contention, not the identity or state of the current holder;
    - simultaneous reader and writer waiters on the same `RWMutex` do **not** prove that a writer currently holds it, that readers are starving writers, that writers are starving readers, or that a lock cycle exists;
    - a caller/deeper frame or source position after `acquire(Y)` does not prove `holds Y`;
-   - current ownership is supported only when supplied evidence exposes the acquire-to-release control-flow interval strongly enough to exclude an intervening release.
-5. Deadlock/cycle/lock-order inversion requires two independently supported **current** edges: `holds A -> waits B` and `holds B -> waits A`. If either holder edge is missing, report only the observed blocking/contention and mark the missing causal edge unknown. Never use “someone must hold the lock”, queue shape, waiter counts, or RWMutex fairness semantics to synthesize a missing holder edge.
+   - **for stack-only artifacts, deeper stack frames never establish current ownership of an outer lock by themselves.** Source-code memory, remembered implementation order, and line-number ordering are not supplied evidence. Current ownership needs independent supplied evidence that exposes the acquire-to-release interval strongly enough to exclude an intervening release;
+   - printed pointer-like stack arguments are not automatically lock identity. Do not equate two locks, receivers, or objects from raw stack argument values unless the artifact or transport provides reliable identity/provenance for those values.
+5. Deadlock/cycle/lock-order inversion requires two independently supported **current** edges: `holds A -> waits B` and `holds B -> waits A`. If either holder edge is missing, report only the observed blocking/contention and mark the missing causal edge unknown. Never use “someone must hold the lock”, queue shape, waiter counts, pointer resemblance, source ordering, or RWMutex fairness semantics to synthesize a missing holder edge.
 6. Stop at the artifact boundary. External process creation, RPC completion, retries, cleanup/reaping, restart recovery, and helper-goroutine identity require independent evidence tying them to the observed attempt. User-described symptoms are hypotheses, not evidence.
 7. Once the directly supported mechanism is closed—or the remaining causal discriminator is bounded unknown—answer immediately.
+
+## Stack-only artifact rule
+
+When the supplied evidence is a goroutine/thread stack dump without source text, event history, or lock-owner metadata:
+
+- report blocking locations and call paths as observed;
+- do not infer that an outer lock is still held merely because the stack is currently deeper in the same function/callback;
+- do not reconstruct acquire/release scopes from remembered source code or line numbers;
+- do not promote apparent lock-address/object-address matches from raw stack arguments into identity proof;
+- if holder identity is absent, explicitly say that the dump establishes contention/waiting but not the holder/root-cause edge, then stop.
+
+This rule is generic and applies regardless of whether the suspected mechanism would be plausible from source knowledge.
 
 ## Terminal safety rule
 
@@ -42,8 +55,9 @@ If the evidence shows only waiters and no current holder, the final must say exa
 Immediately before emitting the final, delete any sentence that does any of the following without independent supplied evidence:
 
 - converts a waiter into a holder;
-- infers current ownership from a past acquire, caller frame, deeper frame, or later source line;
+- infers current ownership from a past acquire, caller frame, deeper frame, later source line, or remembered source implementation;
 - names an unobserved holder or opposing causal edge;
+- equates lock/object identity from raw stack argument pointers without reliable identity provenance;
 - infers holder identity/state from waiter counts, queue ordering, reader/writer mix, or RWMutex implementation/fairness behavior;
 - claims deadlock/cycle/lock-order inversion/starvation without the required current ownership proof;
 - links a helper goroutine/process to the blocked request by name or temporal proximity alone;
@@ -63,6 +77,7 @@ When lifecycle is outside the artifact, use one sentence and stop: “The suppli
 - no confirmation pass for an already closed claim
 - no equivalent-waiter census
 - no symptom sweep after the causal discriminator is bounded unknown
+- if a stack-only artifact lacks owner metadata or source text, do not spend calls trying to prove ownership from more equivalent stack occurrences; mark the owner edge `bounded_unknown`
 
 ## Final answer shape
 
