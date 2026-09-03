@@ -11,7 +11,7 @@ from tracecite.runtime.evidence_ambiguity import (
 )
 
 
-def test_reports_sibling_scope_fanout_without_causal_claim() -> None:
+def test_reports_sibling_scope_fanout_without_causal_claim_or_query_plan() -> None:
     text = "\n".join(
         [
             "resource.example/widget-1001 ready",
@@ -24,10 +24,10 @@ def test_reports_sibling_scope_fanout_without_causal_claim() -> None:
     assert fanout["scope"] == "resource.example/"
     assert fanout["family"] == "widget-*"
     assert fanout["member_count"] == 3
-    assert fanout["navigation_query"] == "resource.example/widget-"
+    assert "navigation_query" not in fanout
 
 
-def test_reports_unverified_local_identifier_near_structured_scoped_entity() -> None:
+def test_reports_unverified_local_identifier_as_fact_without_query_plan() -> None:
     text = "\n".join(
         [
             "- name: test.device/device-plugin-failures-3083",
@@ -42,12 +42,8 @@ def test_reports_unverified_local_identifier_near_structured_scoped_entity() -> 
     gap = next(item for item in hints if item["kind"] == "scope_uniqueness_unverified")
     assert gap["identifier_key"] == "resourceID"
     assert gap["identifier_value"] == "testdevice"
-    assert gap["recommended_search"] == "testdevice"
-    assert gap["recommended_action"] == {
-        "operation": "search",
-        "query": "testdevice",
-        "purpose": "verify_identifier_uniqueness_across_scopes",
-    }
+    assert "recommended_search" not in gap
+    assert "recommended_action" not in gap
     assert gap["scopes"] == ["test.device/"]
     assert "test.device/device-plugin-failures-3083" in gap["scoped_entities"]
     assert "root cause" not in gap["verification"].lower()
@@ -92,7 +88,7 @@ def test_identifier_without_nearby_scope_does_not_trigger_gap() -> None:
     assert not any(item["kind"] == "scope_uniqueness_unverified" for item in hints)
 
 
-def test_actionable_identity_gap_precedes_broader_fanout() -> None:
+def test_identity_gap_fact_precedes_broader_fanout() -> None:
     text = "\n".join(
         [
             "name: resource.example/widget-1001",
@@ -214,6 +210,7 @@ def test_verification_rejects_changed_source_hash(tmp_path: Path) -> None:
             visible,
             expected_sha256="0" * 64,
         )
+
 
 def test_bounded_sibling_selection_prefers_entities_near_direct_identifier_evidence(tmp_path: Path) -> None:
     source = tmp_path / "evidence.log"
