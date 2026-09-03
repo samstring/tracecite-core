@@ -1,13 +1,14 @@
-trigger: 2026-09-03 fail-closed terminal serializer diagnostic after run 104 semantic failure
+trigger: 2026-09-03 explicit TraceCite skill activation diagnostic after run 105 clean semantic failure
 tracecite_only_tools: true
 runtime_agent_steering: false
-pi_agent_system_steering: bounded-root-cause-plus-terminal-evidence-firewall
+pi_agent_system_steering: full-tracecite-skill-contract-plus-bounded-root-cause-firewall
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
 adaptive_stopping_skill: stack-only-symbol-directed-reciprocal-plus-fail-closed-terminal-serializer
+skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: after retrieval ends, first prose token must be Observed: and final must be exactly four short paragraphs; no holder inference, pointer-identity promotion, same-lock starvation story, or lifecycle narrative; reciprocal-path proof only if both reversed cross-component paths are directly observed
+diagnostic_focus: verify the agent actually receives and obeys the full Skill contract: <=2 orientation calls before symbol-directed reciprocal search, no waiter-as-holder/pointer promotion, no unsupported lifecycle story, and exact four-paragraph terminal reconstruction
 agent_timeout_seconds: 900
