@@ -1,13 +1,13 @@
-trigger: 2026-09-03 symbol-directed reciprocal diagnostic after clean convergence failure
+trigger: 2026-09-03 fail-closed terminal serializer diagnostic after run 104 semantic failure
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause-plus-terminal-evidence-firewall
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-symbol-directed-reciprocal-plus-terminal-card
+adaptive_stopping_skill: stack-only-symbol-directed-reciprocal-plus-fail-closed-terminal-serializer
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: after at most two orientation calls, stop broad discovery and target exact symbols/call-chain structure for reverse component nesting; after two non-advancing reciprocal attempts or ceiling, emit only the four-paragraph evidence-bounded final
+diagnostic_focus: after retrieval ends, first prose token must be Observed: and final must be exactly four short paragraphs; no holder inference, pointer-identity promotion, same-lock starvation story, or lifecycle narrative; reciprocal-path proof only if both reversed cross-component paths are directly observed
 agent_timeout_seconds: 900
