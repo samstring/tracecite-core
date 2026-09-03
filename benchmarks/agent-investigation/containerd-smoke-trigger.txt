@@ -1,13 +1,13 @@
-trigger: 2026-09-03 evidence-firewall stack-only diagnostic after guard alignment
+trigger: 2026-09-03 terminal-transition diagnostic after stack-only ceiling failure
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause-plus-terminal-evidence-firewall
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-evidence-firewall-four-paragraph-terminal
+adaptive_stopping_skill: stack-only-evidence-firewall-immediate-terminal-transition
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: obey evidence class over requested narrative; never promote waiters to holders or stack position to lifecycle; emit exactly four evidence-bounded stack-only paragraphs
+diagnostic_focus: after discriminator closure/bounded-unknown or evidence ceiling, transition immediately and irreversibly to the four-paragraph evidence-bounded final; no further tool calls or exploratory causal/lifecycle prose
 agent_timeout_seconds: 900
