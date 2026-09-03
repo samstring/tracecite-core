@@ -89,6 +89,20 @@ def test_skill_has_pre_call_claim_discriminator_and_causal_priority() -> None:
     assert "discriminator" not in runtime
 
 
+def test_skill_execution_card_forces_symbol_directed_reverse_search_and_terminal_output() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "## Execution card — obey before any retrieval" in skill
+    assert "Use at most two orientation calls to locate one representative domain-specific blocked stack" in skill
+    assert "stop broad discovery queries such as `goroutine`, `Lock`, `semacquire`, `metadata`" in skill
+    assert "Every remaining causal-discriminator retrieval must target exact symbols/call-chain structure that could expose the **reverse component nesting**" in skill
+    assert "A call that only returns the same blocked acquisition direction is non-advancing" in skill
+    assert "After two non-advancing reverse-path attempts, or when TraceCite reports the evidence-call ceiling, causal discovery is over" in skill
+    assert "This execution card is Agent investigation/stopping policy. It must not be moved into Runtime" in skill
+    assert "orientation calls" not in runtime
+    assert "reverse component nesting" not in runtime
+
+
 def test_skill_serializes_and_bounds_tracecite_transport() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
