@@ -141,14 +141,22 @@ def test_retrieval_guard_blocks_only_mechanical_coverage_reuse() -> None:
     assert "context_start_line" in guard
     assert "context_end_line" in guard
     assert 'reason: "range_already_covered"' in guard
-    assert "hypothesis" not in guard.lower()
     assert "causal sufficiency" in guard
 
 
-def test_no_match_is_not_cross_query_no_growth_and_errors_do_not_poison_novelty() -> None:
+def test_no_match_is_soft_constraint_not_cross_query_hard_stop() -> None:
     guard = GUARD.read_text(encoding="utf-8")
+    assert "TRACECITE_NO_MATCH_CAUTION_AFTER" in guard
     assert 'progress?.status === "no_match"' in guard
     assert 'return "neutral_no_match"' in guard
-    assert "it never\n  // contributes to any cross-query/global no-growth decision" in guard
+    assert "cross-query/global hard-stop decision" in guard
+    assert 'mode: "constrained"' in guard
+    assert 'reason: "consecutive_request_local_no_match"' in guard
+    assert "These no_match results are valid request-local negative evidence" in guard
+    assert "block: true" not in guard.split("function cautionNotice", 1)[1].split("export default", 1)[0]
+
+
+def test_errors_do_not_poison_exact_request_novelty() -> None:
+    guard = GUARD.read_text(encoding="utf-8")
     tool_result = guard.split('pi.on("tool_result"', 1)[1].split('pi.on("agent_end"', 1)[0]
     assert "Boolean(event.isError)\n      ? (noGrowthBySignature.get(meta.key) || 0)" in tool_result
