@@ -104,6 +104,10 @@ def test_skill_serializes_and_bounds_tracecite_transport() -> None:
     assert "`tracecite_expand`: normally `radius <= 16`" in skill
     assert "target total calls `<= 8`; absolute ceiling `16`" in skill
     assert "use at most four additional evidence calls to locate a structurally distinct opposing path" in skill
+    assert "after observing `component A operation -> component B operation/acquire(B)`" in skill
+    assert "do not keep searching B's lock address, B's generic lock routine, or more callers ending at the same `acquire(B)`" in skill
+    assert "Hits ending at the already-known acquisition site are non-advancing for the reciprocal-path discriminator" in skill
+    assert "reciprocal-path discriminator" not in runtime
     assert "after two non-advancing calls for the same claim, mark it `bounded_unknown`" in skill
     assert "no equivalent-waiter census" in skill
     assert "no symptom sweep after the causal discriminator is bounded unknown" in skill
