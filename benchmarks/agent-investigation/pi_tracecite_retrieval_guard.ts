@@ -8,6 +8,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // novelty/progress metadata. It does not know hypotheses, causal sufficiency, or
 // investigation claims.
 const NO_GROWTH_PATIENCE = positiveInt(process.env.TRACECITE_NO_GROWTH_PATIENCE);
+const NO_MATCH_CAUTION_AFTER = positiveInt(process.env.TRACECITE_NO_MATCH_CAUTION_AFTER);
 const MAX_RETRIEVALS = positiveInt(process.env.TRACECITE_MAX_RETRIEVALS);
 const ACTIVITY_PATH = String(process.env.TRACECITE_RETRIEVAL_GUARD_ACTIVITY || "").trim();
 
@@ -46,6 +47,7 @@ type Progress = {
 // (for example after a provider 429). These counters therefore MUST NOT reset on
 // agent_start; a provider retry must not mint a fresh evidence-acquisition budget.
 let retrievals = 0;
+let consecutiveNoMatch = 0;
 const noGrowthBySignature = new Map<string, number>();
 const coveredRangesByFile = new Map<string, LineRange[]>();
 const pendingCalls = new Map<string, CallMeta>();
@@ -57,7 +59,7 @@ function positiveInt(value: unknown): number {
 }
 
 function enabled(): boolean {
-  return NO_GROWTH_PATIENCE > 0 || MAX_RETRIEVALS > 0;
+  return NO_GROWTH_PATIENCE > 0 || NO_MATCH_CAUTION_AFTER > 0 || MAX_RETRIEVALS > 0;
 }
 
 function isAcquisition(event: any): boolean {
@@ -210,7 +212,7 @@ function observeProgress(key: string, progress: Progress | undefined): number {
 
   // A first no_match can be useful negative evidence for the Agent. We only remember it
   // per exact immutable request so repeated identical misses can be stopped; it never
-  // contributes to any cross-query/global no-growth decision here.
+  // contributes to any cross-query/global hard-stop decision here.
   const exactRequestNoGrowth = explicitMechanicalNoGrowth(progress) || progress?.status === "no_match";
   if (exactRequestNoGrowth) {
     const next = previous + 1;
@@ -218,6 +220,20 @@ function observeProgress(key: string, progress: Progress | undefined): number {
     return next;
   }
   return previous;
+}
+
+function updateNoMatchStreak(progress: Progress | undefined, isError: boolean): number {
+  if (isError || progress?.status === "error") return consecutiveNoMatch;
+  if (grew(progress)) {
+    consecutiveNoMatch = 0;
+    return consecutiveNoMatch;
+  }
+  if (progress?.status === "no_match") {
+    consecutiveNoMatch += 1;
+    return consecutiveNoMatch;
+  }
+  consecutiveNoMatch = 0;
+  return consecutiveNoMatch;
 }
 
 function outcome(progress: Progress | undefined, isError: boolean): string {
@@ -228,6 +244,20 @@ function outcome(progress: Progress | undefined, isError: boolean): string {
   return "neutral";
 }
 
+function cautionNotice(streak: number) {
+  return {
+    type: "text" as const,
+    text: JSON.stringify({
+      tracecite_guard: {
+        mode: "constrained",
+        reason: "consecutive_request_local_no_match",
+        count: streak,
+        message: "These no_match results are valid request-local negative evidence, but acquisition is currently low-yield. Do not keep reformulating the same unresolved claim. Continue TraceCite only if the next retrieval tests a materially different discriminator; otherwise use existing evidence and source code and answer.",
+      },
+    }),
+  };
+}
+
 export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
   if (!enabled()) return;
 
@@ -235,8 +265,10 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
     await record({
       event: "agent_start",
       no_growth_patience: NO_GROWTH_PATIENCE,
+      no_match_caution_after: NO_MATCH_CAUTION_AFTER,
       max_retrievals: MAX_RETRIEVALS,
       retrievals,
+      consecutive_no_match: consecutiveNoMatch,
       continued_investigation: retrievals > 0,
     });
   });
@@ -305,6 +337,7 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
       retrievals,
       requested_range: meta.requested_range,
       signature_no_growth: noGrowth,
+      consecutive_no_match: consecutiveNoMatch,
     });
     return undefined;
   });
@@ -320,6 +353,7 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
     const noGrowth = Boolean(event.isError)
       ? (noGrowthBySignature.get(meta.key) || 0)
       : observeProgress(meta.key, progress);
+    const noMatchStreak = updateNoMatchStreak(progress, Boolean(event.isError));
 
     if (!event.isError && meta.file && meta.requested_range) {
       const start = Number(progress?.coverage?.context_start_line || 0);
@@ -329,15 +363,25 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
       }
     }
 
+    const mechanicalOutcome = outcome(progress, Boolean(event.isError));
+    const caution = NO_MATCH_CAUTION_AFTER > 0 && noMatchStreak >= NO_MATCH_CAUTION_AFTER;
     await record({
       event: "tool_result",
       tool: event.toolName,
       retrievals,
       signature_no_growth: noGrowth,
-      mechanical_outcome: outcome(progress, Boolean(event.isError)),
+      consecutive_no_match: noMatchStreak,
+      constrained_notice: caution,
+      mechanical_outcome: mechanicalOutcome,
       progress,
       is_error: Boolean(event.isError),
     });
+
+    if (caution) {
+      return {
+        content: [...event.content, cautionNotice(noMatchStreak)],
+      } as any;
+    }
     return undefined;
   });
 
@@ -347,6 +391,7 @@ export default function traceciteRetrievalGuard(pi: ExtensionAPI) {
     await record({
       event: "agent_end",
       retrievals,
+      consecutive_no_match: consecutiveNoMatch,
       tracked_signatures: noGrowthBySignature.size,
       covered_sources: coveredRangesByFile.size,
     });
