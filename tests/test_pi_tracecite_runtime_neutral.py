@@ -59,16 +59,16 @@ def test_skill_requires_two_observed_reciprocal_component_paths() -> None:
     assert "reversed component nesting" not in runtime
 
 
-def test_skill_uses_one_explicit_six_call_counter() -> None:
+def test_skill_uses_one_explicit_eight_call_counter() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "## Highest-priority stack-only stop contract" in skill
-    assert "6 total TraceCite evidence calls" in skill
+    assert "8 total TraceCite evidence calls" in skill
     assert "`tracecite_search` + `tracecite_expand` combined" in skill
     assert "Count locally from 1" in skill
     assert "Calls 1-2 are only for source repair/orientation" in skill
-    assert "The first successful representative blocked path immediately ends orientation" in skill
-    assert "Every later call must seek the exact reverse component nesting" in skill
+    assert "synchronization-bearing domain path" in skill
+    assert "Every later call must seek one missing endpoint" in skill
     assert "Never reset the count and never continue toward a higher Runtime ceiling" in skill
     assert "evidence_call_index" not in runtime
     assert "reciprocal-only" not in runtime
@@ -87,12 +87,13 @@ def test_skill_repairs_invalid_source_without_changing_claim() -> None:
 def test_skill_stops_after_nonadvancing_reciprocal_attempts() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-    assert "two reciprocal attempts fail to advance" in skill
-    assert "call 6 returns" in skill
+    assert "two **well-targeted** reciprocal attempts fail to advance" in skill
+    assert "call 8 returns" in skill
     assert "stop all tool use immediately" in skill
-    assert "Broad waiter census, pointer searches, lifecycle searches, and symptom sweeps are forbidden after orientation" in skill
+    assert "Broad waiter census, pointer searches, lifecycle searches, symptom sweeps, and duplicate expansions are forbidden after orientation" in skill
+    assert "Issue at most one evidence call per model turn after orientation" in skill
     assert "Agent investigation and stopping policy live here" in skill
-    assert "reciprocal attempts" not in runtime
+    assert "well-targeted" not in runtime
 
 
 def test_skill_forces_fixed_stack_only_terminal_shape() -> None:
