@@ -1,14 +1,14 @@
-trigger: 2026-09-03 hard reciprocal-phase and terminal-first-token diagnostic
+trigger: 2026-09-03 observed reciprocal-endpoint diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-bounded-root-cause-firewall
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-hard-six-call-reciprocal-phase-plus-terminal-first-token
+adaptive_stopping_skill: stack-only-four-endpoint-reciprocal-proof-plus-waiting-verb-gate
 skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: verify search+expand calls 1-2 are the entire orientation phase, calls 3-6 are reciprocal-only with no lifecycle/symptom sweep, missing reverse path finalizes by call 6, and terminal output starts immediately with exactly four evidence-bounded paragraphs without pointer identity or lifecycle promotion
+diagnostic_focus: require reciprocal closure to name both observed cross-component transitions A-owned->B-owned and B-owned->A-owned; same primitive/object waiters cannot close the mechanism; blocked acquisition must serialize as waiting rather than acquired/holding; no lifecycle promotion; terminal output exactly four paragraphs
 agent_timeout_seconds: 900
