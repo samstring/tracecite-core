@@ -8,11 +8,13 @@ import re
 import shutil
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 from tracecite.runtime import tools as runtime_tools
 from tracecite_core.matcher import Matcher
 from tracecite_core.segmenter import build_segmenter, detect_segmenter_kind
+import tracecite_core.text_filter as text_filter_module
 from tracecite_core.text_filter import _count_lines, _extract_record_tokens, record_timestamp, reference_datetime
 
 
@@ -41,7 +43,7 @@ def profile_scan(path: Path, query: str) -> dict[str, object]:
     kind = detect_segmenter_kind(path)
     seg = build_segmenter(kind)
     matcher = Matcher(re.escape(query))
-    ref = reference_datetime(path, segmenter=seg)
+    ref, reference_seconds = timed(lambda: reference_datetime(path, segmenter=seg))
 
     records = 0
     matched = 0
@@ -110,6 +112,7 @@ def profile_scan(path: Path, query: str) -> dict[str, object]:
         "unmatched": unmatched,
         "token_occurrences": token_occurrences,
         "bytes_written": bytes_written,
+        "reference_datetime_seconds": round(reference_seconds, 6),
         "scan_seconds": round(scan_seconds, 6),
         "match_seconds": round(match_seconds, 6),
         "unmatched_token_seconds": round(unmatched_token_seconds, 6),
@@ -119,18 +122,29 @@ def profile_scan(path: Path, query: str) -> dict[str, object]:
     }
 
 
-def profile_full_search(path: Path, query: str) -> dict[str, object]:
-    start = time.perf_counter()
-    result = runtime_tools.search(
-        path,
-        query,
-        regex=False,
-        snapshot=False,
-        max_evidence=20,
-        investigation_path=None,
-        cache=False,
-    )
-    elapsed = time.perf_counter() - start
+def _fast_mtime_reference(path: Path, *, segmenter=None, encoding: str = "utf-8") -> datetime:
+    return datetime.fromtimestamp(Path(path).expanduser().resolve().stat().st_mtime)
+
+
+def profile_full_search(path: Path, query: str, *, fast_reference: bool = False) -> dict[str, object]:
+    original_reference = text_filter_module.reference_datetime
+    if fast_reference:
+        text_filter_module.reference_datetime = _fast_mtime_reference
+    try:
+        start = time.perf_counter()
+        result = runtime_tools.search(
+            path,
+            query,
+            regex=False,
+            snapshot=False,
+            max_evidence=20,
+            investigation_path=None,
+            cache=False,
+        )
+        elapsed = time.perf_counter() - start
+    finally:
+        text_filter_module.reference_datetime = original_reference
+
     coverage = result.get("coverage") or {}
     artifacts = result.get("artifacts") or []
     artifact_bytes: dict[str, int] = {}
@@ -146,6 +160,7 @@ def profile_full_search(path: Path, query: str) -> dict[str, object]:
             artifact_bytes[role] = p.stat().st_size
     return {
         "seconds": round(elapsed, 6),
+        "fast_reference": fast_reference,
         "status": result.get("status"),
         "match_records": coverage.get("match_records"),
         "match_lines": coverage.get("match_lines"),
@@ -153,6 +168,11 @@ def profile_full_search(path: Path, query: str) -> dict[str, object]:
         "evidence_truncated": coverage.get("evidence_truncated"),
         "artifact_bytes": artifact_bytes,
     }
+
+
+def same_search_semantics(left: dict[str, object], right: dict[str, object]) -> bool:
+    keys = ("status", "match_records", "match_lines", "evidence_returned", "evidence_truncated")
+    return all(left.get(key) == right.get(key) for key in keys)
 
 
 def main() -> int:
@@ -175,7 +195,18 @@ def main() -> int:
     for label, query in QUERIES:
         scan = profile_scan(source, query)
         full = profile_full_search(source, query)
-        rows.append({"label": label, "query": query, "scan_profile": scan, "full_search": full})
+        row: dict[str, object] = {
+            "label": label,
+            "query": query,
+            "scan_profile": scan,
+            "full_search": full,
+        }
+        if label in {"no_match", "high_match"}:
+            fast = profile_full_search(source, query, fast_reference=True)
+            row["full_search_fast_reference"] = fast
+            row["fast_reference_same_search_semantics"] = same_search_semantics(full, fast)
+            row["fast_reference_saved_seconds"] = round(float(full["seconds"]) - float(fast["seconds"]), 6)
+        rows.append(row)
 
     payload = {
         "source": str(source),
