@@ -11,7 +11,7 @@ def test_skill_prioritizes_causal_closure_before_symptom_census() -> None:
     runtime = IMPL.read_text(encoding="utf-8")
 
     assert "Prioritize causal closure over symptom census" in skill
-    assert "the current holder/opposing `holds -> waits` edge" in skill
-    assert "Do not spend the remaining budget counting equivalent waiters or searching user-described downstream symptoms" in skill
+    assert "the unresolved causal edge" in skill
+    assert "Do not count equivalent waiters or chase downstream symptoms while the mechanism is unresolved" in skill
     assert "Prioritize causal closure over symptom census" not in runtime
-    assert "opposing `holds -> waits` edge" not in runtime
+    assert "unresolved causal edge" not in runtime
