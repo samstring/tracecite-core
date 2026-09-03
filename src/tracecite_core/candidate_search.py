@@ -263,15 +263,17 @@ def scan_candidate_lines(
     line_numbers: Set[int] = set()
     captured_lines: List[Tuple[int, str]] = []
     total_lines = 0
-    literal_matcher = matcher if matcher.terms is not None else None
-    anchor_re = None if literal_matcher is not None else _anchor_regex(matcher, anchors)
+    literal_terms = tuple(matcher.terms or ())
+    single_literal = literal_terms[0] if len(literal_terms) == 1 else None
+    anchor_re = None if literal_terms else _anchor_regex(matcher, anchors)
     with Path(path).open("r", encoding=encoding, errors="replace") as handle:
         for total_lines, line in enumerate(handle, start=1):
-            matched = (
-                literal_matcher.match(line)[0]
-                if literal_matcher is not None
-                else bool(anchor_re and anchor_re.search(line))
-            )
+            if single_literal is not None:
+                matched = single_literal in line
+            elif literal_terms:
+                matched = any(term in line for term in literal_terms)
+            else:
+                matched = bool(anchor_re and anchor_re.search(line))
             if matched:
                 line_numbers.add(total_lines)
                 if capture_lines:
@@ -287,7 +289,7 @@ def scan_candidate_lines(
         line_numbers=frozenset(line_numbers),
         total_lines=total_lines,
         anchors=tuple(anchors),
-        strategy="literal" if literal_matcher is not None else "required-literal",
+        strategy="literal" if literal_terms else "required-literal",
         captured_lines=tuple(captured_lines),
     )
 

@@ -44,6 +44,9 @@ _MAX_COMPONENT_METADATA_ITEMS = 32
 _MAX_COMPONENT_METADATA_STRING_CHARS = 1024
 _MAX_PATTERN_COMPONENTS = 64
 _COMPONENT_RESERVED_KEYS = frozenset({"id", "pattern", "effective", "kind"})
+# CPython's substring search runs in C and is materially faster than the pure
+# Python Aho-Corasick fallback for small term sets. Keep AC for larger sets.
+_LITERAL_ENGINE_MAX_TERMS = 8
 
 # Regexes can be supplied by an Agent or a Scenario resolver.  ``re`` has no
 # timeout API, so reject a small, explicit class of structures which are known
@@ -662,15 +665,18 @@ class Matcher:
         self.pure_ac: Optional[_PureAhoCorasick] = None
         self._component_cache: Dict[str, "Matcher"] = {}
         if self.terms is not None:
-            self.automaton = _build_automaton(self.terms)
-            if self.automaton is not None:
-                self.engine = "aho-corasick"
+            if len(self.terms) <= _LITERAL_ENGINE_MAX_TERMS:
+                self.engine = "literal"
             else:
-                try:
-                    self.pure_ac = _PureAhoCorasick(self.terms)
-                    self.engine = "ac-python"
-                except Exception:  # noqa: BLE001 - 自动机构建失败不是致命错误
-                    self.engine = "literal"
+                self.automaton = _build_automaton(self.terms)
+                if self.automaton is not None:
+                    self.engine = "aho-corasick"
+                else:
+                    try:
+                        self.pure_ac = _PureAhoCorasick(self.terms)
+                        self.engine = "ac-python"
+                    except Exception:  # noqa: BLE001 - 自动机构建失败不是致命错误
+                        self.engine = "literal"
         else:
             self.regex = _compile_safe_regex(pattern)
 
@@ -735,6 +741,11 @@ class Matcher:
                 return False, None, set()
             return True, first, hits
         if self.terms is not None:
+            if len(self.terms) == 1:
+                term = self.terms[0]
+                if term not in text:
+                    return False, None, set()
+                return True, term, {term}
             hits = {t for t in self.terms if t in text}
             if not hits:
                 return False, None, set()

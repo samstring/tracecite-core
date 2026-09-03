@@ -178,3 +178,27 @@ def test_integrity_enrichment_emits_gap_facts_without_next_query_planning(tmp_pa
             assert "recommended_search" not in hint
             assert "recommended_action" not in hint
             assert "navigation_query" not in hint
+
+
+def test_single_literal_candidate_scan_does_not_call_full_matcher_per_source_line(tmp_path: Path, monkeypatch) -> None:
+    from tracecite_core.candidate_search import scan_candidate_lines
+    from tracecite_core.matcher import Matcher
+
+    source = tmp_path / "large.log"
+    source.write_text("noise\n" * 1000 + "needle here\n", encoding="utf-8")
+    matcher = Matcher("needle")
+    assert matcher.engine == "literal"
+
+    calls = 0
+    original = matcher.match
+
+    def counted(value: str):
+        nonlocal calls
+        calls += 1
+        return original(value)
+
+    monkeypatch.setattr(matcher, "match", counted)
+    scan = scan_candidate_lines(source, matcher, capture_lines=True)
+    assert scan is not None
+    assert scan.line_numbers == frozenset({1001})
+    assert calls == 0

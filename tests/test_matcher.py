@@ -259,7 +259,7 @@ class TestPureAhoCorasick:
 
 
 class TestAcPythonFallback:
-    """pyahocorasick 缺失时自动回落 ac-python，且语义与 re 一致。"""
+    """Small literal sets stay in C substring search; large sets retain AC fallback."""
 
     def _matcher_without_c_lib(self, pattern):
         from unittest import mock
@@ -268,11 +268,16 @@ class TestAcPythonFallback:
         with mock.patch.dict(sys.modules, {"ahocorasick": None}):
             return Matcher(pattern)
 
-    def test_engine_falls_back_to_ac_python(self):
+    def test_small_term_set_prefers_literal_engine(self):
         matcher = self._matcher_without_c_lib(pattern_from_terms(["login", "timeout"]))
+        assert matcher.engine == "literal"
+
+    def test_large_term_set_falls_back_to_ac_python(self):
+        terms = [f"marker-{index}" for index in range(16)]
+        matcher = self._matcher_without_c_lib(pattern_from_terms(terms))
         assert matcher.engine == "ac-python"
 
-    def test_ac_python_equivalent_to_regex(self):
+    def test_literal_small_set_equivalent_to_regex(self):
         matcher = self._matcher_without_c_lib(pattern_from_terms(["login", "timeout"]))
         regex = re.compile(pattern_from_terms(["login", "timeout"]))
         for text in (
