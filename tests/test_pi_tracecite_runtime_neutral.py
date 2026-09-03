@@ -42,9 +42,9 @@ def test_skill_keeps_waiter_holder_and_lifecycle_boundaries_in_skill_only() -> N
     runtime = IMPL.read_text(encoding="utf-8")
     assert "`blocked at acquire(X)` proves only `waits X`; it never proves `holds X`" in skill
     assert "A waiter is not a holder" in skill
-    assert "Current lock holder/ownership is not established" in skill
-    assert "Pointer/address equality does not prove shared object or lock identity" in skill
-    assert "Stack position is not lifecycle chronology" in skill
+    assert "Current lock holder/ownership is unknown unless independent evidence directly proves it" in skill
+    assert "Pointer/address equality does not prove shared, singleton, global, or same-object identity" in skill
+    assert "Stack position and source order are not lifecycle chronology" in skill
     assert "blocked at acquire(X)" not in runtime
     assert "current lock holder" not in runtime.lower()
 
@@ -53,8 +53,7 @@ def test_skill_requires_two_observed_reciprocal_component_paths() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "two observed stack paths directly show reversed component nesting" in skill
-    assert "`A-owned operation -> B-owned operation/acquisition path`" in skill
-    assert "`B-owned operation -> A-owned operation/acquisition path`" in skill
+    assert "across distinct synchronization domains" in skill
     assert "`A1 -> B1` and `B2 -> A2`" in skill
     assert "Structural inversion never establishes current holders or a current deadlock cycle" in skill
     assert "reversed component nesting" not in runtime
@@ -63,16 +62,13 @@ def test_skill_requires_two_observed_reciprocal_component_paths() -> None:
 def test_skill_uses_one_explicit_six_call_counter() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-    assert "## Stack-only evidence-call state machine" in skill
-    assert "Every `tracecite_search` and every `tracecite_expand` is one evidence call" in skill
-    assert "Maintain one local `evidence_call_index`, initialized to `0`" in skill
-    assert "Increment it exactly once after each TraceCite tool response" in skill
-    assert "calls 1–2 are the complete orientation phase" in skill
-    assert "calls 3–6 are reciprocal-only" in skill
-    assert "when `evidence_call_index >= 6`, another TraceCite call is forbidden" in skill
-    assert "A Runtime transport allowance may be higher" in skill
-    assert "never extra investigation budget" in skill
-    assert "Do not continue toward a higher Runtime ceiling" in skill
+    assert "## Highest-priority stack-only stop contract" in skill
+    assert "6 total TraceCite evidence calls" in skill
+    assert "`tracecite_search` + `tracecite_expand` combined" in skill
+    assert "Count locally from 1" in skill
+    assert "Calls 1-2: locate one representative blocked domain path" in skill
+    assert "Calls 3-6: only seek the exact reverse component nesting" in skill
+    assert "Never reset the count and never continue toward a higher Runtime ceiling" in skill
     assert "evidence_call_index" not in runtime
     assert "reciprocal-only" not in runtime
 
@@ -80,25 +76,25 @@ def test_skill_uses_one_explicit_six_call_counter() -> None:
 def test_skill_stops_after_nonadvancing_reciprocal_attempts() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-    assert "After two non-advancing reciprocal attempts" in skill
-    assert "If the reverse path is still unclosed after call 6, finalize immediately" in skill
-    assert "broad discovery queries such as `goroutine`, `Lock`, `semacquire`" in skill
-    assert "lifecycle/symptom sweeps such as `runc`, `shim`, `process`, `RPC`, or `FIFO`" in skill
-    assert "This state machine is Agent investigation/stopping policy. It must not be moved into Runtime" in skill
-    assert "non-advancing reciprocal" not in runtime
+    assert "two reciprocal attempts fail to advance" in skill
+    assert "call 6 returns" in skill
+    assert "stop all tool use immediately" in skill
+    assert "Broad waiter census, pointer searches, lifecycle searches, and symptom sweeps are forbidden after orientation" in skill
+    assert "Agent investigation and stopping policy live here" in skill
+    assert "reciprocal attempts" not in runtime
 
 
 def test_skill_forces_fixed_stack_only_terminal_shape() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
-    assert "The first assistant prose after the final evidence call MUST begin exactly with `Observed:`" in skill
-    assert "the very next assistant token MUST be the `O` in `Observed:`" in skill
-    assert "emit exactly four short paragraphs and nothing else" in skill
+    assert "The entire user-visible answer then begins with `Observed:`" in skill
+    assert "There is no preamble, scratch reasoning, evidence summary, heading, bullet list, stopping narration, or text before `Observed:`" in skill
+    assert "The entire answer is exactly four short paragraphs" in skill
     assert "`Observed:` representative directly observed blocked path(s)" in skill
     assert "`Mechanism:` either" in skill
-    assert "`Uncertainty:` “Current lock holder/ownership is not established by this artifact.”" in skill
-    assert "`Boundary:` “The supplied evidence supports the in-process blocking pattern, but does not establish the downstream process/RPC/restart lifecycle.”" in skill
-    assert "Do not add any fifth paragraph" in skill
+    assert "`Uncertainty:` `Current lock holder/ownership is not established by this artifact.`" in skill
+    assert "`Boundary:` `The supplied evidence supports the in-process blocking pattern, but does not establish the downstream process/RPC/restart lifecycle.`" in skill
+    assert "Nothing else may appear before or after them" in skill
     assert "terminal mode" not in runtime.lower()
 
 
