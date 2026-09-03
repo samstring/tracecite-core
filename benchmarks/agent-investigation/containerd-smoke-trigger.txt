@@ -1,14 +1,14 @@
-trigger: 2026-09-03 single-six-call-budget diagnostic
+trigger: 2026-09-04 fail-closed-stack-only-stopping diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-bounded-root-cause-firewall
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-single-six-call-counter-plus-four-endpoint-reciprocal-proof
+adaptive_stopping_skill: stack-only-six-call-hard-stop-plus-exact-four-paragraph-final
 skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: use one local evidence_call_index; calls 1-2 orientation and 3-6 reciprocal-only; never treat higher Runtime transport allowance as investigation budget; require both observed reversed component paths for structural inversion; no waiter-as-holder, pointer-identity, or lifecycle promotion; final output starts Observed and has exactly four paragraphs
+diagnostic_focus: at most six combined TraceCite evidence calls; stop immediately after closure/non-advance/call6/refusal; whole answer must start Observed and contain exactly four short paragraphs; no pointer-derived object identity, waiter-as-holder/acquired promotion, starvation/deadlock promotion, or downstream lifecycle/restart story
 agent_timeout_seconds: 900
