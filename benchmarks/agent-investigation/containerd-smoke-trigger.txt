@@ -1,13 +1,13 @@
-trigger: 2026-09-03 stack-only terminal claim whitelist diagnostic after guard sync
+trigger: 2026-09-03 stack-only final reconstruction barrier diagnostic
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: bounded-root-cause-plus-final-evidence-discipline
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: compact-stack-only-terminal-claim-whitelist
+adaptive_stopping_skill: stack-only-final-reconstruction-barrier
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-16
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: once-reciprocal-structure-is-found-final-may-state-only-observed-paths-structural-inversion-holder-unknown-direct-impact-and-artifact-boundary
+diagnostic_focus: reconstruct-final-only-from-observed-or-supported-claim-ledger; no-line-position-lifecycle-completion; prefer-observed-reciprocal-component-structure-over-same-lock-convoy
 agent_timeout_seconds: 900
