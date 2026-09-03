@@ -66,6 +66,16 @@ Before each TraceCite call identify one unresolved claim and one discriminator. 
 - No equivalent-waiter census, confirmation pass, or symptom sweep after the discriminator closes.
 - Runtime call exhaustion never upgrades evidence.
 
+### Terminal transition is immediate and irreversible
+
+The moment any of the following occurs, switch to terminal mode immediately:
+
+- the causal discriminator is closed;
+- the causal discriminator is `bounded_unknown`;
+- TraceCite reports a transport/evidence-call ceiling or refuses further evidence access.
+
+After terminal mode begins, do **not** request another evidence tool call and do **not** emit exploratory prose such as “let me think”, “the smoking gun”, “the key insight”, causal brainstorming, alternatives, source-code reconstruction, or lifecycle speculation. Treat every subsequent assistant text token as part of the final answer and apply the terminal answer gate below from the first token. A tool-limit message is a stopping signal only; it is never evidence and never permission to complete missing causal edges from memory.
+
 ## 4. Lifecycle boundary
 
 External process creation, shim/runc state, RPC completion, retries, cleanup/reaping, termination progress, and restart recovery require independent `event_capable` evidence tied to the observed attempt.
