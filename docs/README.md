@@ -8,8 +8,9 @@ TraceCite documentation is split into **living contracts** and **archival histor
 
 | Document | Purpose | Status |
 |---|---|---|
-| [`../README.md`](../README.md) / [`../README.zh-CN.md`](../README.zh-CN.md) | Project overview, advantages, Pi/Codex/Cursor usage, benchmark summary, architecture | Current |
+| [`../README.md`](../README.md) / [`../README.zh-CN.md`](../README.zh-CN.md) | Project overview, advantages, global Agent setup, benchmark summary, architecture | Current |
 | [`architecture.md`](architecture.md) / [`architecture.zh-CN.md`](architecture.zh-CN.md) | Normative architecture and ownership boundaries | **Normative / Current** |
+| [`agent-global-setup.md`](agent-global-setup.md) / [`agent-global-setup.zh-CN.md`](agent-global-setup.zh-CN.md) | Global skill/rule installation, host locations, and TraceCite activation boundary | Current |
 | [`agent-integration.md`](agent-integration.md) / [`agent-integration.zh-CN.md`](agent-integration.zh-CN.md) | Agent host integration, Pi/Codex/Cursor recipes, Evidence API semantics | Current |
 | [`benchmark-results.md`](benchmark-results.md) / [`benchmark-results.zh-CN.md`](benchmark-results.zh-CN.md) | Validated paired Agent A/B measurements and caveats | Current |
 | [`context-engine.md`](context-engine.md) / [`context-engine.zh-CN.md`](context-engine.zh-CN.md) | Cross-turn evidence delta, Ledger recovery, context transport | Current |
