@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Union
 
 from .candidate_search import (
+    can_capture_candidate_lines,
     candidate_anchors,
     iter_candidate_records,
     scan_candidate_lines,
@@ -54,8 +55,6 @@ def _candidate_eligible(
     since: Optional[str],
     until: Optional[str],
 ) -> bool:
-    # These scopes are record-semantic today. Keep the old full-record path
-    # until candidate boundary expansion can prove identical scoped coverage.
     if any(value is not None for value in (pid, tail_lines, line_from, line_to, last, since, until)):
         return False
     return supports_candidate_records(segmenter) and candidate_anchors(matcher) is not None
@@ -170,14 +169,17 @@ def filter_text(
         until=until,
     )
     candidate_scan = (
-        scan_candidate_lines(work_input, matcher, encoding=encoding)
+        scan_candidate_lines(
+            work_input,
+            matcher,
+            encoding=encoding,
+            capture_lines=can_capture_candidate_lines(selected_segmenter),
+        )
         if use_candidates
         else None
     )
     candidate_first = candidate_scan is not None
 
-    # Candidate scanning already counts the frozen input. Otherwise retain the
-    # old counting semantics for segment-first scopes.
     work_total_lines = (
         candidate_scan.total_lines
         if candidate_scan is not None
@@ -199,10 +201,6 @@ def filter_text(
         segmenter=selected_segmenter,
         encoding=encoding,
     )
-    # The default candidate path has no time scope, so mtime is sufficient as
-    # the reference passed into a segmenter's timestamp resolver. This avoids
-    # the old unconditional reference_datetime scan on raw logs with no
-    # timestamp at all.
     ref = (
         datetime.fromtimestamp(work_input.stat().st_mtime)
         if candidate_first
@@ -247,6 +245,7 @@ def filter_text(
             selected_segmenter,
             candidate_scan.line_numbers,
             encoding=encoding,
+            captured_lines=candidate_scan.captured_lines,
         )
     else:
         raw_records = _legacy._iter_merged_records(
@@ -275,8 +274,6 @@ def filter_text(
                 ):
                     continue
 
-            # This is the semantic gate. Raw candidates never become Evidence
-            # until the original matcher succeeds on the complete logical record.
             matched, term, terms_hit, matched_by = matcher.match_with_components(
                 record.text, normalized_components
             )
