@@ -1,4 +1,4 @@
-trigger: 2026-09-03 explicit TraceCite skill activation diagnostic after run 105 clean semantic failure
+trigger: 2026-09-03 rerun explicit TraceCite skill activation diagnostic after YAML fix
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-bounded-root-cause-firewall
