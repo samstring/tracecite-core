@@ -99,6 +99,16 @@ def test_skill_forces_sync_first_orientation_and_reciprocal_queries() -> None:
     assert "complementary acquisition primitive" not in runtime
 
 
+def test_smoke_prefers_structural_diversity_before_lock_spelling() -> None:
+    smoke = SMOKE.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "prefer an exact function/type/component symbol already on that path" in smoke
+    assert "follow TraceCite structural-diversity/navigation hints" in smoke
+    assert "before trying complementary Lock/RLock spellings" in smoke
+    assert "a no-match for one literal spelling is never evidence" in smoke
+    assert "structural-diversity/navigation hints" not in runtime
+
+
 def test_skill_stops_after_nonadvancing_reciprocal_attempts() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
