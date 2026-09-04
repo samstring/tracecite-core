@@ -8,113 +8,165 @@
 
 ## Context
 
-The current Agent text-search path already provides segmentation, EvidencePointer identity, provenance, RetrievalSession novelty/coverage, materialization, and exact citation. However, the validated RCA benchmarks exposed several transport and large-source problems:
+The previous Agent text-search path already provided segmentation, EvidencePointer identity, provenance, RetrievalSession novelty/coverage, materialization, and exact citation, but RCA benchmarks exposed several transport and large-source problems:
 
-- repeated search calls may snapshot, count, or hash the same source again;
-- live-source full-copy snapshots become expensive as files grow;
-- Agent hot paths write and reread `matched_records.jsonl`, `hits.jsonl`, `evidence.log`, and filter history artifacts;
-- a high-cardinality search can be projected as a complete `EvidenceIndex` locator list, allowing hundreds of thousands of locators to enter model context;
-- multi-step search/filter/aggregate workflows can expose intermediate results at every Agent tool boundary;
-- candidate-count limits do not reliably constrain the actual token payload admitted to Agent context.
+- repeated search calls could snapshot, count, or hash the same source again;
+- live-source full-copy snapshots became expensive as files grew;
+- Agent hot paths wrote and reread `matched_records.jsonl`, `hits.jsonl`, `evidence.log`, and filter history artifacts;
+- a high-cardinality search could become a complete `EvidenceIndex` locator list and enter model context;
+- multi-step search/filter/aggregate workflows exposed intermediate results at every Agent tool boundary;
+- candidate-count limits did not reliably constrain actual token payload.
 
-One RCA comparison demonstrated the failure mode directly: a low-selectivity query matched essentially every row, the EvidenceIndex exposed roughly 173k line locators, and the following model request became hundreds of thousands of fresh input tokens. The architecture must make oversized intermediate results impossible to transport by default rather than relying on the Agent to remember to write an optimal `grep | ... | head` pipeline every time.
+One RCA comparison demonstrated the failure mode directly: a low-selectivity query matched essentially every row, the EvidenceIndex exposed roughly 173k line locators, and the following model request became hundreds of thousands of fresh input tokens.
 
-At the same time, TraceCite already contains useful foundations that should be reused rather than replaced: `SourceVersion` identity, `candidate_search`, Segmenters, RetrievalSession novelty/repetition/coverage, exact materialization, `live_cut`, and `segment_store`.
+TraceCite already contained useful foundations that should be reused rather than replaced: SourceVersion identity, candidate search/recovery primitives, Segmenters, RetrievalSession novelty/repetition/coverage, exact materialization, `live_cut`, and `segment_store`.
 
 ## Decision
 
 Adopt a SourceVersion-bound, budget-gated Evidence Shell for Agent text investigation.
 
-1. One user question resolves one stable `QuestionSourceView` / `SourceVersion`. All search/run/materialize/replay operations in that investigation use that same immutable version.
-2. At a later user question, a cheap file fingerprint may reuse an already verified snapshot/version, SHA, and line/index metadata when the source has not changed.
-3. Live sources prefer cooperative `live_cut` plus immutable segments instead of copying the entire accumulated file on every question. Historical segments are reused and hashed once.
-4. Introduce `tracecite_run` / Evidence Shell as a small Agent-facing program surface for composing mechanical search/filter/aggregate/navigation work in one tool invocation.
-5. The shell must preserve the semantics of existing search capabilities. Backend execution may use candidate scanning, regex, structured extractors, or other registered primitives without exposing backend-specific Agent tools.
-6. Raw search hits are passed through the selected Segmenter before Evidence admission. The complete logical record is the minimum candidate unit.
-7. Maximum Evidence transport tokens/bytes are User/Host Policy. The Agent request does not contain fields that can raise or bypass the configured budget.
-8. Ordinary search semantics are all-or-refine: if the complete final matched-record payload exceeds the configured Evidence budget, return `status=too_broad`, `reason=MATCHED_EVIDENCE_BUDGET_EXCEEDED`, zero Evidence bodies, and an instruction to refine the query/scope. Do not silently return first-N as if complete.
-9. Explicit first/last/top/take/sample operations remain valid only when selection semantics are intentionally requested; their incompleteness must remain explicit.
-10. Oversized match sets and intermediate sets stay inside Runtime. A future stable result handle may reference a server-side MatchSet, but complete locator sets must not be dumped into model context.
-11. The new Agent shell path does not use high-cardinality EvidenceIndex projection. Legacy retrieve/index behavior may remain temporarily for compatibility while callers migrate.
-12. The target Agent search hot path streams logical Records directly. `matched_records.jsonl`, `hits.jsonl`, `evidence.log`, and filter history may remain optional legacy/debug artifacts but must not be required for Agent execution.
-13. Once TraceCite establishes a SHA for an immutable SourceVersion/segment, downstream search, materialize, and bridge code reuse it. Revalidation remains necessary for external mutable paths TraceCite has not frozen.
-14. Existing provenance, RetrievalSession novelty/repeated-evidence suppression/coverage, materialization, and citation semantics remain the canonical Evidence integrity layer downstream of search.
-15. The Agent skill must explicitly teach `tracecite_run`, the user-owned budget contract, `too_broad` refinement behavior, SourceVersion stability, and exact materialization/citation.
+1. One user-question retrieval context resolves one stable `QuestionSourceView` / SourceVersion. Repeated Agent search operations in that question reuse the same immutable view.
+2. At a later question, a cheap file fingerprint may reuse an already verified snapshot/version, SHA, and line metadata when the source has not changed.
+3. Live sources prefer cooperative `live_cut` plus immutable segments. If writer cooperation is unavailable, the fallback captures only newly appended complete bytes after the first capture when append-only continuity is mechanically verified.
+4. `tracecite_run` / Evidence Shell is the primary Agent text-search surface. Mechanical search/filter/aggregate/navigation stages execute inside Runtime in one tool call.
+5. Existing public `QueryTarget` search reduces to the same Evidence Shell contract rather than the old EvidenceIndex projection.
+6. Raw search occurs before logical Record materialization whenever local recovery is safe. The selected Segmenter restores the complete logical Record for each candidate hit. Scoped or semantically unsafe cases may fall back to full Record iteration.
+7. The Agent search hot path is artifact-free: it does not require `matched_records.jsonl`, `hits.jsonl`, `evidence.log`, filter history, or unmatched-token summaries.
+8. Maximum Evidence transport tokens/bytes are User/Host Policy. Agent tool arguments cannot raise or bypass the configured budget.
+9. Ordinary search semantics are all-or-refine. If the complete final matched-record payload exceeds policy, return `status=too_broad`, `reason=MATCHED_EVIDENCE_BUDGET_EXCEEDED`, zero Evidence, and require query/scope refinement.
+10. Explicit `first`/`last`/`head`/`tail`/`take`/`near`/`seek` operations are valid only when subset/position semantics are intentionally requested; their incompleteness remains explicit.
+11. Aggregate stages may process arbitrarily large intermediate match sets inside Runtime. If the aggregate output itself exceeds the user transport policy, return `AGGREGATE_OUTPUT_BUDGET_EXCEEDED` rather than dumping it.
+12. The shell supports literal search, safe regex search, grep-style fixed/regex/invert/case-insensitive predicates, structured `where`, field existence/missing predicates, line scopes, sort/reverse, selection/navigation, and count/group/distinct operations.
+13. Once TraceCite establishes SHA for an immutable snapshot/segment, downstream shell EvidencePointer creation, managed materialize, and replay reuse the cached SHA. External mutable paths not owned by SourceVersionStore still require integrity verification.
+14. Snapshot creation computes SHA and line count in the same copy/read pass. Agent search no longer performs separate `count snapshot + count original` passes.
+15. SourceVersionStore persists both latest source state and question-bound historical views, so old immutable segment SHA metadata remains replayable after a newer source version exists.
+16. Existing provenance, RetrievalSession novelty/repeated-evidence suppression/coverage, materialization, and citation semantics remain the canonical Evidence integrity layer downstream of search.
+17. The Agent skill explicitly teaches Evidence Shell syntax, user-owned budget behavior, `too_broad` refinement, SourceVersion stability, and exact materialization from the returned immutable pointer path/SHA.
 
-The initial implementation may temporarily reuse `search_text` behind Evidence Shell to retain regex/time/fold/segmenter parity. That compatibility implementation is transitional and does not change the target hot-path decision above.
+## Source modes
+
+### Mutable file (default Agent local-source mode)
+
+At the first access for a question, TraceCite creates an immutable snapshot while simultaneously calculating SHA and line count. The question then remains bound to that snapshot regardless of later changes to the original path.
+
+At a later question, TraceCite first compares a cheap source fingerprint (`device`, `inode`, `size`, `mtime_ns`, `ctime_ns`). If unchanged and the cached snapshot still exists, the previous snapshot and SHA are reused with no copy, full hash, or line recount.
+
+### Static source
+
+A host may explicitly declare a source static/immutable. TraceCite can use the original path as the immutable segment, calculate identity once, and reuse it while its fingerprint remains unchanged.
+
+### Live source
+
+A live source is logically represented by ordered immutable segments. TraceCite first offers a cooperative LiveCut request to the writer. A cooperating writer can rotate the current file to a stable segment in O(1) filesystem metadata work, then continue writing a new live file.
+
+Without writer cooperation, TraceCite uses an append-only fallback: it verifies continuity at the previous captured boundary and copies only newly appended complete bytes into a new immutable segment. Historical segments are reused and each segment is hashed once.
+
+A QuestionSourceView identity is a digest of the ordered immutable segment manifest; individual EvidencePointer provenance remains bound to the exact segment SHA and segment-local line range.
+
+## Evidence Shell execution model
+
+```text
+Agent program
+    ↓
+QuestionSourceView
+    ↓
+raw literal / raw regex candidate search
+    ↓
+Segmenter restores complete Record
+    ↓
+search / grep / where / exclude / sort / near / aggregate ...
+    ↓
+intermediate rows remain Runtime-internal
+    ↓
+User/Host Evidence budget gate
+    ├─ too large → too_broad, zero Evidence, refine
+    └─ fits      → EvidencePointer candidates
+                         ↓
+                    materialize
+                         ↓
+                 exact raw Evidence + citation
+```
+
+No complete high-cardinality locator list is part of the Agent search contract.
 
 ## Alternatives considered
 
 ### Keep native Agent shell as the only search mechanism
 
-Rejected as the TraceCite integration contract. A strong Agent can make native shell token-efficient with one pipeline, but native shell does not automatically enforce immutable source identity, user-owned output budgets, RetrievalSession deduplication, or exact Evidence provenance. TraceCite should make those guarantees runtime defaults rather than Agent coding conventions.
+Rejected as the TraceCite integration contract. A strong Agent can make native shell token-efficient with one pipeline, but native shell does not automatically enforce immutable source identity, user-owned output budgets, RetrievalSession deduplication, or exact Evidence provenance.
 
 ### Keep EvidenceIndex and compact only its rendering
 
-Rejected as the primary Agent search model. A compact index can reduce one payload, but it still makes high-cardinality locator navigation an Agent concern and encourages multiple model/tool turns over a large result set. The preferred behavior is to refine mechanically before Evidence crosses the boundary.
+Rejected for Agent text search. It still makes high-cardinality locator navigation an Agent concern and encourages repeated model/tool turns over a large result set.
 
 ### Always return a fixed first-N candidate set
 
-Rejected because previous RCA tests showed correctness loss when important evidence occurred after the initial prefix. First-N is valid only as explicit selection semantics, not as a hidden approximation to a complete search.
+Rejected because prior RCA tests lost relevant evidence occurring after the prefix. First-N is only valid as explicit selection semantics.
 
 ### Make the Agent choose `max_evidence_tokens`
 
-Rejected because an Agent could respond to an oversized result by increasing the budget and recreate the context-explosion problem. Budget is user/host policy; the Agent controls query selectivity instead.
+Rejected because an Agent could respond to an oversized result by increasing the budget and recreate the context-explosion problem.
 
-### Introduce a large public MatchSet API first
+### Require a public MatchSet API
 
-Deferred. MatchSet/result handles are useful internal/runtime concepts, especially for cross-call reuse, but the minimal P0 can be implemented with the Evidence Shell contract and `too_broad` gate. Public result-set APIs should be added only if real workflows require them.
+Deferred. Internal result sets/handles may still be useful later, but the current all-or-refine shell contract does not require a public MatchSet abstraction.
 
 ### Copy every live source on every user question
 
-Rejected for large append-heavy sources. Cooperative live cuts and immutable segments preserve a question-time evidence boundary without repeatedly copying and hashing all historical bytes.
+Rejected for large append-heavy sources. LiveCut/immutable segments or verified incremental append capture avoid repeatedly copying and hashing all historical bytes.
 
 ## Consequences
 
 Positive:
 
-- high-cardinality search output is prevented from entering model context by contract;
+- high-cardinality search output cannot become an EvidenceIndex dump in the Agent query path;
 - token efficiency no longer depends entirely on the Agent writing perfect native shell pipelines;
-- Agent mechanical search can be composed inside one tool invocation;
-- full logical records, not arbitrary physical hit lines, remain the evidence candidate boundary;
-- immutable source/provenance/session semantics are preserved;
-- unchanged and live sources can reuse previously frozen/hash-verified bytes;
-- the target Agent hot path removes repeated artifact I/O and redundant full-file passes.
+- multi-step mechanical search executes in one Runtime invocation;
+- common literal/regex searches locate raw candidates before JSON/record parsing;
+- complete logical Records remain the Evidence admission unit;
+- unchanged sources reuse prior snapshot + SHA;
+- live sources reuse historical immutable segments;
+- managed materialize/replay avoid rehashing already verified snapshots;
+- the Agent hot path no longer requires matched-record/filter artifacts.
 
 Costs and risks:
 
-- `AgentResult.status` gains the additive `too_broad` value, so strict consumer enums must migrate;
-- the Evidence Shell parser/runtime becomes a new public execution surface that requires safety and parity tests;
-- the first implementation still uses legacy `search_text` artifacts internally, so the I/O/snapshot optimization is not complete yet;
-- question-bound SourceVersion caching requires a clear host/user-turn boundary;
-- live cut requires writer cooperation or a safe fallback such as CoW clone or a provably append-only bounded view;
-- token estimation must be deterministic and conservative enough for transport policy while remaining dependency-light.
+- `AgentResult.status` includes additive `too_broad`;
+- Evidence Shell is a public execution surface and requires continued safety/parity validation;
+- time-scoped or locally unrecoverable multiline formats can still require full Record scans to preserve semantics;
+- host integration must define the user-question retrieval-context boundary when a long-lived host session spans multiple user turns;
+- live-cut performance is best with writer cooperation; the fallback assumes mechanically verified append continuity;
+- deterministic token estimation is model-agnostic, so the exact byte cap remains a second hard transport guard.
 
-## Migration and validation
+## Migration status
 
-Migration is staged on `feature_for_agent_refacotr_shell`:
+Implemented on `feature_for_agent_refacotr_shell`:
 
-1. Add `EvidenceShellPolicy`, `EvidenceShellRequest`, `run_evidence_shell`, and the additive `too_broad` status.
-2. Expose `tracecite_run` in Agent adapters without any Agent-controlled Evidence budget field.
-3. Update Agent skill guidance for `too_broad` refinement and materialization.
-4. Add tests for under-budget complete results, over-budget zero-Evidence responses, pipeline refinement, structured predicates, aggregate behavior, explicit selection semantics, RetrievalSession repeated-evidence suppression, and `too_broad` session non-pollution.
-5. Replace the shell's temporary `search_text` dependency with a streaming Record search hot path that preserves all existing search semantics while dropping required legacy artifacts.
-6. Add question-level SourceVersion cache/fingerprint reuse and eliminate redundant snapshot/SHA/count passes.
-7. Integrate existing `live_cut` / `segment_store` primitives with immutable segment metadata and per-segment SHA reuse.
-8. Re-run existing Native-vs-TraceCite RCA benchmarks, comparing correctness, provider fresh-input tokens, maximum single tool output, full-file I/O passes, and wall time.
+1. `EvidenceShellPolicy`, `EvidenceShellRequest`, `run_evidence_shell`, and `too_broad`.
+2. Pi Agent `tracecite_run` without Agent-owned budget parameters.
+3. Updated TraceCite Agent skill.
+4. Artifact-free logical Record search.
+5. Raw-hit candidate-first parsing for locally recoverable formats.
+6. Public QueryTarget search routed through Evidence Shell; Agent query path no longer uses EvidenceIndex projection.
+7. SourceVersion fingerprint cache and question-bound immutable views.
+8. LiveCut + immutable segment/incremental append fallback.
+9. SHA/line-count fusion during snapshot creation and SHA reuse during managed materialize/replay.
+10. RetrievalSession novelty/repeated Evidence behavior retained after shell admission.
 
-Validation gates remain correctness/support/provenance/recoverability first, then efficiency. `too_broad` must not mutate `seen_evidence`/Coverage because no Evidence body was admitted to the Agent.
+Still intentionally deferred until validation phase:
 
-Rollback remains branch-level until the refactor is accepted back into `feature_for_agent`; legacy canonical operations remain compatibility surfaces during migration.
+- running the full existing regression suite;
+- Native-vs-TraceCite RCA benchmark reruns and performance measurements;
+- any public ResultHandle/MatchSet API.
+
+Validation remains correctness/support/provenance/recoverability first, then token/I/O/wall-time efficiency. `too_broad` must not mutate `seen_evidence`/Coverage because no Evidence was admitted.
 
 ## Documentation updates
 
-This decision updates or adds:
+This decision is reflected in:
 
 - `docs/architecture.md`
 - `docs/architecture.zh-CN.md`
 - `.agents/skills/tracecite-investigate/SKILL.md`
 - `docs/migrations/0002-evidence-shell-too-broad.md`
-- Pi Agent benchmark/integration adapter documentation and tool schemas as implemented
-
-The implementation-status tables in both architecture documents must accurately distinguish implemented, partially implemented, and planned stages during the refactor.
+- Pi Agent benchmark/integration adapter schemas
