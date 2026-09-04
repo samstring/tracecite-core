@@ -13,6 +13,17 @@
 - Any change to dependency direction, canonical Evidence semantics, RetrievalSession ownership, investigation concepts, public evidence/result/knowledge semantics, extension boundaries, trust/budget rules, or implementation status must update both architecture documents in the same change.
 - Record incompatible architectural changes and long-lived trade-offs as an ADR under `docs/adr/`; public schema/API changes also require a migration note and tests.
 
+## Development workflow and branch topology
+
+- `main` is the stable baseline.
+- `feature_for_agent` is the single source of truth for active development and is the default branch for normal implementation work.
+- Do not create branches merely to run benchmarks, CI, reproductions, or one-off validation; use GitHub Actions/workflow artifacts instead.
+- A child branch from `feature_for_agent` is allowed only for isolated/risky work. There may be **at most one** active child branch with commits not yet contained in `feature_for_agent`.
+- Before creating another child branch, merge/cherry-pick the intended changes from the current child back into `feature_for_agent` and retire the old child branch, or discard the failed experiment branch.
+- Historical `exp/`, `experiment/`, `bench/`, `test/`, `tmp/`, `work/`, `refactor/`, `merge/`, or old `feature/` branches are frozen history unless they are the single explicitly active post-policy child. Do not continue development on grandfathered historical branches; port needed code into `feature_for_agent` instead.
+- New isolated branches must start from the current `feature_for_agent` HEAD and have exactly one clear purpose.
+- Follow `docs/development-workflow.md`. The automated topology check is `.github/workflows/branch-topology-guard.yml`.
+
 ## Agent/Evidence boundary
 
 The highest-level contract is:
