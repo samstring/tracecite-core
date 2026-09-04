@@ -35,6 +35,18 @@ def _score(passed: bool = True):
     }
 
 
+def _clean_validity():
+    return {
+        "valid_for_comparison": True,
+        "reason": "clean",
+        "exit_code": 0,
+        "provider_contamination": None,
+        "provider_incidents": {},
+        "provider_recovered_incidents": {},
+        "timeout": False,
+    }
+
+
 def test_clean_run_is_valid_independently_of_task_result() -> None:
     result = MODULE.build_run_result(_score(True), exit_code=0)
     assert result["task_result"]["passed"] is True
@@ -47,13 +59,7 @@ def test_clean_run_is_valid_independently_of_task_result() -> None:
         "model_calls": 2,
         "usage_source": "model_events",
     }
-    assert result["run_validity"] == {
-        "valid_for_comparison": True,
-        "reason": "clean",
-        "exit_code": 0,
-        "provider_contamination": None,
-        "timeout": False,
-    }
+    assert result["run_validity"] == _clean_validity()
 
 
 def test_provider_contamination_is_not_product_loss() -> None:
@@ -68,9 +74,10 @@ def test_provider_contamination_is_not_product_loss() -> None:
     assert result["run_validity"]["provider_contamination"] == "provider_rate_limited"
 
 
-def test_provider_error_in_session_metadata_is_detected() -> None:
+def test_unrecovered_provider_error_in_session_metadata_is_detected() -> None:
     session = json.dumps(
         {
+            "id": "provider-error",
             "type": "message",
             "message": {
                 "role": "assistant",
@@ -84,6 +91,50 @@ def test_provider_error_in_session_metadata_is_detected() -> None:
     result = MODULE.build_run_result(_score(False), exit_code=0, session_text=session)
     assert result["run_validity"]["valid_for_comparison"] is False
     assert result["run_validity"]["reason"] == "provider_rate_limited"
+    assert result["run_validity"]["provider_incidents"] == {"provider_rate_limited": 1}
+    assert result["run_validity"]["provider_recovered_incidents"] == {}
+
+
+def test_recovered_provider_error_is_observed_but_does_not_invalidate_run() -> None:
+    session = "\n".join(
+        (
+            json.dumps(
+                {
+                    "id": "provider-error",
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "stopReason": "error",
+                        "rawStopReason": "429",
+                        "errorMessage": "HTTP 429 rate limited by provider",
+                        "content": [],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "id": "provider-retry-success",
+                    "parentId": "provider-error",
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "stopReason": "stop",
+                        "content": [{"type": "text", "text": "continued after retry"}],
+                    },
+                }
+            ),
+        )
+    )
+    result = MODULE.build_run_result(_score(True), exit_code=0, session_text=session)
+    assert result["run_validity"] == {
+        "valid_for_comparison": True,
+        "reason": "clean",
+        "exit_code": 0,
+        "provider_contamination": None,
+        "provider_incidents": {"provider_rate_limited": 1},
+        "provider_recovered_incidents": {"provider_rate_limited": 1},
+        "timeout": False,
+    }
 
 
 def test_evidence_line_numbers_and_answer_text_do_not_contaminate_validity() -> None:
@@ -132,13 +183,7 @@ def test_evidence_line_numbers_and_answer_text_do_not_contaminate_validity() -> 
         session_text=session,
         transcript_text=transcript,
     )
-    assert result["run_validity"] == {
-        "valid_for_comparison": True,
-        "reason": "clean",
-        "exit_code": 0,
-        "provider_contamination": None,
-        "timeout": False,
-    }
+    assert result["run_validity"] == _clean_validity()
 
 
 def test_timeout_is_separate_from_provider_failure() -> None:
@@ -152,8 +197,8 @@ def test_trajectory_counts_canonical_tracecite_activity() -> None:
     events = [
         {
             "type": "tool",
-            "name": "tracecite_retrieve",
-            "output": '{"operation":"retrieve","status":"ok","evidence":[{"ref":"x:L1"}],"coverage":{"new_evidence":1}}',
+            "name": "tracecite_run",
+            "output": '{"operation":"evidence_shell","status":"ok","evidence":[{"ref":"x:L1"}],"coverage":{"new_evidence":1}}',
             "activity": {"category": "tracecite_evidence"},
         },
         {"type": "tool", "name": "find", "output": "x", "activity": {"category": "native_search"}},
