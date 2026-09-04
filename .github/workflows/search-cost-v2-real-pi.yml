@@ -123,6 +123,18 @@ jobs:
           export TRACECITE_EVIDENCE_FILES="metrics.csv,logs.jsonl,traces.jsonl,incident.txt"
           export TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT_ROOT/tracecite-runtime-evidence-access.jsonl"
           export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$RESULT_ROOT/tracecite-blocked-native-evidence-attempts.jsonl"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path(os.environ['GITHUB_WORKSPACE']) / 'benchmarks/agent-investigation/pi_tracecite_extension_impl.ts'
+          text = path.read_text(encoding='utf-8')
+          needle = '      matched_existing_evidence: data.matched_existing_evidence,\n      coverage, progress: data.progress, correlation_constraints: data.correlation_constraints,'
+          replacement = '      matched_existing_evidence: data.matched_existing_evidence,\n      signal_hints: data.signal_hints, signal_hint_note: data.signal_hint_note,\n      coverage, progress: data.progress, correlation_constraints: data.correlation_constraints,'
+          if needle not in text:
+              raise SystemExit('Pi compact signal-hint insertion point not found')
+          path.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
+          print('benchmark patch: forwarding signal_hints through Pi compact transport')
+          PY
           cd "$EVIDENCE_ROOT"
           PROMPT="A production incident occurred in a Train Ticket microservice deployment. The supplied telemetry covers the incident window and incident.txt gives the known onset time. Determine the root-cause service and the concrete failure mechanism. Explain the causal chain from root cause to downstream symptoms. All telemetry content must be obtained through TraceCite tools only. Do not use native file access. Cite exact evidence lines for material claims. Stop when sufficiently supported instead of doing confirmatory searches."
           start_ns=$(date +%s%N)
