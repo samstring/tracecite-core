@@ -22,6 +22,7 @@ const AUTHORIZED_EVIDENCE_HINT = AUTHORIZED_EVIDENCE_FILES.length > 0
   ? ` Host-authorized evidence files: ${AUTHORIZED_EVIDENCE_FILES.join(", ")}.`
   : "";
 const TRACE_TOOLS = new Set([
+  "tracecite_run",
   "tracecite_retrieve", "tracecite_materialize", "tracecite_replay",
   "tracecite_aggregate", "tracecite_traverse", "tracecite_verify",
   "tracecite_search", "tracecite_expand",
@@ -109,6 +110,30 @@ export default function traceciteTools(pi: ExtensionAPI) {
       ? event.details as Record<string, unknown>
       : {};
     return { details: { ...base, tracecite_host_activity: row, tracecite_host_activity_summary: activitySummary() } } as any;
+  });
+
+  pi.registerTool({
+    name: "tracecite_run",
+    label: "TraceCite Evidence Shell",
+    description: "Run a complete mechanical evidence-search pipeline inside TraceCite. Intermediate matches stay outside model context. The evidence token/byte budget is user/host policy and is not an Agent parameter. If status is too_broad, refine the query or scope; do not ask to increase the budget." + AUTHORIZED_EVIDENCE_HINT,
+    parameters: Type.Object({
+      file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }),
+      program: Type.String({ description: "Evidence Shell pipeline, e.g. search 'ERROR' | search 'route-service' or search 'status' | where statusCode == 500 | count." }),
+      segmenter: Type.Optional(Type.String()),
+      last: Type.Optional(Type.String()),
+      since: Type.Optional(Type.String()),
+      until: Type.Optional(Type.String()),
+      fold: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_id, p, signal, _update, ctx) {
+      const args = ["run", p.file, p.program];
+      if (p.segmenter) args.push("--segmenter", p.segmenter);
+      if (p.last) args.push("--last", p.last);
+      if (p.since) args.push("--since", p.since);
+      if (p.until) args.push("--until", p.until);
+      if (p.fold) args.push("--fold");
+      return output(await bridge(args, ctx.cwd, signal), { operation: "evidence_shell", canonical_operation: true });
+    },
   });
 
   pi.registerTool({
