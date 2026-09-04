@@ -1,0 +1,56 @@
+name: Repair feature_for_agent search integration
+
+on:
+  push:
+    branches:
+      - feature_for_agent
+    paths:
+      - .github/workflows/repair-feature-for-agent-search.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature_for_agent
+          fetch-depth: 0
+
+      - name: Remove unsupported filter_text timestamp argument
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/tracecite/runtime/tools.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''            max_line_chars=max_line_chars,\n            # Evidence identity is SHA + line range; unscoped Agent search does\n            # not need to normalize every JSON timestamp. Time-scoped/folded\n            # searches keep historical timestamp parsing semantics.\n            parse_record_timestamps=bool(last or since or until or fold),\n'''
+          new = '''            max_line_chars=max_line_chars,\n'''
+          if old not in text:
+              raise SystemExit('expected parse_record_timestamps block not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Run focused search regressions
+        shell: bash
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pytest -q \
+            tests/test_runtime_schema_tools.py \
+            tests/test_runtime_session_retrieval.py \
+            tests/test_session_novelty_regressions.py \
+            tests/test_pi_tracecite_bridge.py \
+            tests/test_canonical_evidence_contract.py \
+            tests/test_evidence_index_routing.py
+
+      - name: Commit repair
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/tracecite/runtime/tools.py
+          git commit -m 'fix: restore search filter compatibility'
+          git push origin HEAD:feature_for_agent
