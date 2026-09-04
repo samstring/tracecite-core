@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   migrate:
-    # One-shot migration; retry after preserving the single-candidate concurrency test.
+    # One-shot migration; retry after full-suite compatibility cleanup.
     if: "${{ github.event.head_commit.message == 'chore: run internal candidate limit migration' }}"
     runs-on: ubuntu-latest
     steps:
@@ -32,10 +32,11 @@ jobs:
           python scripts/refactor_internal_candidate_limits_once.py
           python scripts/fix_internal_candidate_limits_once.py
           python scripts/fix_candidate_parallel_test_once.py
+          python scripts/fix_candidate_full_suite_once.py
 
       - name: Run focused regressions
         run: |
-          python -m pytest tests/test_runtime_agent_api.py tests/test_runtime_acquisition_boundary.py tests/test_evidence_routing.py tests/test_pi_tracecite_bridge.py tests/test_pi_tracecite_formal_flow.py tests/test_runtime_schema_tools.py tests/test_session_novelty_regressions.py
+          python -m pytest tests/test_runtime_agent_api.py tests/test_runtime_acquisition_boundary.py tests/test_evidence_routing.py tests/test_pi_tracecite_bridge.py tests/test_pi_tracecite_formal_flow.py tests/test_runtime_schema_tools.py tests/test_session_novelty_regressions.py tests/test_runtime_cli.py tests/test_stateful_cli.py tests/test_pi_source_identity_projection.py tests/test_gmi_scale_evidence_progress.py
           python scripts/check_architecture.py
 
       - name: Run full Core test suite
@@ -47,6 +48,7 @@ jobs:
           rm scripts/refactor_internal_candidate_limits_once.py
           rm scripts/fix_internal_candidate_limits_once.py
           rm scripts/fix_candidate_parallel_test_once.py
+          rm scripts/fix_candidate_full_suite_once.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
