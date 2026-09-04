@@ -18,6 +18,7 @@ env:
   GMI_BASE_URL: https://api.gmi-serving.com/v1
   PI_SKIP_VERSION_CHECK: "1"
   PI_TELEMETRY: "0"
+  INDEX_PROTOCOL_VERSION: "3"
 
 jobs:
   arm:
@@ -123,7 +124,6 @@ jobs:
           (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
           print(json.dumps(manifest,indent=2))
           PY
-          # Visible evidence must not contain the encoded case id or explicit RCAEval labels.
           if grep -R -n -F "$CASE_ID" "$EVIDENCE_ROOT" --exclude=manifest.json; then
             echo 'ground truth case id leaked into visible evidence' >&2
             exit 3
@@ -153,18 +153,6 @@ jobs:
             export TRACECITE_EVIDENCE_FILES="$(find "$EVIDENCE_ROOT" -maxdepth 1 -type f ! -name manifest.json -printf '%f\n' | paste -sd, -)"
             export TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT_ROOT/tracecite-runtime-evidence-access.jsonl"
             export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$RESULT_ROOT/tracecite-blocked-native-evidence-attempts.jsonl"
-            python - <<'PY'
-          import os
-          from pathlib import Path
-          path = Path(os.environ['GITHUB_WORKSPACE'])/'benchmarks/agent-investigation/pi_tracecite_extension_impl.ts'
-          text = path.read_text(encoding='utf-8')
-          needle = '      matched_existing_evidence: data.matched_existing_evidence,\n      coverage, progress: data.progress, correlation_constraints: data.correlation_constraints,'
-          replacement = '      matched_existing_evidence: data.matched_existing_evidence,\n      signal_hints: data.signal_hints, signal_hint_note: data.signal_hint_note,\n      coverage, progress: data.progress, correlation_constraints: data.correlation_constraints,'
-          if needle in text:
-              path.write_text(text.replace(needle,replacement,1),encoding='utf-8')
-          elif 'signal_hints: data.signal_hints' not in text:
-              raise SystemExit('signal_hints transport insertion point not found')
-          PY
             pi --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
               --thinking off --mode text --print \
               --session-dir "$RESULT_ROOT/session" \
