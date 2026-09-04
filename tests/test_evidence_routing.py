@@ -20,7 +20,6 @@ def test_routing_policy_uses_remaining_context_fraction_not_magic_file_size() ->
         fallback_direct_chars=2_000,
         max_direct_chars=100_000,
     )
-
     assert policy.direct_char_budget == 4_000
 
 
@@ -58,11 +57,9 @@ def test_small_first_source_uses_direct_line_addressable_path(tmp_path) -> None:
     assert "1: first" in payload["data"]["text"]
     assert "2: second" in payload["data"]["text"]
     assert "3: third" in payload["data"]["text"]
-    assert payload["coverage"]["context_start_line"] == 1
-    assert payload["coverage"]["context_end_line"] == 3
 
 
-def test_direct_query_keeps_lossless_raw_source_context(tmp_path) -> None:
+def test_query_uses_shell_contract_not_direct_raw_dump(tmp_path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text(
         "tap pay\napp background\nobject released\nlate callback\nCRASH\n",
@@ -71,7 +68,7 @@ def test_direct_query_keeps_lossless_raw_source_context(tmp_path) -> None:
     state_path = tmp_path / "investigation.json"
     InvestigationStore(state_path).create("diagnose crash")
 
-    result = retrieve(
+    payload = retrieve(
         EvidenceRequest(
             QueryTarget(source, "CRASH", snapshot=False),
             investigation_path=state_path,
@@ -80,17 +77,15 @@ def test_direct_query_keeps_lossless_raw_source_context(tmp_path) -> None:
             fallback_direct_chars=8_000,
             max_direct_chars=8_000,
         ),
-    )
-    payload = result.to_dict()
+    ).to_dict()
 
-    assert payload["data"]["routing"]["mode"] == "direct"
-    assert payload["data"]["direct_raw"]["fidelity"] == "lossless_line_addressable"
-    assert "runtime.log:1 tap pay" in payload["data"]["text"]
-    assert "runtime.log:2 app background" in payload["data"]["text"]
-    assert "runtime.log:3 object released" in payload["data"]["text"]
-    assert "runtime.log:4 late callback" in payload["data"]["text"]
-    assert "runtime.log:5 CRASH" in payload["data"]["text"]
-    assert payload["coverage"]["direct_raw_lines"] == 5
+    assert payload["status"] == "ok"
+    assert len(payload["evidence"]) == 1
+    assert "CRASH" in payload["evidence"][0]["label"]
+    assert "routing" not in payload["data"]
+    assert "direct_raw" not in payload["data"]
+    assert "text" not in payload["data"]
+    assert payload["data"]["source_version"]
 
 
 def test_multiple_unseen_tiny_sources_stay_direct_while_aggregate_fits_budget(tmp_path) -> None:
@@ -122,43 +117,30 @@ def test_multiple_unseen_tiny_sources_stay_direct_while_aggregate_fits_budget(tm
     assert "aggregate_line_addressable_sources_fit_budget" in reasons
 
 
-def test_repeated_query_same_source_does_not_repeat_raw_direct_dump(tmp_path) -> None:
+def test_repeated_query_suppresses_body_without_changing_source_version(tmp_path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("alpha\nERROR one\nomega\n", encoding="utf-8")
     state_path = tmp_path / "investigation.json"
     InvestigationStore(state_path).create("repeat search")
-    policy = EvidenceRoutingPolicy(
-        fallback_direct_chars=8_000,
-        max_direct_chars=8_000,
-        deep_progressive_after_executions=10,
-    )
 
     first = retrieve(
         EvidenceRequest(QueryTarget(source, "ERROR", snapshot=False), investigation_path=state_path),
-        routing_policy=policy,
     ).to_dict()
     second = retrieve(
         EvidenceRequest(QueryTarget(source, "ERROR", snapshot=False), investigation_path=state_path),
-        routing_policy=policy,
     ).to_dict()
 
-    assert first["data"]["routing"]["mode"] == "direct"
-    assert "direct_raw" in first["data"]
-    assert second["data"]["routing"]["mode"] == "progressive"
-    assert "source_already_seen" in second["data"]["routing"]["reasons"]
-    assert "direct_raw" not in second["data"]
+    assert first["status"] == "ok"
+    assert len(first["evidence"]) == 1
+    assert second["status"] == "no_new_evidence"
+    assert second["evidence"] == []
+    assert second["data"]["source_version"] == first["data"]["source_version"]
+    repeated = second["data"]["matched_existing_evidence"]
+    assert repeated[0]["start_line"] == 2
+    assert repeated[0]["sha256"]
 
 
-def _assert_complete_error_index(payload: dict) -> None:
-    assert "evidence_index" not in payload["coverage"]
-    index = payload["data"]["evidence_index"]
-    assert index["total_matches"] == 20
-    assert index["entries"] == [
-        {"rule": "ERROR", "count": 20, "lines": list(range(1, 21))}
-    ]
-
-
-def test_after_direct_read_query_becomes_progressive(tmp_path) -> None:
+def test_source_direct_read_does_not_force_query_into_legacy_progressive_path(tmp_path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("".join(f"ERROR item={i}\n" for i in range(20)), encoding="utf-8")
     state_path = tmp_path / "investigation.json"
@@ -168,8 +150,6 @@ def test_after_direct_read_query_becomes_progressive(tmp_path) -> None:
         max_direct_chars=8_000,
         progressive_max_candidates=5,
         deep_progressive_max_candidates=2,
-        progressive_match_records=4,
-        deep_progressive_match_records=100,
     )
 
     first = retrieve(
@@ -178,25 +158,19 @@ def test_after_direct_read_query_becomes_progressive(tmp_path) -> None:
     )
     assert first.to_dict()["data"]["routing"]["mode"] == "direct"
 
-    searched = retrieve(
-        EvidenceRequest(
-            QueryTarget(source, "ERROR", snapshot=False),
-            investigation_path=state_path,
-        ),
+    payload = retrieve(
+        EvidenceRequest(QueryTarget(source, "ERROR", snapshot=False), investigation_path=state_path),
         routing_policy=policy,
-    )
-    payload = searched.to_dict()
+    ).to_dict()
 
-    assert payload["data"]["routing"]["mode"] == "progressive"
-    assert "next_mode" not in payload["data"]["routing"]
+    assert payload["status"] == "ok"
     assert payload["coverage"]["match_records"] == 20
-    assert payload["coverage"]["evidence_returned"] == 0
-    assert payload["coverage"]["evidence_indexed"] is True
-    assert payload["coverage"]["evidence_truncated"] is False
-    _assert_complete_error_index(payload)
+    assert len(payload["evidence"]) == 20
+    assert "routing" not in payload["data"]
+    assert "evidence_index" not in payload["data"]
 
 
-def test_deep_query_uses_tighter_internal_progressive_cap(tmp_path) -> None:
+def test_query_candidate_caps_in_routing_policy_do_not_truncate_shell_results(tmp_path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("".join(f"ERROR item={i}\n" for i in range(20)), encoding="utf-8")
     state_path = tmp_path / "investigation.json"
@@ -209,34 +183,24 @@ def test_deep_query_uses_tighter_internal_progressive_cap(tmp_path) -> None:
         progressive_max_line_chars=128,
         deep_progressive_max_line_chars=64,
         deep_progressive_after_executions=2,
-        deep_progressive_match_records=100,
     )
 
     for query in ("item=0", "item=1"):
         retrieve(
-            EvidenceRequest(
-                QueryTarget(source, query, snapshot=False),
-                investigation_path=state_path,
-            ),
+            EvidenceRequest(QueryTarget(source, query, snapshot=False), investigation_path=state_path),
             routing_policy=policy,
         )
 
-    result = retrieve(
-        EvidenceRequest(
-            QueryTarget(source, "ERROR", snapshot=False),
-            investigation_path=state_path,
-        ),
+    payload = retrieve(
+        EvidenceRequest(QueryTarget(source, "ERROR", snapshot=False), investigation_path=state_path),
         routing_policy=policy,
-    )
-    payload = result.to_dict()
+    ).to_dict()
 
-    assert payload["data"]["routing"]["mode"] == EvidenceRoute.PROGRESSIVE.value
-    assert "exploration_depth" in payload["data"]["routing"]["reasons"]
+    assert payload["status"] == "ok"
     assert payload["coverage"]["match_records"] == 20
-    assert payload["coverage"]["evidence_returned"] == 0
-    assert payload["coverage"]["evidence_indexed"] is True
-    assert payload["coverage"]["evidence_truncated"] is False
-    _assert_complete_error_index(payload)
+    assert len(payload["evidence"]) == 18  # two records were already exposed by earlier queries
+    assert payload["coverage"]["repeated_evidence"] == 2
+    assert "evidence_index" not in payload["data"]
 
 
 def test_large_first_source_uses_progressive_uniform_navigation_sample(tmp_path) -> None:
@@ -263,14 +227,13 @@ def test_large_first_source_uses_progressive_uniform_navigation_sample(tmp_path)
     assert payload["data"]["navigation_only"] is True
     assert payload["coverage"]["sampled_records"] == 64
     assert payload["coverage"]["returned_chars"] <= 12_000
-    assert payload["data"]["samples"]
     assert any(
         sample.get("start_line") == 89 and "MIDPOINT_STRUCTURAL_LANDMARK" in sample.get("text", "")
         for sample in payload["data"]["samples"]
     )
 
 
-def test_deep_history_keeps_progressive_mode_with_internal_survey(tmp_path) -> None:
+def test_query_execution_history_can_still_drive_source_target_routing(tmp_path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("alpha\nbeta\ngamma\ndelta\n", encoding="utf-8")
     state_path = tmp_path / "investigation.json"
@@ -283,10 +246,7 @@ def test_deep_history_keeps_progressive_mode_with_internal_survey(tmp_path) -> N
 
     for query in ("alpha", "beta", "gamma", "delta"):
         retrieve(
-            EvidenceRequest(
-                QueryTarget(source, query, snapshot=False),
-                investigation_path=state_path,
-            ),
+            EvidenceRequest(QueryTarget(source, query, snapshot=False), investigation_path=state_path),
             routing_policy=policy,
         )
 
@@ -301,25 +261,23 @@ def test_deep_history_keeps_progressive_mode_with_internal_survey(tmp_path) -> N
     assert result.operation == "survey"
 
 
-def test_public_disclosure_modes_are_only_direct_and_progressive(tmp_path) -> None:
+def test_query_shell_transport_has_no_public_direct_progressive_mode(tmp_path) -> None:
     source = tmp_path / "routing.log"
     source.write_text("ERROR one\nERROR two\n", encoding="utf-8")
     state_path = tmp_path / "investigation.json"
     InvestigationStore(state_path).create("routing contract")
 
-    first = retrieve(
+    source_result = retrieve(
         EvidenceRequest(SourceTarget(source), investigation_path=state_path),
         routing_policy=EvidenceRoutingPolicy(fallback_direct_chars=8_000, max_direct_chars=8_000),
     ).to_dict()
-    second = retrieve(
+    query_result = retrieve(
         EvidenceRequest(QueryTarget(source, "ERROR", snapshot=False), investigation_path=state_path),
         routing_policy=EvidenceRoutingPolicy(fallback_direct_chars=8_000, max_direct_chars=8_000),
     ).to_dict()
 
-    modes = {first["data"]["routing"]["mode"], second["data"]["routing"]["mode"]}
-    assert modes <= {"direct", "progressive"}
-    assert "bounded" not in modes
-    assert "focused" not in modes
+    assert source_result["data"]["routing"]["mode"] in {"direct", "progressive"}
+    assert "routing" not in query_result["data"]
 
 
 def test_legacy_bounded_and_focused_policy_inputs_normalize_to_progressive() -> None:
