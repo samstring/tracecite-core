@@ -33,6 +33,9 @@ jobs:
     name: ${{ matrix.arm }} / ${{ matrix.case_key }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    concurrency:
+      group: pi-dual-gmi-provider-${{ github.run_id }}-${{ matrix.arm }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -49,7 +52,7 @@ jobs:
       WORK_ROOT: /tmp/pi-dual-gmi/${{ matrix.case_key }}/${{ matrix.arm }}/workspace
       PREP: /tmp/pi-dual-gmi/${{ matrix.case_key }}/${{ matrix.arm }}/prepared
       SOURCE_ROOT: /tmp/pi-dual-gmi/${{ matrix.case_key }}/${{ matrix.arm }}/source
-      TRACECITE_MCP_REF: 01b15396efa59bac0ef6a76fbe611713612f92b8
+      TRACECITE_MCP_REF: 93ef8853cc15607b9f46c738eca4a61028ca84c9
       TRACECITE_EVIDENCE_MAX_TOKENS: "12000"
       TRACECITE_EVIDENCE_MAX_BYTES: "65536"
       TRACECITE_MATERIALIZE_MAX_CHARS: "8000"
