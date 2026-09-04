@@ -1,6 +1,6 @@
 # RCAEval Four-Case Scale Regression Suite
 
-This document is the canonical record for the fixed RCAEval scale regression used to compare Pi Native against TraceCite on real public telemetry. Keep these case IDs stable unless the suite is deliberately revised.
+This document is the canonical record for the fixed RCAEval scale regression used to compare Native evidence access against TraceCite on real public telemetry. The same four cases are shared by the Pi and Codex hosts so host changes do not silently change the benchmark corpus.
 
 ## Official source
 
@@ -32,7 +32,9 @@ This suite follows the repository's Dual-GMI policy:
 - **TraceCite / GMI2:** `GMI2_API_KEY` + `GMI2_MODEL`
 - Endpoint: `https://api.gmi-serving.com/v1`
 
-The two arms use the same TraceCite Core commit, the same generic question, and byte-identical `traces.jsonl` evidence. They run in isolated jobs/filesystems. GMI1 and GMI2 may point at the same model family, but the exact configured model IDs must be recorded in artifacts.
+The two arms use the same TraceCite Core commit, the same generic question, and byte-identical `traces.jsonl` evidence. GMI1 and GMI2 may point at the same model family, but the exact configured model IDs must be recorded in artifacts.
+
+For Codex, each arm gets its own `CODEX_HOME`. The Native home has no TraceCite MCP configuration; the TraceCite home enables only the six canonical TraceCite MCP tools. Codex uses the repository's standard-MCP configuration path and a pinned CLI version in the workflow.
 
 ## Agent question
 
@@ -42,9 +44,21 @@ The question is intentionally generic and must not reveal the RCAEval case name,
 
 ## Evidence boundary
 
-Native may inspect `traces.jsonl` with the normal Pi read/grep/bash/find/ls surface.
+### Pi
 
-TraceCite must inspect or derive runtime-evidence content through the formal TraceCite evidence tools. Native runtime-evidence access in the TraceCite arm is blocked by the benchmark Host/extension. A TraceCite run is invalid if it makes zero TraceCite accesses to the runtime evidence.
+Native may inspect `traces.jsonl` with the normal Pi read/grep/bash/find/ls surface. TraceCite must inspect or derive runtime-evidence content through the formal TraceCite evidence tools; native evidence access is guarded by the benchmark extension.
+
+### Codex
+
+Native runs with normal Codex read-only workspace access and no TraceCite MCP server. TraceCite runs with the standard TraceCite MCP server and developer instructions that require all evidence inspection/derivation to use TraceCite.
+
+A **valid Codex TraceCite run must satisfy all three boundary gates**:
+
+- at least one canonical `tracecite_*` MCP call;
+- zero `command_execution` / native shell evidence calls in the normalized transcript;
+- a non-empty final answer.
+
+`benchmarks/agent-investigation/standard_mcp_benchmark.py validate-transcript --host codex` is the contract checker. A bypass attempt invalidates the comparison rather than being silently accepted. This is intentionally stricter than merely prompting Codex to prefer TraceCite.
 
 ## Validation
 
@@ -59,15 +73,16 @@ The official `f1` / `f3` labels are recorded as evaluator metadata. They are not
 
 ## Measurements to retain
 
-For every case and arm retain at least: actual evidence bytes/rows/SHA-256, model ID, exit/provider status, wall time, root-cause service result, mechanism/indicator evidence support, citation grounding, model/tool call counts, provider token usage when available, TraceCite evidence-call count, and TraceCite boundary activity.
+For every case and arm retain at least: actual evidence bytes/rows/SHA-256, model ID, exit/provider status, wall time, root-cause service result, mechanism/indicator evidence support, citation grounding, model/tool call counts, provider token usage when available, TraceCite evidence-call count, native-command count, and TraceCite boundary-contract result.
 
 Native is a baseline: a Native failure remains comparison evidence. TraceCite service/citation/boundary failure is a candidate failure; provider quota/rate/unavailability is infrastructure-inconclusive and must not be silently recast as product failure.
 
-## Canonical workflow
+## Canonical workflows
 
-`.github/workflows/pi-rcaeval-four-scale-dual-gmi-ab.yml`
+- Pi: `.github/workflows/pi-rcaeval-four-scale-dual-gmi-ab.yml`
+- Codex CLI/app-server: `.github/workflows/codex-rcaeval-four-scale-dual-gmi-ab.yml`
 
-The workflow prepares the official Hugging Face evidence once per case, then runs GMI1 Native and GMI2 TraceCite against byte-identical JSONL inputs and emits per-case comparison artifacts plus an aggregate summary.
+The Codex workflow is manual-dispatch by default. `scope=smoke` runs S1 only; `scope=four` runs the full four-case suite. It downloads official RCAEval data, converts it to deterministic JSONL, creates byte-identical Native/TraceCite workspaces, configures separate GMI1/GMI2 Codex homes, runs Codex through `codex app-server`, validates the TraceCite-only evidence contract, scores citations/root-cause service, and uploads per-case plus aggregate artifacts.
 
 ## Historical S4 performance reference
 
