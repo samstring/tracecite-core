@@ -132,7 +132,7 @@ jobs:
             --thinking off --mode text --print \
             --session-dir "$RESULT_ROOT/session" \
             --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
-            --tools tracecite_search,tracecite_expand \
+            --tools tracecite_retrieve,tracecite_materialize,tracecite_aggregate \
             --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
             --no-prompt-templates --no-context-files \
             --system-prompt "$PROMPT" \
@@ -165,7 +165,6 @@ jobs:
           fi
           python - <<'PY'
           import json, os
-          from collections import Counter
           from pathlib import Path
           root = Path(os.environ['RESULT_ROOT'])
           transcript = root / 'transcript.jsonl'
