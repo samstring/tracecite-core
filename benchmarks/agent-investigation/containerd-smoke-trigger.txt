@@ -1,14 +1,14 @@
-trigger: 2026-09-04 four-endpoint component-membership diagnostic after clean semantic failure
+trigger: 2026-09-04 immediate outer-component reciprocal diagnostic after clean semantic failure
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-literal-sync-query-firewall-plus-component-family-reciprocal
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-six-call-hard-stop-plus-mandatory-sync-first-orientation-plus-cross-component-reciprocal-closure-plus-component-family-anchor-plus-four-endpoint-membership-plus-exact-four-paragraph-final
+adaptive_stopping_skill: stack-only-six-call-hard-stop-plus-mandatory-sync-first-orientation-plus-cross-component-reciprocal-closure-plus-immediate-outer-component-family-anchor-plus-four-endpoint-membership-plus-exact-four-paragraph-final
 skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-6
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: before structural inversion closure choose stable component identities A and B and require both identities in both materialized paths: A ... B ... acquire(domain_B) and B ... A ... acquire(domain_A), with distinct synchronization acquisition sites/domains; different outer callers converging on the same inner lock, including Lock/RLock waiters on one RWMutex, cannot close the discriminator; if either component is absent from either path continue reciprocal evidence search within the bounded budget; whole answer starts Observed and contains exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
+diagnostic_focus: after materializing the complementary synchronization path and naming ordered application components B -> A, the very next evidence call must search the exact receiver/type-family identity of outer component B from that path; do not substitute package-wide/subsystem tokens, waiter census, or another synchronization primitive; use that family search to find a structurally different sibling method where A calls back into B and close A ... B ... acquire(domain_B) versus B ... A ... acquire(domain_A) on distinct domains; whole answer starts Observed and contains exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
 agent_timeout_seconds: 900
