@@ -32,6 +32,7 @@ from .evidence_shell import (
     _tokenize_program,
     _too_broad,
 )
+from .evidence_shell_compat import normalize_evidence_shell_program
 from .retrieval_session import RetrievalSessionStore
 from .schema import AgentResult, EvidencePointer
 from .source_versions import SourceVersionStore
@@ -95,6 +96,21 @@ def _normalize_repeated(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _normalized_request(request: EvidenceShellRequest) -> EvidenceShellRequest:
+    normalized = normalize_evidence_shell_program(request.program)
+    if normalized == request.program:
+        return request
+    return EvidenceShellRequest(
+        source=request.source,
+        program=normalized,
+        segmenter=request.segmenter,
+        last=request.last,
+        since=request.since,
+        until=request.until,
+        fold=request.fold,
+    )
+
+
 def run_evidence_shell(
     request: EvidenceShellRequest,
     *,
@@ -107,6 +123,7 @@ def run_evidence_shell(
         raise TypeError("run_evidence_shell requires EvidenceShellRequest")
     if not isinstance(policy, EvidenceShellPolicy):
         raise TypeError("policy must be EvidenceShellPolicy")
+    request = _normalized_request(request)
     if request.fold:
         raise ValueError(
             "fold is not part of artifact-free Evidence Shell; use group/distinct explicitly"
