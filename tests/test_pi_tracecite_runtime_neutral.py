@@ -118,6 +118,14 @@ def test_smoke_system_override_includes_full_skill_contract() -> None:
     assert '--system-prompt "$SYSTEM_PROMPT"' in smoke
 
 
+def test_smoke_orientation_uses_literal_sync_queries_not_semantic_phrases() -> None:
+    smoke = SMOKE.read_text(encoding="utf-8")
+    assert "TraceCite search is literal or regex evidence retrieval, not semantic concept search" in smoke
+    assert "use one exact synchronization-bearing token or one regex for a single synchronization construct per search" in smoke
+    assert "never join several concepts into one phrase" in smoke
+    assert "rather than a generic goroutine, process, symptom, or lifecycle query" in smoke
+
+
 def test_runtime_remains_mechanical() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
