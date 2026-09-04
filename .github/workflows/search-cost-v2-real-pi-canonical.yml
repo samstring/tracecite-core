@@ -1,0 +1,161 @@
+name: Search Cost V2 Real Pi Canonical Validation
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence-search-cost-v2
+    paths:
+      - .github/workflows/search-cost-v2-real-pi-canonical.yml
+
+permissions:
+  contents: read
+
+jobs:
+  real-pi-canonical:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      BENCH_MODEL: ${{ vars.GMI2_MODEL }}
+      BENCH_API_KEY: ${{ secrets.GMI2_API_KEY }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-real-search-cost-v2-canonical
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      EVIDENCE_ROOT: /tmp/real-pi-canonical/evidence
+      RESULT_ROOT: /tmp/real-pi-canonical/results
+      TRACECITE_MAX_RETRIEVALS: "100"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install TraceCite, Pi, and RCAEval dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BENCH_MODEL"
+          test -n "$BENCH_API_KEY"
+          python -m pip install -e '.[dev]'
+          python -m pip install --quiet huggingface_hub pandas pyarrow
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          mkdir -p "$PI_CODING_AGENT_DIR" "$RESULT_ROOT" "$EVIDENCE_ROOT"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model, 'name': model, 'reasoning': False, 'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000, 'maxTokens': 4096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR'])/'models.json').write_text(json.dumps(payload, indent=2)+'\n')
+          PY
+
+      - name: Prepare identical neutral RCAEval evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import snapshot_download
+          source_case='re3tt_ts-route-service_f3_6'
+          root=Path('/tmp/rcaeval-source')
+          out=Path(os.environ['EVIDENCE_ROOT']); out.mkdir(parents=True, exist_ok=True)
+          snapshot_download(repo_id='phamquiluan/RCAEval', repo_type='dataset', allow_patterns=[f'{source_case}/*'], local_dir=root)
+          src=root/source_case
+          metrics=pd.read_parquet(src/'metrics.parquet'); logs=pd.read_parquet(src/'logs.parquet'); traces=pd.read_parquet(src/'traces.parquet')
+          inject_time=int((src/'inject_time.txt').read_text().strip())
+          metrics.to_csv(out/'metrics.csv', index=False)
+          logs.to_json(out/'logs.jsonl', orient='records', lines=True, force_ascii=False)
+          traces.to_json(out/'traces.jsonl', orient='records', lines=True, force_ascii=False)
+          (out/'incident.txt').write_text('System: Train Ticket microservices\n'+f'Known incident onset (Unix seconds): {inject_time}\n'+'Telemetry covers the normal and faulty window around this onset.\n', encoding='utf-8')
+          manifest={'bytes':{p.name:p.stat().st_size for p in out.iterdir() if p.is_file()},'rows':{'metrics':len(metrics),'logs':len(logs),'traces':len(traces)}}
+          (out/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
+          print(json.dumps(manifest, indent=2))
+          PY
+          if grep -R -n -E 're3tt_ts-route-service_f3_6|root_cause_service|code-level fault F3' "$EVIDENCE_ROOT"; then exit 3; fi
+
+      - name: Run real Pi through canonical TraceCite tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULT_ROOT/session"
+          export TRACECITE_EVIDENCE_ROOT="$EVIDENCE_ROOT"
+          export TRACECITE_EVIDENCE_FILES="metrics.csv,logs.jsonl,traces.jsonl,incident.txt"
+          export TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT_ROOT/tracecite-runtime-evidence-access.jsonl"
+          export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$RESULT_ROOT/tracecite-blocked-native-evidence-attempts.jsonl"
+          export TRACECITE_PI_ACTIVITY="$RESULT_ROOT/tracecite-pi-activity.jsonl"
+          cd "$EVIDENCE_ROOT"
+          PROMPT="A production incident occurred in a Train Ticket microservice deployment. The supplied telemetry covers the incident window and incident.txt gives the known onset time. Determine the root-cause service and the concrete failure mechanism. Explain the causal chain from root cause to downstream symptoms. All telemetry content must be obtained through TraceCite canonical evidence tools only; do not use native file access. Cite exact evidence lines for material claims. Follow the TraceCite cost-aware investigation loop: inspect source shape once, identify a concrete correlation key, pivot to correlation-local evidence, and stop confirmatory sampling once the causal question is sufficiently supported."
+          start_ns=$(date +%s%N)
+          set +e
+          pi \
+            --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT_ROOT/session" \
+            --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+            --tools tracecite_retrieve,tracecite_materialize,tracecite_replay,tracecite_aggregate,tracecite_traverse,tracecite_verify \
+            --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+            --no-prompt-templates --no-context-files \
+            --system-prompt "$PROMPT" \
+            "用 TraceCite 调查这个 incident，找出根因服务、具体故障机制和因果链。" \
+            > "$RESULT_ROOT/answer.md" 2> "$RESULT_ROOT/stderr.log"
+          code=$?
+          set -e
+          end_ns=$(date +%s%N)
+          echo "$code" > "$RESULT_ROOT/exit.txt"
+          python - <<PY > "$RESULT_ROOT/wall-seconds.txt"
+          print((${end_ns}-${start_ns})/1e9)
+          PY
+          cat "$RESULT_ROOT/answer.md"
+          echo "PI_EXIT=$code"
+          exit "$code"
+
+      - name: Summarize trajectory
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          SESSION="$(find "$RESULT_ROOT/session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          if [[ -n "$SESSION" && -f "$RESULT_ROOT/answer.md" ]]; then
+            python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_session_to_transcript.py" "$SESSION" "$RESULT_ROOT/answer.md" "$RESULT_ROOT/transcript.jsonl" --mode pi-tracecite --model "$BENCH_MODEL" || true
+          fi
+          python - <<'PY'
+          import json, os, statistics
+          from pathlib import Path
+          root=Path(os.environ['RESULT_ROOT']); p=root/'transcript.jsonl'
+          usage={'input_tokens':0,'output_tokens':0,'cache_read_tokens':0,'model_calls':0,'tool_calls':0}; tools=[]
+          if p.is_file():
+            for line in p.read_text(errors='replace').splitlines():
+              try:e=json.loads(line)
+              except:continue
+              if e.get('type')=='model':
+                u=e.get('usage') or {}; usage['input_tokens']+=int(u.get('input_tokens') or 0); usage['output_tokens']+=int(u.get('output_tokens') or 0); usage['cache_read_tokens']+=int(u.get('cache_read_input_tokens') or u.get('cached_input_tokens') or 0); usage['model_calls']+=1
+              elif e.get('type')=='tool':
+                usage['tool_calls']+=1; tools.append({k:e.get(k) for k in ('name','args','result','duration_ms') if k in e})
+          durations=[int(x.get('duration_ms') or 0) for x in tools]
+          answer=(root/'answer.md').read_text(errors='replace') if (root/'answer.md').is_file() else ''
+          payload={'model':os.environ.get('BENCH_MODEL'),'exit':(root/'exit.txt').read_text().strip() if (root/'exit.txt').is_file() else None,'wall_seconds':(root/'wall-seconds.txt').read_text().strip() if (root/'wall-seconds.txt').is_file() else None,'usage':usage,'tool_duration_total_ms':sum(durations),'tool_duration_max_ms':max(durations) if durations else 0,'mentions_ts_route_service':'ts-route-service' in answer.lower(),'tool_events':tools}
+          (root/'summary.json').write_text(json.dumps(payload,indent=2,ensure_ascii=False)+'\n')
+          print(json.dumps(payload,indent=2,ensure_ascii=False))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: search-cost-v2-real-pi-canonical
+          path: /tmp/real-pi-canonical/results
+          retention-days: 7
