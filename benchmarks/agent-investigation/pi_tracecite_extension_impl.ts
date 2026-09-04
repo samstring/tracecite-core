@@ -63,7 +63,7 @@ async function persistActivity() {
 async function bridge(args: string[], cwd: string, signal?: AbortSignal): Promise<string> {
   try {
     const { stdout, stderr } = await execFileAsync("python", [BRIDGE, "--session", SESSION, ...args], {
-      cwd, encoding: "utf8", maxBuffer: 256 * 1024, signal,
+      cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, signal,
     });
     const out = String(stdout || "").trim();
     const err = String(stderr || "").trim();
