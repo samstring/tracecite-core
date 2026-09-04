@@ -227,6 +227,7 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 | Canonical Evidence 语义：retrieve/materialize/replay/aggregate/traverse/verify | 已实现 | Runtime + compatibility wrappers |
 | RetrievalSession seen/repeated/range/replay memory | 已实现 | CA258 baseline |
 | Bounded evidence selection、Coverage、identity/correlation safety | 已实现 | CA258 baseline |
+| Candidate-first literal search fast path | 已实现 | parity 已证明的单行 literal 子集；Runtime search dispatch 使用确定性 legacy fallback，multiline local recovery 仍保持 internal |
 | Evidence Ledger + Context Engine / cross-turn delta | 已实现 | `tracecite.integrations` |
 | Pi bounded investigation integration | 已实现 | 已验证 A/B adapter + `.pi` skill |
 | Codex/OpenAI-compatible repository skill integration | 已实现 | `AGENTS.md` + `.agents/skills` |

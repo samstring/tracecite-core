@@ -125,7 +125,7 @@ def test_search_does_not_cache_a_snapshot_from_a_different_source_digest(
         tmp_path,
         BudgetPolicy(max_executions=3, max_searches=3, max_queries=3),
     )
-    original_filter = tools.filter_text
+    original_search = tools.search_text
     changed = False
 
     def mutate_before_snapshot(input_path, *args, **kwargs):
@@ -133,15 +133,15 @@ def test_search_does_not_cache_a_snapshot_from_a_different_source_digest(
         if not changed:
             Path(input_path).write_text("new TARGET\n", encoding="utf-8")
             changed = True
-        return original_filter(input_path, *args, **kwargs)
+        return original_search(input_path, *args, **kwargs)
 
-    monkeypatch.setattr(tools, "filter_text", mutate_before_snapshot)
+    monkeypatch.setattr(tools, "search_text", mutate_before_snapshot)
     first = search(source, "TARGET", investigation_path=state_path)
     assert first["status"] == "ok"
     assert first["data"]["cache"]["status"] == "bypass"
     assert first["data"]["cache"]["reason"] == "source_changed_during_snapshot"
 
-    monkeypatch.setattr(tools, "filter_text", original_filter)
+    monkeypatch.setattr(tools, "search_text", original_search)
     source.write_text("old only\n", encoding="utf-8")
     second = search(source, "TARGET", investigation_path=state_path)
 
@@ -169,7 +169,7 @@ def test_search_pointer_budget_refuses_before_scan_when_cap_is_below_result_boun
         called["scan"] = True
         raise AssertionError("search must reserve its bounded pointer capacity first")
 
-    monkeypatch.setattr(tools, "filter_text", should_not_scan)
+    monkeypatch.setattr(tools, "search_text", should_not_scan)
     refused = search(source, "target", investigation_path=state_path)
     assert refused["status"] == "error"
     assert refused["error"]["type"] == "BudgetExhausted"

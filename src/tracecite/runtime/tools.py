@@ -18,7 +18,9 @@ from tracecite_core.source import SourceError, resolve_paths
 from tracecite_core.sample import SampleError, sample_file
 from tracecite_core.survey import SurveyError, survey_file
 from tracecite_core.format_probe import probe_format_report
-from tracecite_core.text_filter import FilterError, filter_text, text_time_range
+from tracecite_core.text_filter import FilterError, text_time_range
+
+from .search_engine import search_text
 
 from .investigation import (
     BudgetExhausted,
@@ -599,16 +601,17 @@ def search(
             )
         else:
             resolved_output = Path(output_path)
-        result = filter_text(
+        result = search_text(
             source,
             pattern=pattern,
+            regex=regex,
             output_path=resolved_output,
             snapshot=snapshot,
             segmenter=build_segmenter(kind),
             last=last,
             since=since,
             until=until,
-            template_threshold=10 if fold else 0,
+            fold=fold,
             max_line_chars=max_line_chars,
         )
         evidence_source = Path(result.work_input).resolve()

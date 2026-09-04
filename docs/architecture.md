@@ -227,6 +227,7 @@ No domain package may become a required dependency of Core or Runtime.
 | Canonical Evidence semantics: retrieve/materialize/replay/aggregate/traverse/verify | Implemented | Runtime + compatibility wrappers |
 | RetrievalSession seen/repeated/range/replay memory | Implemented | CA258 baseline |
 | Bounded evidence selection, Coverage, identity/correlation safety | Implemented | CA258 baseline |
+| Candidate-first literal search fast path | Implemented | Parity-proven single-line literal subset; Runtime search dispatch uses deterministic legacy fallback and multiline local recovery remains internal |
 | Evidence Ledger + Context Engine / cross-turn delta | Implemented | `tracecite.integrations` |
 | Pi bounded investigation integration | Implemented | Validated A/B adapter + `.pi` skill |
 | Codex/OpenAI-compatible repository skill integration | Implemented | `AGENTS.md` + `.agents/skills` |

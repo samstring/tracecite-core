@@ -127,4 +127,3 @@ def test_runtime_remains_mechanical_and_skill_owns_reasoning() -> None:
     for forbidden in ("proof claims", "root_cause", "evidence_sufficient", "stop_recommended"):
         assert forbidden not in runtime
 
-# candidate-first integration trigger; removed from process significance after this commit.
