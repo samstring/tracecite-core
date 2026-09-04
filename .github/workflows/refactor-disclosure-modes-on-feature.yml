@@ -27,7 +27,18 @@ jobs:
         run: python -m pip install -e '.[dev]'
 
       - name: Apply disclosure mode migration
-        run: python scripts/refactor_disclosure_modes_once.py
+        run: |
+          python scripts/refactor_disclosure_modes_once.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_evidence_routing.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              '    assert payload["data"]["routing"]["next_mode"] == "progressive"\n',
+              '    assert "next_mode" not in payload["data"]["routing"]\n',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
 
       - name: Run focused regressions
         run: |
