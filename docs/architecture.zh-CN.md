@@ -326,7 +326,7 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 
 任何 Domain package 都不得成为 Core 或 Runtime 的 required dependency。
 
-## 15. 当前实现状态
+## 15. 当前实现与目标差距
 
 | Capability | Status | 当前重构分支 |
 |---|---|---|
@@ -345,7 +345,7 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 | Managed materialize/replay SHA reuse | 已实现 | immutable snapshot/segment 读取 exact range，不重新 whole-file SHA |
 | Agent skill for shell/refinement | 已实现 | `.agents/skills/tracecite-investigate/SKILL.md` |
 | Pi `tracecite_run` adapter | 已实现 | budget/source policy 由 Host 环境/产品配置持有 |
-| Public ResultHandle/MatchSet API | 延后 | 当前 all-or-refine contract 不需要公开 |
+| Public ResultHandle/MatchSet API | 待实现（延后） | 当前 all-or-refine contract 不需要公开 |
 | Full regression + Native/TraceCite benchmark validation | 待验证 | 代码完成后统一跑，不属于架构实现本身 |
 
 ## 16. 文档 / Governance
