@@ -428,40 +428,11 @@ def probe(
                 reservation=prepared.get("reservation"),
             )
         sources: List[Dict[str, Any]] = []
-        recommendations: List[str] = []
         for path in files:
             kind = detect_segmenter_kind(path) if segmenter == "auto" else segmenter
             seg = build_segmenter(kind)
             source = RunFile.from_path("source", path)
             time_info = text_time_range(path, segmenter=seg)
-            line_lengths: List[int] = []
-            json_like_lines = 0
-            sampled_lines = 0
-            try:
-                with path.open("r", encoding="utf-8", errors="replace") as handle:
-                    for line in handle:
-                        sampled_lines += 1
-                        if sampled_lines > 1000:
-                            break
-                        stripped = line.strip()
-                        line_lengths.append(len(line))
-                        if stripped.startswith("{") and stripped.endswith("}"):
-                            json_like_lines += 1
-            except OSError:
-                line_lengths = []
-            if line_lengths:
-                ordered = sorted(line_lengths)
-                p99 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.99))]
-                if p99 > 2048:
-                    recommendations.append(
-                        f"{path.name}: line_length_p99={p99}; "
-                        "use filter --max-line-chars 1024 or search --max-line-chars N"
-                    )
-                if json_like_lines >= max(3, sampled_lines // 10):
-                    recommendations.append(
-                        f"{path.name}: single_line_json_detected; "
-                        "prefer records_path + expand over reading filter output_path"
-                    )
             sources.append(
                 {
                     "path": str(path.resolve()),
@@ -479,7 +450,6 @@ def probe(
             outcome="not_assessed",
             data={"sources": sources, "source_count": len(sources)},
             coverage={"files": len(sources)},
-            next_queries=recommendations[:5],
         ).to_dict()
         cache_meta = prepared.get("cache_meta")
         if cache_meta is not None:
@@ -585,8 +555,15 @@ def search(
         if prepared.get("budget_error") is not None:
             return prepared["budget_error"]
         kind = detect_segmenter_kind(source) if segmenter == "auto" else segmenter
-        source_sha256 = _sha256(source)
-        source_refs = [{"path": str(source), "sha256": source_sha256}]
+        cache_identity_needed = bool(
+            investigation_path is not None and cache and cache_safe
+        )
+        source_sha256 = _sha256(source) if cache_identity_needed else ""
+        source_refs = (
+            [{"path": str(source), "sha256": source_sha256}]
+            if source_sha256
+            else []
+        )
         _lookup_linked_cache(
             prepared,
             investigation_path,
@@ -633,9 +610,17 @@ def search(
             until=until,
             template_threshold=10 if fold else 0,
             max_line_chars=max_line_chars,
+            # Evidence identity is SHA + line range; unscoped Agent search does
+            # not need to normalize every JSON timestamp. Time-scoped/folded
+            # searches keep historical timestamp parsing semantics.
+            parse_record_timestamps=bool(last or since or until or fold),
         )
         evidence_source = Path(result.work_input).resolve()
-        digest = _sha256(evidence_source)
+        digest = (
+            source_sha256
+            if source_sha256 and evidence_source == source
+            else _sha256(evidence_source)
+        )
         evidence: List[Dict[str, Any]] = []
         if result.records_path and result.records_path.is_file():
             with result.records_path.open("r", encoding="utf-8") as handle:
@@ -658,16 +643,10 @@ def search(
                         metadata={"term": meta.get("term"), "terms": meta.get("terms") or []},
                     )
                     evidence.append(pointer.to_dict())
-        summary = dict(result.unmatched_summary or {})
-        next_queries = [
-            str(item.get("token"))
-            for item in summary.get("top_unmatched_tokens") or []
-            if item.get("token")
-        ][:10]
         warnings: List[str] = []
         if not evidence:
             warnings.append(
-                "零命中只表示当前查询和范围内证据不足；可使用 next_queries、放宽时间窗或更换格式。"
+                "零命中只表示当前查询和范围内证据不足；可放宽时间窗、调整查询或更换格式。"
             )
         artifacts = [
             {"role": role, "path": str(path)}
@@ -691,7 +670,6 @@ def search(
                 "match_lines": result.match_lines,
                 "evidence_returned": len(evidence),
                 "evidence_truncated": result.match_records > len(evidence),
-                "unmatched": summary,
             },
             warnings=warnings,
             missing_evidence=(
@@ -704,7 +682,6 @@ def search(
                     }
                 ]
             ),
-            next_queries=next_queries,
             data={
                 "query": query,
                 "regex": regex,
@@ -714,7 +691,9 @@ def search(
             },
         ).to_dict()
         cache_meta = prepared.get("cache_meta")
-        cache_source_changed = bool(cache_safe and digest != source_sha256)
+        cache_source_changed = bool(
+            cache_identity_needed and digest != source_sha256
+        )
         if cache_source_changed:
             cache_meta = {
                 "status": "bypass",

@@ -80,7 +80,6 @@ def _result(*, entity_count: int = 1) -> RetrievalResult:
                 },
             }
         ],
-        "next_queries": ["local-device", "generic"],
     }
     return RetrievalResult(
         operation="search",
@@ -92,7 +91,7 @@ def _result(*, entity_count: int = 1) -> RetrievalResult:
     )
 
 
-def test_compatibility_layer_keeps_evidence_facts_but_strips_planner_fields() -> None:
+def test_projection_keeps_evidence_facts_but_strips_other_planner_fields() -> None:
     projected = prioritize_actionable_retrieval(_result())
     canonical = projected.canonical_result
     data = canonical["data"]
@@ -102,9 +101,6 @@ def test_compatibility_layer_keeps_evidence_facts_but_strips_planner_fields() ->
     assert "next_queries" not in canonical
     assert "actionable_retrieval" not in data
 
-    # A signal hint is a bounded line-addressable candidate already observed by
-    # retrieval, not an Agent action. It remains explicitly non-citable until
-    # materialized.
     assert data["signal_hints"] == [{"line": 999, "label": "fatal"}]
     assert "materialize" in data["signal_hint_note"].lower()
 

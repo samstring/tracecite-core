@@ -7,7 +7,6 @@ owns product retrieval semantics:
 2. fidelity-first DIRECT raw access for small unseen sources;
 3. bounded structured-context recovery for search results;
 4. mechanical evidence-integrity observations and actionable evidence gaps;
-5. bounded high-signal navigation for truncated searches.
 
 Runtime owns retrieval/materialization/integrity. Integration projections must
 not reopen source files or discover new Evidence. None of these mechanisms may
@@ -45,7 +44,6 @@ from .evidence_routing import (
     decide_route,
     refine_route_after_result,
 )
-from .evidence_selection import select_signal_hints
 from .investigation import InvestigationStore
 
 
@@ -406,16 +404,6 @@ def _bounded_query(
     )
 
 
-def _matched_records_path(result: Mapping[str, object]) -> Path | None:
-    for item in result.get("artifacts") or []:
-        if not isinstance(item, Mapping) or item.get("role") != "matched_records":
-            continue
-        value = str(item.get("path") or "").strip()
-        if value:
-            return Path(value)
-    return None
-
-
 def _attach_search_fidelity(
     result: RetrievalResult,
     request: EvidenceRequest,
@@ -441,80 +429,6 @@ def _attach_search_fidelity(
         new_rows.append(enriched_by_uri.get(uri, dict(item)))
     resolved = _replace_canonical(result, enriched, new_evidence=tuple(new_rows))
     return _with_actionable_gap_progress(resolved)
-
-
-def _attach_signal_hints(
-    result: RetrievalResult,
-    request: EvidenceRequest,
-    policy: EvidenceRoutingPolicy,
-) -> RetrievalResult:
-    """Attach bounded high-signal navigation hints to a truncated search.
-
-    Hints stay out of Evidence/new_evidence. They are line-addressable
-    candidates only; callers must materialize the referenced range before
-    treating them as covered Evidence.
-    """
-
-    if not isinstance(request.target, QueryTarget):
-        return result
-    canonical = dict(result.canonical_result)
-    coverage = dict(canonical.get("coverage") or {})
-    if not bool(coverage.get("evidence_truncated")):
-        return result
-    records_path = _matched_records_path(canonical)
-    if records_path is None:
-        return result
-    try:
-        hints = select_signal_hints(
-            records_path,
-            limit=policy.signal_hint_limit,
-            signature_cap=policy.signal_signature_cap,
-        )
-    except (OSError, ValueError):
-        return result
-    if not hints:
-        return result
-
-    inline_ranges: list[tuple[int, int]] = []
-    for item in canonical.get("evidence") or []:
-        if not isinstance(item, Mapping):
-            continue
-        start = item.get("start_line")
-        end = item.get("end_line")
-        if not isinstance(start, int) or isinstance(start, bool):
-            continue
-        if not isinstance(end, int) or isinstance(end, bool):
-            end = start
-        inline_ranges.append((start, max(start, end)))
-
-    source_name = Path(request.target.source).name
-    retained = []
-    for hint in hints:
-        line = int(hint["line"])
-        if any(start <= line <= end for start, end in inline_ranges):
-            continue
-        retained.append(
-            {
-                "ref": f"{source_name}:{line}",
-                "line": line,
-                "end_line": int(hint.get("end_line") or line),
-                "severity": int(hint["severity"]),
-                "count": int(hint["count"]),
-                "label": str(hint["label"]),
-            }
-        )
-    if not retained:
-        return result
-
-    data = dict(canonical.get("data") or {})
-    data["signal_hints"] = retained
-    data["signal_hint_note"] = (
-        "Truncated-search high-signal candidates; materialize the referenced line before citing."
-    )
-    canonical["data"] = data
-    coverage["signal_hints_returned"] = len(retained)
-    canonical["coverage"] = coverage
-    return _replace_canonical(result, canonical)
 
 
 def _correct_range_novelty(result: RetrievalResult, request: EvidenceRequest) -> RetrievalResult:
@@ -575,18 +489,9 @@ def _append_gap(
             "identifier_key": identifier_key,
             "identifier_value": identifier_value,
             "source": source,
-            "recommended_action": {
-                "operation": "search",
-                "query": identifier_value,
-                "purpose": "verify_identifier_uniqueness_across_scopes",
-            },
         }
     )
     canonical["missing_evidence"] = rows
-    next_queries = [str(item) for item in canonical.get("next_queries") or [] if str(item).strip()]
-    if identifier_value not in next_queries:
-        next_queries.append(identifier_value)
-    canonical["next_queries"] = next_queries
 
 
 def _attach_identity_verification(
@@ -705,7 +610,6 @@ def retrieve(
     result = _correct_range_novelty(_retrieve(routed_request), routed_request)
     result = _attach_search_fidelity(result, routed_request)
     result = _attach_identity_verification(result, routed_request)
-    result = _attach_signal_hints(result, routed_request, policy)
     decision = refine_route_after_result(decision, result.canonical_result, policy=policy)
     return _with_routing(result, decision)
 

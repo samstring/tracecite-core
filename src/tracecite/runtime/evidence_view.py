@@ -38,7 +38,6 @@ def evidence_only(result: RetrievalResult) -> RetrievalResult:
         raise TypeError("evidence_only requires RetrievalResult")
 
     canonical = copy.deepcopy(dict(result.canonical_result))
-    canonical.pop("next_queries", None)
 
     data = copy.deepcopy(dict(canonical.get("data") or {}))
     for key in _PLANNER_DATA_KEYS:

@@ -59,7 +59,6 @@ def test_lightweight_keeps_warnings_and_missing_evidence() -> None:
         "missing_evidence": [{"kind": "query_coverage", "detail": "none"}],
         "hypotheses": [],
         "verification": {},
-        "next_queries": [],
         "artifacts": [],
         "data": {"query": "x"},
     }
@@ -122,7 +121,7 @@ def test_lightweight_drops_runtime_bookkeeping_but_keeps_actionable_progress() -
     assert slim["data"]["text"] == "runtime.log:7 failure\n"
 
 
-def test_attach_ambiguity_hints_is_navigation_only() -> None:
+def test_attach_ambiguity_hints_exposes_observed_fanout_without_query_planning() -> None:
     payload = {
         "operation": "expand",
         "status": "ok",
@@ -151,9 +150,9 @@ def test_attach_ambiguity_hints_is_navigation_only() -> None:
                 "device-plugin-failures-3083",
                 "device-plugin-failures-5477",
             ],
-            "navigation_query": "test.device/device-plugin-failures-",
         }
     ]
+    assert "navigation_query" not in hints[0]
     assert "does not identify a root cause" in projected["data"]["ambiguity_hint_note"]
     assert projected["evidence"] == payload["evidence"]
 

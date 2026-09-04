@@ -14,6 +14,13 @@ const SESSION = process.env.TRACECITE_PI_SESSION ||
   join(tmpdir(), `tracecite-pi-${process.pid}`, "retrieval-session.json");
 const ACTIVITY_PATH = process.env.TRACECITE_PI_ACTIVITY ||
   join(dirname(SESSION), "host-tool-activity.json");
+const AUTHORIZED_EVIDENCE_FILES = (process.env.TRACECITE_EVIDENCE_FILES || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+const AUTHORIZED_EVIDENCE_HINT = AUTHORIZED_EVIDENCE_FILES.length > 0
+  ? ` Host-authorized evidence files: ${AUTHORIZED_EVIDENCE_FILES.join(", ")}.`
+  : "";
 const TRACE_TOOLS = new Set([
   "tracecite_retrieve", "tracecite_materialize", "tracecite_replay",
   "tracecite_aggregate", "tracecite_traverse", "tracecite_verify",
@@ -50,17 +57,13 @@ function activitySummary() {
 
 async function persistActivity() {
   await mkdir(dirname(ACTIVITY_PATH), { recursive: true });
-  await writeFile(
-    ACTIVITY_PATH,
-    JSON.stringify({ schema_version: 1, summary: activitySummary(), events }, null, 2) + "\n",
-    "utf8",
-  );
+  await writeFile(ACTIVITY_PATH, JSON.stringify({ schema_version: 1, summary: activitySummary(), events }, null, 2) + "\n", "utf8");
 }
 
 async function bridge(args: string[], cwd: string, signal?: AbortSignal): Promise<string> {
   try {
     const { stdout, stderr } = await execFileAsync("python", [BRIDGE, "--session", SESSION, ...args], {
-      cwd, encoding: "utf8", maxBuffer: 256 * 1024, signal,
+      cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, signal,
     });
     const out = String(stdout || "").trim();
     const err = String(stderr || "").trim();
@@ -71,156 +74,8 @@ async function bridge(args: string[], cwd: string, signal?: AbortSignal): Promis
   }
 }
 
-function availableSources(): string[] | undefined {
-  const configured = String(process.env.TRACECITE_EVIDENCE_FILES || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const unique = Array.from(new Set(configured)).slice(0, 50);
-  return unique.length ? unique : undefined;
-}
-
-function neutralPreview(value: unknown): string | undefined {
-  let text = String(value || "").trim();
-  if (!text) return undefined;
-  for (const phrase of [
-    "use access_file for later TraceCite calls",
-    "snapshot refs are citations, not file paths",
-    "reuse follow_up_file for later TraceCite calls",
-    "materialize this range with TraceCite before citing",
-  ]) {
-    text = text.replace(phrase, "").replace(/\s+/g, " ").trim();
-  }
-  return text.slice(0, 300) || undefined;
-}
-
-function compactCoverage(value: any): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const keys = [
-    "files", "scoped_lines", "match_records", "match_lines",
-    "evidence_returned", "evidence_truncated", "signal_hints_returned",
-    "context_start_line", "context_end_line", "truncated",
-    "new_evidence", "repeated_evidence",
-  ];
-  const result: Record<string, unknown> = {};
-  for (const key of keys) {
-    if (value[key] !== undefined && value[key] !== null) result[key] = value[key];
-  }
-  return Object.keys(result).length ? result : undefined;
-}
-
-function compactProgress(value: any): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const result: Record<string, unknown> = {};
-  const delta = value.delta && typeof value.delta === "object" ? value.delta : undefined;
-  if (delta) {
-    const smallDelta: Record<string, unknown> = {};
-    for (const key of ["new_evidence", "new_lines", "grew"]) {
-      if (delta[key] !== undefined && delta[key] !== null) smallDelta[key] = delta[key];
-    }
-    if (Object.keys(smallDelta).length) result.delta = smallDelta;
-  }
-  for (const key of [
-    "seen_evidence", "seen_lines", "coverage_status", "source_complete",
-    "frontier_exhausted", "scope_exhausted", "consecutive_no_growth",
-  ]) {
-    if (value[key] !== undefined && value[key] !== null) result[key] = value[key];
-  }
-  return Object.keys(result).length ? result : undefined;
-}
-
-function compactMatchedExisting(value: any): Array<Record<string, number>> | undefined {
-  if (!Array.isArray(value) || !value.length) return undefined;
-  const rows = value.map((row: any) => {
-    const start = Number(row?.start_line || 0);
-    const end = Number(row?.end_line || start || 0);
-    return end > start ? { start_line: start, end_line: end } : { start_line: start };
-  }).filter((row: any) => row.start_line > 0);
-  return rows.length ? rows : undefined;
-}
-
-function compact(text: string): string {
-  let p: any;
-  try { p = JSON.parse(text); } catch { return text; }
-  if (!p || typeof p !== "object") return text;
-
-  const data = p.data && typeof p.data === "object" ? p.data : {};
-  const operation = String(p.operation || "");
-  const evidence = Array.isArray(p.evidence) ? p.evidence.map((row: any) => {
-    const start = Number(row?.start_line || 0);
-    const end = Number(row?.end_line || start || 0);
-    const source = String(row?.source_path || "").split(/[\\/]/).pop() || "evidence";
-    return {
-      ref: start > 0 ? `${source}:L${start}${end > start ? `-L${end}` : ""}` : undefined,
-      uri: start > 0 ? undefined : row?.uri,
-      preview: neutralPreview(row?.label),
-    };
-  }) : [];
-  const sha256 = (() => {
-    const values = Array.from(new Set((Array.isArray(p.evidence) ? p.evidence : [])
-      .map((row: any) => String(row?.sha256 || "").toLowerCase())
-      .filter((v: string) => /^[0-9a-f]{64}$/.test(v))));
-    return values.length === 1 ? values[0] : p.sha256;
-  })();
-  const sources = p.status === "error" ? availableSources() : undefined;
-
-  if (["search", "retrieve", "probe"].includes(operation)) {
-    return JSON.stringify({
-      operation: "retrieve",
-      status: p.status,
-      evidence,
-      available_sources: sources,
-      source_sha256: sha256,
-      matched_existing_evidence: compactMatchedExisting(data.matched_existing_evidence),
-      coverage: compactCoverage(p.coverage),
-      progress: compactProgress(data.progress),
-      correlation_constraints: data.correlation_constraints,
-      missing_evidence: p.missing_evidence,
-      acquisition_end_reason: data.acquisition_end_reason,
-    });
-  }
-  if (["expand", "materialize", "replay"].includes(operation)) {
-    return JSON.stringify({
-      operation: operation === "replay" ? "replay" : "materialize",
-      status: p.status,
-      evidence,
-      available_sources: sources,
-      source_sha256: sha256,
-      coverage: compactCoverage(p.coverage),
-      progress: compactProgress(data.progress),
-      text: data.new_text !== undefined ? data.new_text : data.text,
-      replayed: Boolean(data.replayed || operation === "replay") || undefined,
-      unseen_ranges: data.unseen_ranges,
-      observed_references: data.observed_references,
-      observed_relations: data.observed_relations,
-      acquisition_end_reason: data.acquisition_end_reason,
-    });
-  }
-  if (operation === "aggregate") {
-    return JSON.stringify({
-      operation, status: p.status, source: p.source, source_sha256: sha256,
-      query: p.query, regex: p.regex, aggregate: p.aggregate, data,
-      coverage: compactCoverage(p.coverage),
-    });
-  }
-  if (operation === "traverse") {
-    return JSON.stringify({
-      operation, status: p.status, stop_reason: p.stop_reason,
-      coverage: compactCoverage(p.coverage), progress: compactProgress(p.progress),
-      trace: p.trace, diagnostics: p.diagnostics, graph: p.graph,
-      grouping: p.grouping, reduction: p.reduction,
-      acquisition_end_reason: p.acquisition_end_reason,
-    });
-  }
-  if (operation === "verify") {
-    return JSON.stringify({
-      operation, status: p.status, coverage: compactCoverage(p.coverage),
-      verification: p.verification, data, error: p.error,
-    });
-  }
-  return text;
-}
-
+// Pi is a transport adapter only. TraceCite owns the evidence response schema.
+// Do not compact, normalize, sample, rename, or inject fields into the payload.
 function output(text: string, details: Record<string, unknown>) {
   return {
     content: [{ type: "text" as const, text }],
@@ -229,15 +84,7 @@ function output(text: string, details: Record<string, unknown>) {
 }
 
 function rangeArgs(command: string, params: any): string[] {
-  const args = [
-    command,
-    params.file,
-    String(params.line),
-    "--radius",
-    String(params.radius ?? 8),
-    "--max-chars",
-    "12000",
-  ];
+  const args = [command, params.file, String(params.line), "--radius", String(params.radius ?? 8), "--max-chars", "12000"];
   if (params.sha256) args.push("--sha256", params.sha256);
   return args;
 }
@@ -261,21 +108,15 @@ export default function traceciteTools(pi: ExtensionAPI) {
     const base = event.details && typeof event.details === "object" && !Array.isArray(event.details)
       ? event.details as Record<string, unknown>
       : {};
-    return {
-      details: {
-        ...base,
-        tracecite_host_activity: row,
-        tracecite_host_activity_summary: activitySummary(),
-      },
-    } as any;
+    return { details: { ...base, tracecite_host_activity: row, tracecite_host_activity_summary: activitySummary() } } as any;
   });
 
   pi.registerTool({
     name: "tracecite_retrieve",
     label: "TraceCite Retrieve",
-    description: "Retrieve caller-selected local evidence with provenance, coverage, identity safety and RetrievalSession novelty. Interpretation, hypotheses and stopping belong to the Agent.",
+    description: "Canonical TraceCite retrieve for caller-selected local evidence." + AUTHORIZED_EVIDENCE_HINT,
     parameters: Type.Object({
-      file: Type.String(),
+      file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }),
       query: Type.Optional(Type.String()),
       regex: Type.Optional(Type.Boolean()),
       max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
@@ -288,83 +129,71 @@ export default function traceciteTools(pi: ExtensionAPI) {
       if (p.regex) args.push("--regex");
       if (p.glob) args.push("--glob", p.glob);
       if (p.recursive) args.push("--recursive");
-      return output(compact(await bridge(args, ctx.cwd, signal)), {
-        operation: "retrieve", canonical_operation: true,
-      });
+      return output(await bridge(args, ctx.cwd, signal), { operation: "retrieve", canonical_operation: true });
     },
   });
 
   pi.registerTool({
     name: "tracecite_materialize",
     label: "TraceCite Materialize",
-    description: "Materialize exact bounded caller-selected source context with immutable identity and session coverage. Radius is 0..30.",
+    description: "Canonical TraceCite materialize of exact bounded caller-selected source context. Radius is 0..30.",
     parameters: Type.Object({
-      file: Type.String(),
+      file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }),
       line: Type.Integer({ minimum: 1 }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })),
       sha256: Type.Optional(Type.String()),
     }),
     async execute(_id, p, signal, _update, ctx) {
-      return output(compact(await bridge(rangeArgs("materialize", p), ctx.cwd, signal)), {
-        operation: "materialize", canonical_operation: true,
-      });
+      return output(await bridge(rangeArgs("materialize", p), ctx.cwd, signal), { operation: "materialize", canonical_operation: true });
     },
   });
 
   pi.registerTool({
     name: "tracecite_replay",
     label: "TraceCite Replay",
-    description: "Replay previously materialized immutable context without counting it as new evidence. Radius is 0..30.",
+    description: "Canonical TraceCite replay of previously materialized immutable context. Radius is 0..30.",
     parameters: Type.Object({
-      file: Type.String(),
+      file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }),
       line: Type.Integer({ minimum: 1 }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })),
       sha256: Type.String(),
     }),
     async execute(_id, p, signal, _update, ctx) {
-      return output(compact(await bridge(rangeArgs("replay", p), ctx.cwd, signal)), {
-        operation: "replay", canonical_operation: true,
-      });
+      return output(await bridge(rangeArgs("replay", p), ctx.cwd, signal), { operation: "replay", canonical_operation: true });
     },
   });
 
   pi.registerTool({
     name: "tracecite_aggregate",
     label: "TraceCite Aggregate",
-    description: "Deterministic count/distinct/group over caller-selected local text matches with source provenance.",
+    description: "Canonical TraceCite deterministic count/distinct/group over caller-selected local text matches.",
     parameters: Type.Object({
       file: Type.String(),
       query: Type.String(),
       regex: Type.Optional(Type.Boolean()),
-      operation: Type.Optional(Type.Union([
-        Type.Literal("count"), Type.Literal("distinct"), Type.Literal("group"),
-      ])),
+      operation: Type.Optional(Type.Union([Type.Literal("count"), Type.Literal("distinct"), Type.Literal("group")])),
       group_regex: Type.Optional(Type.String()),
       max_groups: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
     }),
     async execute(_id, p, signal, _update, ctx) {
-      const args = [
-        "aggregate", p.file, p.query,
-        "--operation", p.operation ?? "count",
-        "--max-groups", String(p.max_groups ?? 100),
-      ];
+      const args = ["aggregate", p.file, p.query, "--operation", p.operation ?? "count", "--max-groups", String(p.max_groups ?? 100)];
       if (p.regex) args.push("--regex");
       if (p.group_regex) args.push("--group-regex", p.group_regex);
-      return output(compact(await bridge(args, ctx.cwd, signal)), {
-        operation: "aggregate", canonical_operation: true,
-      });
+      return output(await bridge(args, ctx.cwd, signal), { operation: "aggregate", canonical_operation: true });
     },
   });
 
   pi.registerTool({
     name: "tracecite_traverse",
     label: "TraceCite Traverse",
-    description: "Bounded provider traversal over caller-selected evidence IDs/entities. Seeds, limits and interpretation belong to the Agent.",
+    description: "Canonical TraceCite bounded provider traversal over caller-selected evidence IDs/entities.",
     parameters: Type.Object({
       provider_file: Type.String(),
       seed_evidence_ids: Type.Optional(Type.Array(Type.String(), { maxItems: 50 })),
       seed_entities: Type.Optional(Type.Array(Type.Object({
-        kind: Type.String(), value: Type.String(), namespace: Type.Optional(Type.String()),
+        kind: Type.String(),
+        value: Type.String(),
+        namespace: Type.Optional(Type.String()),
       }), { maxItems: 50 })),
       max_depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 8 })),
       max_retrievals: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
@@ -383,25 +212,21 @@ export default function traceciteTools(pi: ExtensionAPI) {
       ];
       for (const id of p.seed_evidence_ids ?? []) args.push("--seed-evidence-id", id);
       for (const entity of p.seed_entities ?? []) args.push("--seed-entity", JSON.stringify(entity));
-      return output(compact(await bridge(args, ctx.cwd, signal)), {
-        operation: "traverse", canonical_operation: true,
-      });
+      return output(await bridge(args, ctx.cwd, signal), { operation: "traverse", canonical_operation: true });
     },
   });
 
   pi.registerTool({
     name: "tracecite_verify",
     label: "TraceCite Verify",
-    description: "Mechanical evidence-manifest integrity verification. It does not validate causal conclusions or expand raw evidence coverage.",
+    description: "Canonical TraceCite mechanical evidence-manifest integrity verification.",
     parameters: Type.Object({ manifest: Type.String() }),
     async execute(_id, p, signal, _update, ctx) {
-      return output(compact(await bridge(["verify", p.manifest], ctx.cwd, signal)), {
-        operation: "verify", canonical_operation: true,
-      });
+      return output(await bridge(["verify", p.manifest], ctx.cwd, signal), { operation: "verify", canonical_operation: true });
     },
   });
 
-  // Compatibility aliases. They preserve the same evidence-only runtime contract.
+  // Compatibility aliases. They use the same transparent TraceCite transport.
   pi.registerTool({
     name: "tracecite_search",
     label: "TraceCite Search (compat)",
@@ -413,14 +238,9 @@ export default function traceciteTools(pi: ExtensionAPI) {
       max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
     }),
     async execute(_id, p, signal, _update, ctx) {
-      const args = [
-        "retrieve", p.file, "--query", p.query,
-        "--max-evidence", String(p.max_evidence ?? 20),
-      ];
+      const args = ["retrieve", p.file, "--query", p.query, "--max-evidence", String(p.max_evidence ?? 20)];
       if (p.regex) args.push("--regex");
-      return output(compact(await bridge(args, ctx.cwd, signal)), {
-        operation: "retrieve", compatibility_alias: "tracecite_search",
-      });
+      return output(await bridge(args, ctx.cwd, signal), { operation: "retrieve", compatibility_alias: "tracecite_search" });
     },
   });
 
@@ -429,7 +249,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
     label: "TraceCite Expand (compat)",
     description: "Compatibility alias for tracecite_materialize/replay.",
     parameters: Type.Object({
-      file: Type.String(),
+      file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }),
       line: Type.Integer({ minimum: 1 }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })),
       sha256: Type.Optional(Type.String()),
@@ -437,9 +257,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
     }),
     async execute(_id, p, signal, _update, ctx) {
       const op = p.replay ? "replay" : "materialize";
-      return output(compact(await bridge(rangeArgs(op, p), ctx.cwd, signal)), {
-        operation: op, compatibility_alias: "tracecite_expand",
-      });
+      return output(await bridge(rangeArgs(op, p), ctx.cwd, signal), { operation: op, compatibility_alias: "tracecite_expand" });
     },
   });
 }

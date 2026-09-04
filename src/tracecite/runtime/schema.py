@@ -96,7 +96,6 @@ class AgentResult:
     missing_evidence: List[Dict[str, Any]] = field(default_factory=list)
     verification: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
-    next_queries: List[str] = field(default_factory=list)
     data: Dict[str, Any] = field(default_factory=dict)
     error: Optional[Dict[str, Any]] = None
 
@@ -126,7 +125,6 @@ class AgentResult:
             "missing_evidence": list(self.missing_evidence),
             "verification": dict(self.verification),
             "warnings": list(self.warnings),
-            "next_queries": list(self.next_queries),
             "data": dict(self.data),
         }
         if self.run_id:

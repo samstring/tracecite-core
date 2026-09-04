@@ -149,6 +149,15 @@ def test_repeated_query_same_source_does_not_repeat_raw_direct_dump(tmp_path) ->
     assert "direct_raw" not in second["data"]
 
 
+def _assert_complete_error_index(payload: dict) -> None:
+    assert "evidence_index" not in payload["coverage"]
+    index = payload["data"]["evidence_index"]
+    assert index["total_matches"] == 20
+    assert index["entries"] == [
+        {"rule": "ERROR", "count": 20, "lines": list(range(1, 21))}
+    ]
+
+
 def test_after_direct_read_query_becomes_bounded_and_can_escalate(tmp_path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("".join(f"ERROR item={i}\n" for i in range(20)), encoding="utf-8")
@@ -181,8 +190,10 @@ def test_after_direct_read_query_becomes_bounded_and_can_escalate(tmp_path) -> N
     assert payload["data"]["routing"]["mode"] == "bounded"
     assert payload["data"]["routing"]["next_mode"] == "focused"
     assert payload["coverage"]["match_records"] == 20
-    assert payload["coverage"]["evidence_returned"] == 5
-    assert payload["coverage"]["evidence_truncated"] is True
+    assert payload["coverage"]["evidence_returned"] == 0
+    assert payload["coverage"]["evidence_indexed"] is True
+    assert payload["coverage"]["evidence_truncated"] is False
+    _assert_complete_error_index(payload)
 
 
 def test_deep_query_uses_tighter_investigate_transport_cap(tmp_path) -> None:
@@ -222,8 +233,10 @@ def test_deep_query_uses_tighter_investigate_transport_cap(tmp_path) -> None:
     assert payload["data"]["routing"]["mode"] == EvidenceRoute.FOCUSED.value
     assert "exploration_depth" in payload["data"]["routing"]["reasons"]
     assert payload["coverage"]["match_records"] == 20
-    assert payload["coverage"]["evidence_returned"] == 2
-    assert payload["coverage"]["evidence_truncated"] is True
+    assert payload["coverage"]["evidence_returned"] == 0
+    assert payload["coverage"]["evidence_indexed"] is True
+    assert payload["coverage"]["evidence_truncated"] is False
+    _assert_complete_error_index(payload)
 
 
 def test_large_first_source_uses_bounded_uniform_navigation_sample(tmp_path) -> None:

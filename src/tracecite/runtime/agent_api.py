@@ -520,17 +520,18 @@ def retrieve(request: EvidenceRequest) -> RetrievalResult:
         context_start = max(1, target.start_line - max(0, target.before))
         context_end = selected_end + max(0, target.after)
         source_key: str | None = None
-        if target.expected_sha256:
+        if target.expected_sha256 and path.is_file():
             expected = str(target.expected_sha256).lower()
-            if path.is_file() and _sha256(path) == expected:
-                source_key = file_source_version(str(path), expected).key
-                if tracker.range_is_covered(source_key, context_start, context_end):
-                    return _no_new_result(
-                        operation="expand",
-                        tracker=tracker,
-                        source_key=source_key,
-                        basis=("immutable_source_identity", "requested_context_already_covered"),
-                    )
+            expected_source_key = file_source_version(str(path), expected).key
+            if tracker.range_is_covered(
+                expected_source_key, context_start, context_end
+            ) and _sha256(path) == expected:
+                return _no_new_result(
+                    operation="expand",
+                    tracker=tracker,
+                    source_key=expected_source_key,
+                    basis=("immutable_source_identity", "requested_context_already_covered"),
+                )
         result = _tools.expand(
             path,
             target.start_line,

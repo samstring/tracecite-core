@@ -4,10 +4,10 @@ Routing is intentionally about evidence transport cost/risk, not diagnosis.
 The default policy starts with the cheapest safe path and only escalates:
 DIRECT -> BOUNDED -> FOCUSED.
 
-DIRECT is a fidelity-first transport mode.  An unseen local source may stay on
+DIRECT is a fidelity-first transport mode. An unseen local source may stay on
 DIRECT even after other sources were inspected when the aggregate fully
 line-addressable representation of all directly exposed sources still fits the
-configured context budget.  The same source is not dumped repeatedly: once it
+configured context budget. The same source is not dumped repeatedly: once it
 has participated in the investigation, later retrievals are bounded unless an
 explicit RangeTarget is requested.
 """
@@ -35,8 +35,8 @@ class EvidenceRoutingPolicy:
     """Policy for adaptive evidence transport.
 
     ``remaining_context_tokens`` is optional because Core cannot know every
-    model host's live context budget.  When supplied, DIRECT uses only a small
-    fraction of that remaining budget.  Otherwise ``fallback_direct_chars`` is
+    model host's live context budget. When supplied, DIRECT uses only a small
+    fraction of that remaining budget. Otherwise ``fallback_direct_chars`` is
     a conservative aggregate evidence-output budget, not a source-size product
     limit.
 
@@ -44,10 +44,6 @@ class EvidenceRoutingPolicy:
     search because deep/high-cardinality exploration repeats every visible
     result in subsequent model turns. Canonical evidence remains recoverable;
     only the Agent projection is narrowed.
-
-    A truncated search also retains a tiny bounded set of generic high-signal
-    candidates. These are navigation hints only: the Agent must ``get`` them
-    before they become formal line-covered Evidence.
     """
 
     mode: str = "adaptive"
@@ -59,8 +55,6 @@ class EvidenceRoutingPolicy:
     bounded_max_line_chars: int = 1_024
     focused_max_evidence: int = 20
     focused_max_line_chars: int = 768
-    signal_hint_limit: int = 4
-    signal_signature_cap: int = 256
     bounded_match_records: int = 64
     focused_match_records: int = 256
     focused_after_executions: int = 4
@@ -88,8 +82,6 @@ class EvidenceRoutingPolicy:
             "bounded_max_line_chars",
             "focused_max_evidence",
             "focused_max_line_chars",
-            "signal_hint_limit",
-            "signal_signature_cap",
             "bounded_match_records",
             "focused_match_records",
             "focused_after_executions",
@@ -105,8 +97,6 @@ class EvidenceRoutingPolicy:
             raise ValueError("focused_max_evidence must be <= bounded_max_evidence")
         if self.focused_max_line_chars > self.bounded_max_line_chars:
             raise ValueError("focused_max_line_chars must be <= bounded_max_line_chars")
-        if self.signal_signature_cap < self.signal_hint_limit:
-            raise ValueError("signal_signature_cap must be >= signal_hint_limit")
         if self.focused_match_records < self.bounded_match_records:
             raise ValueError("focused_match_records must be >= bounded_match_records")
         if not (0.0 <= float(self.repeated_evidence_ratio) <= 1.0):
@@ -344,11 +334,6 @@ def decide_route(
         except OSError:
             source_seen = False
 
-    # Fidelity-first DIRECT is a one-time exposure for an unseen source.  It is
-    # safe to continue across several tiny sources when their aggregate raw,
-    # line-addressable representation still fits one direct budget.  This
-    # prevents source-count alone from pushing a simple multi-file incident into
-    # lossy/heavier investigation machinery.
     fresh_direct_safe = bool(
         current_source
         and not source_seen
