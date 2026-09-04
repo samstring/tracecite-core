@@ -1,12 +1,8 @@
 """Artifact-free logical Record search.
 
-This module is the low-level mechanical search seam used by the Agent Evidence
-Shell.  It deliberately returns :class:`Record` objects directly: no filtered
-log, matched-record JSONL, hit JSONL, unmatched-token summary, or filter
-history is written.
-
-The caller is responsible for transport policy.  This primitive only answers
-which complete logical records match the caller-selected source/query/scope.
+This is the low-level mechanical search seam used by Evidence Shell. It yields
+complete Segmenter records directly and never writes filtered logs,
+matched-record JSONL, hit JSONL, unmatched summaries, or filter history.
 """
 
 from __future__ import annotations
@@ -100,8 +96,6 @@ def _in_time_window(
         return True
     ts = record_timestamp(record, ref=reference, segmenter=segmenter)
     if ts is None:
-        # Preserve the legacy conservative behavior: an unparseable timestamp
-        # is not silently discarded merely because a time window was selected.
         return True
     if time_from is not None and ts < time_from:
         return False
@@ -113,7 +107,7 @@ def _in_time_window(
 def iter_matching_records(
     input_path: Path,
     *,
-    query: str,
+    query: str | None,
     regex: bool = False,
     segmenter: Optional[Segmenter] = None,
     last: str | None = None,
@@ -125,17 +119,18 @@ def iter_matching_records(
     pid: int | None = None,
     encoding: str = "utf-8",
 ) -> Iterator[Record]:
-    """Yield complete logical records matching the caller-selected scope.
+    """Yield complete logical records matching one source/scope.
 
-    ``query`` is a true literal when ``regex=False``; no regex escaping contract
-    leaks into this primitive. Regex queries use TraceCite's safe ``Matcher``.
+    ``query=None`` means scan all records. Otherwise ``regex=False`` is a true
+    literal contract and ``regex=True`` uses TraceCite's safe Matcher.
     """
 
     source = Path(input_path).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(source)
-    if not query:
-        raise ValueError("query must be non-empty")
+    if query is not None and not query:
+        raise ValueError("query must be non-empty when supplied")
+
     for name, value in (
         ("tail_lines", tail_lines),
         ("line_from", line_from),
@@ -147,7 +142,7 @@ def iter_matching_records(
         raise ValueError("line_from must not exceed line_to")
 
     selected = segmenter or RawTextSegmenter(mode="line")
-    matcher = Matcher(query) if regex else None
+    matcher = Matcher(query) if query is not None and regex else None
     reference, time_from, time_to = _time_window(
         source,
         segmenter=selected,
@@ -159,7 +154,10 @@ def iter_matching_records(
 
     start_line = line_from or 1
     if tail_lines is not None:
-        start_line = max(start_line, max(1, _line_count(source, encoding=encoding) - tail_lines + 1))
+        start_line = max(
+            start_line,
+            max(1, _line_count(source, encoding=encoding) - tail_lines + 1),
+        )
     end_line = line_to
     pid_token = f"[{int(pid)}]" if pid is not None else None
 
@@ -178,9 +176,18 @@ def iter_matching_records(
             continue
         if pid_token is not None:
             header = record.text.split("\n", 1)[0]
-            if pid_token not in header and str(record.fields.get("pid") or "") != str(int(pid)):
+            if (
+                pid_token not in header
+                and str(record.fields.get("pid") or "") != str(int(pid))
+            ):
                 continue
-        matched = matcher.match(record.text)[0] if matcher is not None else query in record.text
+
+        if query is None:
+            matched = True
+        elif matcher is not None:
+            matched = matcher.match(record.text)[0]
+        else:
+            matched = query in record.text
         if matched:
             yield record
 
