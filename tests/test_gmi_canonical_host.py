@@ -64,7 +64,7 @@ def test_request_context_records_attempted_payload_before_provider_usage(tmp_pat
     assert event["type"] == "request_context"
 
 
-def test_canonical_host_preserves_visible_evidence_and_clamps_radius(tmp_path: Path) -> None:
+def test_canonical_host_search_returns_pointer_then_get_materializes_context(tmp_path: Path) -> None:
     input_root = tmp_path / "inputs"
     scratch = tmp_path / "scratch"
     input_root.mkdir()
@@ -81,10 +81,10 @@ def test_canonical_host_preserves_visible_evidence_and_clamps_radius(tmp_path: P
         "second = runtime._tracecite_search({'file':'runtime.log','query':'checksum','regex':False})\n"
         "clamped = runtime._tracecite_get({'file':'runtime.log','line':2,'radius':10})\n"
         "assert 'checksum failed request=7' in first\n"
-        "assert 'lossless_line_addressable' in first\n"
-        "assert 'runtime.log:1 INFO start' in first\n"
-        "assert 'runtime.log:2 ERROR checksum failed request=7' in first\n"
-        "assert 'runtime.log:3 INFO end' in first\n"
+        "assert 'runtime.log:2' in first or '#L2' in first\n"
+        "assert 'lossless_line_addressable' not in first\n"
+        "assert 'runtime.log:1 INFO start' not in first\n"
+        "assert 'runtime.log:3 INFO end' not in first\n"
         "assert 'no_new_evidence' in second.lower()\n"
         "assert 'radius_expanded_from=10 radius=12' in clamped\n"
         "assert 'INFO start' in clamped and 'INFO end' in clamped\n"
