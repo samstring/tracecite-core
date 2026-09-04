@@ -2,11 +2,11 @@
 
 [简体中文](architecture.zh-CN.md)
 
-Status: **Normative / Current** for `feature_for_agent`, official extensions, and Agent/CLI/MCP/custom host adapters. Updated for the validated CA258 baseline.
+Status: **Normative / Current** for the `feature_for_agent_refacotr_shell` refactor, official extensions, and Pi / Codex / Cursor / CLI / MCP / custom hosts.
 
 > **The Agent thinks and decides; TraceCite owns evidence.**
 
-This is the top-level living architecture contract. `PROJECT_GUARDRAILS.md` and this document take precedence over old experiment/handoff notes; ADRs and migrations preserve historical decisions/transitions.
+This is the top-level living architecture contract. Long-lived decisions and transitions are recorded in ADRs/migrations. The Evidence Shell / SourceVersion refactor is defined by `docs/adr/0002-agent-evidence-shell-source-version.zh-CN.md`.
 
 ## 1. Product boundary
 
@@ -14,19 +14,21 @@ The Agent owns:
 
 - problem/scope interpretation;
 - hypotheses and investigation direction;
+- the search expression / Evidence Shell program;
 - causal reasoning and competing explanations;
 - evidence sufficiency;
-- final answer and qualification;
-- the stop decision.
+- final answer, qualification, and stop decision.
 
 TraceCite owns deterministic evidence mechanics:
 
 - source/version and evidence identity;
-- acquisition, snapshot, provenance, Coverage, and integrity;
+- acquisition, snapshot/freeze, provenance, Coverage, and integrity;
+- a stable SourceVersion / QuestionSourceView for one user question;
 - RetrievalSession seen/repeated/covered-range memory;
+- mechanical Evidence Shell execution and intermediate-result isolation;
+- enforcement of user-configured Evidence transport budgets;
 - exact materialization and explicit replay;
 - deterministic aggregation and caller-scoped traversal;
-- bounded evidence projection/selection with recovery;
 - optional InvestigationState coordination metadata;
 - extension/trust contracts.
 
@@ -35,20 +37,20 @@ TraceCite Runtime must not expose `root_cause_confidence`, `evidence_sufficient`
 ## 2. Architecture invariants
 
 1. Core is generic/deterministic and contains no device/product/company/application/domain knowledge.
-2. Core does not import Runtime or concrete domain packages.
-3. Runtime may depend on Core; Runtime does not import concrete domain packages.
-4. Extensions depend only on public TraceCite contracts and contribute domain facts/capabilities, not Agent reasoning policy.
-5. Canonical Evidence/Result stays recoverable when the Agent-facing view is bounded/deduplicated.
-6. Lossy/bounded operations expose Coverage, truncation/omission, or equivalent recovery/boundary facts.
-7. `status` (execution) and epistemic `outcome` stay separate.
-8. Zero matches, incomplete Coverage, missing evidence, source changes, and provider failure do not prove real-world absence.
-9. Search matches are observations, not automatically causal proof.
-10. RetrievalSession owns mechanical evidence-session memory; never hypotheses/root cause/sufficiency/stopping.
-11. Host tool telemetry is not canonical Evidence.
-12. Agent conclusions cannot validate themselves or auto-promote to trusted Knowledge.
-13. Extension Protocol stays small; domain growth happens through versioned capabilities.
-14. Public evidence/schema changes require migration notes/tests; long-lived architectural trade-offs require an ADR.
-15. Efficiency changes are accepted only after correctness/support/provenance/recoverability remain acceptable.
+2. Core does not import Runtime or concrete domain packages; Runtime may depend on Core.
+3. Extensions depend only on public TraceCite contracts and contribute domain facts/capabilities, not Agent reasoning policy.
+4. One user question is bound to one stable SourceVersion; an investigation must not silently switch to newer live bytes.
+5. A search hit is not Evidence; the Segmenter first restores the complete logical record.
+6. Evidence transport token/byte budgets are **User/Host Policy**. The Agent cannot raise, bypass, or dynamically override them.
+7. An ordinary Evidence Shell search either fits the complete matched-record payload inside the configured budget or returns `too_broad`; first-N must not masquerade as completeness.
+8. Oversized match sets must never enter model context through complete locator/EvidenceIndex dumps.
+9. Shell intermediate data and internal MatchSets stay outside the model boundary; only final compact results and explicit materialized Evidence cross it.
+10. Canonical Evidence/Result remains provenance-preserving and recoverable.
+11. `status` (execution/transport) and epistemic `outcome` remain separate. `too_broad` is a transport fact, not an epistemic conclusion.
+12. Zero matches, incomplete Coverage, missing evidence, source changes, and provider failure do not prove real-world absence.
+13. RetrievalSession owns only mechanical evidence-session memory; never hypotheses/root cause/sufficiency/stopping.
+14. SHA is established once per TraceCite-managed immutable SourceVersion/segment and then reused.
+15. Efficiency is accepted only after correctness/support/provenance/recoverability remain acceptable.
 
 ## 3. Logical architecture
 
@@ -57,94 +59,175 @@ TraceCite Runtime must not expose `root_cause_confidence`, `evidence_sufficient`
                               Mobile / CI / third-party
                                         |
                                         v
-Raw Sources -> Evidence Core -> Evidence Runtime -> Integrations -> Agent Host
-               |                |                  |              |
-               |                |                  |              +-- Pi
-               |                |                  |              +-- Codex
-               |                |                  |              +-- Cursor
-               |                |                  |              +-- MCP/custom
-               |                |                  |
-               |                |                  +-- projection / Ledger / Context
-               |                |
-               |                +-- RetrievalSession
-               |                +-- bounded evidence selection
-               |                +-- identity/correlation safety
-               |                +-- aggregate / traverse
-               |                +-- InvestigationState (optional)
+Raw Sources -> SourceVersion -> Evidence Runtime -> Integrations -> Agent Host
+               |               |                  |              |
+               |               |                  |              +-- Pi
+               |               |                  |              +-- Codex
+               |               |                  |              +-- Cursor
+               |               |                  |              +-- MCP/custom
+               |               |                  |
+               |               |                  +-- compact projection / Context
+               |               |
+               |               +-- Evidence Shell / QueryPlan
+               |               +-- internal MatchSet / intermediate rows
+               |               +-- user Evidence budget gate
+               |               +-- RetrievalSession
+               |               +-- materialize / replay / aggregate / traverse
                |
-               +-- source/version identity
-               +-- snapshot / provenance / manifest / verify
+               +-- immutable file / snapshot / live segments
+               +-- SHA / manifest / line metadata / provenance
 
-Agent owns: hypothesis -> causal reasoning -> sufficiency -> answer -> stop
+Agent owns: query program -> hypothesis -> causal reasoning -> sufficiency -> answer -> stop
 ```
 
-![Architecture overview](../architecture.svg)
+## 4. SourceVersion / QuestionSourceView
 
-## 4. Layer ownership
+`SourceVersion` identifies the immutable bytes actually observed by an investigation rather than a pathname that may continue changing.
 
-### `tracecite_core` — Evidence Core
+At the start of one user question, the Host/Runtime resolves one `QuestionSourceView`; all search/run/materialize/replay operations in that investigation reuse it.
 
-Owns domain-neutral source descriptors, immutable source/version identity, segmentation/filtering/snapshotting, Evidence pointers/ranges, manifests, and deterministic verification. It does not decide importance, causality, or sufficiency.
+### Static sources
 
-### `tracecite.runtime` — Evidence Runtime
+A source declared immutable does not require a physical copy. The original file may be the immutable source; SHA is established once and cached.
 
-Owns canonical evidence mechanics, including RetrievalSession, bounded routing/selection, novelty/repetition/Coverage/acquisition-end facts, identity/correlation safety, deterministic aggregation/traversal, and optional InvestigationState coordination.
+### Potentially mutable files
 
-Canonical local acquisition is implemented in `tracecite.runtime.acquisition`. `tracecite.runtime.tools` is a compatibility facade for legacy callers/integrations and is not an internal Runtime dependency.
-
-Runtime may report mechanical facts such as:
+At a later user question, a cheap fingerprint first decides whether an already verified version can be reused:
 
 ```text
-new_evidence = 0
-repeated_evidence > 0
-frontier_exhausted = true
-budget_limit_reached = true
-source_changed = true
+device / file-id
+inode when available
+size
+mtime_ns
+optional ctime/provider revision
 ```
 
-Those facts are not stop/sufficiency advice.
+Unchanged fingerprint -> reuse prior snapshot/path, SHA, line/index metadata.
 
-### `tracecite.integrations` — transport / host integration
+Changed fingerprint -> establish a new SourceVersion. The fingerprint is only a cheap reuse key; final Evidence identity still depends on immutable bytes + SHA/version.
 
-Owns Agent-facing projection, Evidence Ledger/recovery, Context Engine/delta, capability/profile negotiation, CLI presentation, and host adapters. Pi/Codex/Cursor/MCP/custom hosts must share canonical Evidence/Coverage semantics.
+### Live sources
 
-### `tracecite.extension` — domain capability contract
-
-Extensions provide domain source parsing, events, scenario/assertion/report capabilities, and domain Agent capabilities through public contracts. They do not own model-specific token policy, RetrievalSession seen-state, root-cause ranking, or stopping policy.
-
-### `tracecite.knowledge` — reviewed reusable knowledge
-
-Knowledge is downstream of evidence-backed findings and requires independent validation/review/version/expiry. Current-incident Evidence is never replaced by stored Knowledge.
-
-## 5. Canonical Evidence API
-
-Long-term semantics converge on six mechanical primitives:
-
-- `retrieve`: caller-selected source/scope/predicate -> bounded Evidence + Coverage + Provenance + novelty/repetition.
-- `materialize`: exact context for a caller-selected immutable source/version range/ref.
-- `replay`: deliberate re-read of old immutable evidence; novelty remains zero.
-- `aggregate`: deterministic caller-selected count/distinct/group operations; not causal ranking.
-- `traverse`: mechanical traversal under caller-selected seed/scope/direction/limits; not investigation planning.
-- `verify`: integrity/source-version/Manifest/exact-evidence verification; not validation of an Agent causal claim.
-
-`probe`, `search`, `expand`, and `expand-many` are convenience CLI/adapter surfaces. They must reduce to canonical semantics and must not own a separate session/reasoning model.
-
-## 6. RetrievalSession: single mechanical evidence-memory owner
-
-RetrievalSession owns:
+Large live sources should use cooperative `live_cut` + immutable segments rather than copying the full accumulated file for every question.
 
 ```text
-session id / revision
-seen evidence/result identities
-covered immutable source-version ranges
-source generations/observations
-recent retrieval operations
-request fingerprints
-repeated-evidence accounting
-replay state
+writer -> live.log
+question boundary -> live cut -> immutable segment N
+writer continues -> new live.log
 ```
 
-Required repeated-evidence behavior:
+Historical segments are not recopied or rehashed. A logical SourceVersion may be a manifest of immutable segments.
+
+Fallback order when cooperative cut is unavailable: CoW clone/reflink -> a bounded byte view for a provably append-only source -> full-copy snapshot.
+
+## 5. Evidence Shell / `tracecite_run`
+
+Evidence Shell is the unified Agent-facing mechanical search-program surface. The Agent composes the program; TraceCite deterministically executes it against the current SourceVersion.
+
+Example:
+
+```text
+search '"statusCode":500'
+| search 'ts-route-service'
+| where latency >= 1000
+```
+
+Capability families include:
+
+- literal / grep-like search;
+- regex;
+- time/range/source scope;
+- structured-field predicates;
+- filter/exclude;
+- aggregate/count/group/distinct;
+- sort/top/take/first/last;
+- seek/near/range navigation;
+- generic search backends registered later through capability plumbing.
+
+Evidence Shell is not unrestricted host bash by default. It may read only authorized SourceVersions and registered evidence/search primitives; it must not use the network, arbitrary filesystem access, shell escape, Evidence mutation, or policy bypass.
+
+The desired small Agent-facing tool surface is:
+
+```text
+tracecite_describe
+tracecite_run
+tracecite_materialize
+```
+
+Existing `retrieve/search/aggregate/...` surfaces may remain canonical/compatibility entry points, but multi-step mechanical investigation should prefer one `tracecite_run` so intermediate tool outputs do not repeatedly enter model context.
+
+## 6. Search -> Segment -> Complete Records
+
+The first shell stage yields raw hit locators. The Segmenter defines complete logical-record boundaries.
+
+```text
+Raw SourceVersion
+   -> search hits
+   -> Segmenter
+   -> Complete Records
+   -> Evidence Budget Gate
+```
+
+A physical grep line is not final Evidence, especially for multiline log/trace formats.
+
+During migration, the shell may reuse legacy `search_text` to preserve regex/time/fold/segmenter semantics. The target Agent hot path streams Records directly and no longer requires `matched_records.jsonl`, `hits.jsonl`, `evidence.log`, or filter history.
+
+## 7. Evidence Budget Contract
+
+Maximum Evidence transport is configured only by the user/Host, for example:
+
+```text
+max_evidence_tokens
+max_evidence_bytes  # hard safety cap
+```
+
+The Agent tool schema must **not** expose parameters that allow the Agent to increase those values.
+
+If the complete matched records exceed the budget:
+
+```text
+status = too_broad
+reason = MATCHED_EVIDENCE_BUDGET_EXCEEDED
+refine_query = true
+evidence = []
+```
+
+The Runtime may report `observed_at_least_tokens/bytes`; if it stops early after proving the bound was exceeded, it must not fabricate an exact total.
+
+After `too_broad`, the Agent may refine literals/regexes, add predicates, narrow time/range/source scope, use aggregation, or otherwise choose a more selective search. It may not raise/bypass the budget, request all locators, or treat arbitrary first-N output as complete.
+
+Explicit `first/last/top/take/sample` remains valid when the user actually requests selection semantics; it must be marked as selection rather than completeness.
+
+## 8. Internal MatchSet / intermediate state
+
+`MatchSet` is an internal Runtime implementation concept; the Agent does not need to understand it. It may be a locator array, bitmap, range set, lazy iterator, spill file, or backend handle.
+
+Large intermediate sets stay inside Runtime:
+
+```text
+173,320 -> 4,901 -> 331 -> 5
+```
+
+Only the final compact result crosses the model boundary. If a large set must survive across tool calls, a stable `result_handle` may reference it; the handle must bind SourceVersion and QueryPlan identity rather than retransmitting the full set.
+
+## 9. Canonical Evidence API
+
+The long-term canonical mechanical primitives remain:
+
+- `retrieve`: caller-selected source/scope/predicate -> Evidence + Coverage + Provenance + novelty/repetition;
+- `materialize`: exact caller-selected immutable source/version range/ref;
+- `replay`: deliberate reread of old immutable Evidence; novelty remains zero;
+- `aggregate`: deterministic caller-selected count/distinct/group;
+- `traverse`: deterministic traversal under caller-selected seed/scope/direction/limits;
+- `verify`: integrity/source-version/Manifest/exact-Evidence verification.
+
+`tracecite_run` is the Agent program surface for composing search/mechanical operations; it does not create a second Evidence identity or session model.
+
+## 10. RetrievalSession: single mechanical Evidence-memory owner
+
+RetrievalSession owns seen Evidence identities, covered immutable ranges, source observations/generations, recent operations, request fingerprints, and repeated/replay facts.
+
+Required repeated-Evidence behavior:
 
 ```text
 query A -> body E
@@ -155,55 +238,38 @@ repeated_evidence > 0
 matched_existing_evidence = [E ref]
 ```
 
-The current query's relevance is preserved without automatically resending E's body. Explicit materialize/replay is the recall path. RetrievalSession never stores the Agent's hypothesis, proof, sufficiency, or stop decision.
+A `too_broad` search has not admitted Evidence to the Agent; internally scanned rows therefore must not be added to `seen_evidence` or Coverage.
 
-## 7. Selection, routing, identity safety
+## 11. Materialize / provenance / citation
 
-Routing/selection is transport only. It may use source size/version, output/context limits, covered ranges, repeated-output ratio, and bounded lexical/structural diversity. Lossy selection requires explicit omission/truncation and recoverability.
+Search candidates and final Evidence are separate. Exact context is materialized only when a sufficiently small candidate set needs to be read/reasoned over/cited.
 
-Selection is never equivalent to “most causal,” “most likely root cause,” or “next best entity.”
-
-Correlation constraints are deterministic identity-safety facts. Do not collapse timelines from an unsafe identifier, nearby address values, or filename proximity unless supplied evidence establishes the relation.
-
-## 8. Agent / Host boundary
-
-A Host may own model/tool/context/wall-time budgets, tool exposure, prompts, native-tool telemetry, and optional mechanical checkpoints. A checkpoint may report activity/budget facts and ask the Agent to reconsider continue-vs-answer; it must not claim evidence is sufficient or choose the root cause.
-
-Current repository integrations:
-
-- Pi: bounded prompt + `.pi/skills/tracecite/SKILL.md` + Pi evidence adapter.
-- Codex/OpenAI-compatible: root `AGENTS.md` + `.agents/skills/tracecite-investigate/SKILL.md`.
-- Cursor: `.cursor/rules/tracecite-investigation.mdc`.
-
-See [Agent integration](agent-integration.md).
-
-## 9. Context Engine / Evidence Ledger
-
-Canonical Results are recoverable first; only then may the Agent-facing view omit bodies already seen by a stable host context. Omission must be explicit and recoverable, and delta is used only when it is actually smaller.
-
-Context state is transport memory, not Evidence truth and not InvestigationState. Different context IDs do not share seen-state; unaddressable evidence is not silently deduplicated.
-
-See [Context Engine](context-engine.md).
-
-## 10. InvestigationState and Knowledge
-
-InvestigationState is optional coordination metadata for problem/scope/hypothesis/test/finding/notes/audit links and explicit user/Agent stop reasons. It is not required for evidence retrieval and is not the source of truth for novelty/Coverage/sufficiency.
-
-Knowledge lifecycle:
+Final Evidence must resolve to:
 
 ```text
-Evidence-backed Finding -> Candidate -> independent validation -> review -> versioned Knowledge -> expiry/revalidation
+source/version identity
+segment/file SHA when applicable
+exact line/range or equivalent locator
+exact raw content
 ```
 
-See [Knowledge governance](knowledge-governance.md).
+Once a TraceCite-managed immutable SourceVersion already has a SHA, downstream search/materialize/bridge operations should reuse it instead of hashing the full file again. A pathname that TraceCite has not frozen and that external processes may mutate still requires integrity revalidation.
 
-## 11. Correctness and benchmark validity
+## 12. Agent / Host boundary
 
-Efficiency is evaluated only after correctness/support/provenance/recoverability gates. Formal Agent benchmarks separate `task_result` from `run_validity`; provider 429/quota/outage/harness failure is infrastructure-invalid, not a model/product loss.
+The Host owns model/tool/context/wall-time budgets, Evidence token policy, tool exposure, prompt, and native-tool telemetry.
 
-See [Benchmark results](benchmark-results.md).
+The Agent skill must teach: prefer `tracecite_run` for combined mechanical search; refine on `too_broad`; never increase user Evidence budget; do not request complete locator dumps; materialize only when exact evidence is needed.
 
-## 12. Dependency direction
+Repository Agent instruction source: `.agents/skills/tracecite-investigate/SKILL.md`.
+
+## 13. Context, correctness, benchmark validity
+
+TraceCite's token objective is not to compress a giant payload after it has already been prepared for the Agent. Low-value intermediate large results should never cross the model boundary in the first place.
+
+Efficiency is evaluated only after correctness/support/provenance/recoverability gates. Formal Agent benchmarks separate `task_result` from `run_validity`; provider 429/quota/outage/harness failure is infrastructure-invalid.
+
+## 14. Dependency direction
 
 ```text
 tracecite_core
@@ -221,26 +287,26 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 
 No domain package may become a required dependency of Core or Runtime.
 
-## 13. Implementation status
+## 15. Implementation status
 
-| Capability | Status | Current baseline |
+| Capability | Status | Current refactor branch |
 |---|---|---|
-| Evidence Core: source/version, snapshot, provenance, manifest, verify | Implemented | `feature_for_agent` |
-| Canonical Evidence semantics: retrieve/materialize/replay/aggregate/traverse/verify | Implemented | Runtime + compatibility wrappers |
-| RetrievalSession seen/repeated/range/replay memory | Implemented | CA258 baseline |
-| Bounded evidence selection, Coverage, identity/correlation safety | Implemented | CA258 baseline |
-| Candidate-first literal search fast path | Implemented | Parity-proven single-line literal subset; Runtime search dispatch uses deterministic legacy fallback and multiline local recovery remains internal |
-| Canonical acquisition implementation ownership | Implemented | `tracecite.runtime.acquisition` owns deterministic acquisition; `runtime.tools` is compatibility-only |
-| Evidence Ledger + Context Engine / cross-turn delta | Implemented | `tracecite.integrations` |
-| Pi bounded investigation integration | Implemented | Validated A/B adapter + `.pi` skill |
-| Codex/OpenAI-compatible repository skill integration | Implemented | `AGENTS.md` + `.agents/skills` |
-| Cursor project-rule integration | Implemented | `.cursor/rules/tracecite-investigation.mdc` |
-| Extension Protocol / domain capability contracts | Implemented | Public extension layer |
-| ScenarioCapability execution services | Implemented | Active chain uses internal `ScenarioServices`; `ScenarioRuntime` is compatibility-only |
-| MCP / other host adapters as a single packaged universal integration | Partially implemented | Host-specific adapters evolve separately |
+| Existing SourceVersion identity (`sha256/cursor/generation/mutable`) | Implemented | `evidence_identity.py` |
+| RetrievalSession seen/repeated/range/replay | Implemented | existing Runtime |
+| Candidate-first literal scanner/local recovery | Implemented | existing Runtime internal |
+| `EvidenceShellPolicy` user/host-owned budget | First version implemented | Agent request has no budget override |
+| `tracecite_run` Evidence Shell | First version implemented | literal/regex/filter/where/count/group/distinct/explicit selection; expanding toward all existing search capabilities |
+| `too_broad` canonical transport status | First version implemented | over-budget result exposes no Evidence body/locator dump |
+| Pi `tracecite_run` adapter | First version implemented | budget comes from Host environment/product configuration |
+| Agent skill for shell/refinement | Updated | `.agents/skills/tracecite-investigate/SKILL.md` |
+| Remove `matched_records.jsonl` / legacy artifacts from Agent search hot path | In progress | shell first stage temporarily reuses `search_text` for semantic compatibility |
+| Remove high-cardinality EvidenceIndex from Agent query path | In progress | new shell does not build EvidenceIndex; legacy retrieve compatibility remains to migrate |
+| Question-level SourceVersion cache / fingerprint reuse | Planned | architecture/ADR fixed; implementation pending |
+| LiveCut + immutable-segment SourceVersion | Planned for Agent Runtime | Core already contains `live_cut.py` / `segment_store.py` foundations |
+| SHA/count full-file pass consolidation/caching | Planned | bridge now prefers `data.source_sha256`; full SourceVersion cache pending |
 
-## 14. Documentation / governance rule
+## 16. Documentation / governance
 
-Architecture-boundary changes must update both `architecture.md` and `architecture.zh-CN.md` in the same change. Incompatible architecture changes require an ADR; public schema/API changes require migration notes and tests.
+Architecture-boundary changes must update both `architecture.md` and `architecture.zh-CN.md`. Incompatible architectural changes require an ADR; public schema/API changes require a migration note and tests.
 
-Current documentation map: [docs/README.md](README.md).
+Current design ADR: [ADR-0002](adr/0002-agent-evidence-shell-source-version.zh-CN.md).
