@@ -4,7 +4,7 @@ from .agent_api import (
     EvidenceRequest, ProviderTarget, QueryTarget, RangeTarget, RetrievalResult,
     RetrieveTarget, SourceTarget, CanonicalTraversalResult, traverse,
 )
-from .evidence_api import (
+from .evidence_runtime_api import (
     AggregateOperation, AggregateRequest, aggregate, materialize, replay, retrieve, verify,
 )
 from .evidence_identity import (
@@ -18,7 +18,7 @@ from .evidence_routing import (
     EvidenceRoute, EvidenceRoutingPolicy, RoutingDecision, decide_route,
     estimate_line_addressable_chars, refine_route_after_result,
 )
-from .evidence_shell import (
+from .evidence_shell_public import (
     DEFAULT_MAX_EVIDENCE_BYTES, DEFAULT_MAX_EVIDENCE_TOKENS,
     EvidenceShellPolicy, EvidenceShellRequest, run_evidence_shell,
 )
