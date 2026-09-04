@@ -20,6 +20,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Touch marker: candidate disclosure-limit cleanup validated 2026-09-04.
           curl --fail-with-body -L \
             -X POST \
             -H "Accept: application/vnd.github+json" \
