@@ -22,6 +22,9 @@ from .evidence_shell import (
     DEFAULT_MAX_EVIDENCE_BYTES, DEFAULT_MAX_EVIDENCE_TOKENS,
     EvidenceShellPolicy, EvidenceShellRequest, run_evidence_shell,
 )
+from .source_versions import (
+    QuestionSourceView, SourceFingerprint, SourceSegment, SourceVersionStore,
+)
 from .retrieval_session import (
     RetrievalOperation, RetrievalSessionState, RetrievalSessionStore,
 )
@@ -49,9 +52,10 @@ __all__ = [
     "EvidenceDelta", "EvidenceGap", "EvidenceIdentity", "EvidenceProgress",
     "EvidenceProgressTracker", "EvidenceRequest", "EvidenceRoute", "EvidenceRoutingPolicy",
     "EvidenceShellPolicy", "EvidenceShellRequest", "EvidenceTraversal", "ProviderTarget",
-    "QueryTarget", "RangeTarget", "RetrievalOperation", "RetrievalResult", "RetrievalSessionState",
-    "RetrievalSessionStore", "RetrieveTarget", "RoutingDecision", "SourceTarget", "SourceVersion",
-    "SourceVersionKind", "TraversalFrontier", "TraversalItem", "TraversalLimits", "TraversalStats",
+    "QueryTarget", "QuestionSourceView", "RangeTarget", "RetrievalOperation", "RetrievalResult",
+    "RetrievalSessionState", "RetrievalSessionStore", "RetrieveTarget", "RoutingDecision",
+    "SourceFingerprint", "SourceSegment", "SourceTarget", "SourceVersion", "SourceVersionKind",
+    "SourceVersionStore", "TraversalFrontier", "TraversalItem", "TraversalLimits", "TraversalStats",
     "TraversalStep", "aggregate", "decide_route", "estimate_line_addressable_chars",
     "execute_capability", "file_source_version", "get_capability", "list_capabilities",
     "BudgetExhausted", "BudgetPolicy", "InvestigationError", "InvestigationState",
