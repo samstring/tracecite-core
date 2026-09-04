@@ -127,11 +127,16 @@ def test_retrieve_query_suppresses_repeated_evidence(tmp_path) -> None:
     assert second.new_evidence == ()
     assert second.repeated_evidence == 1
     assert second.acquisition_end_reason is None
-    novelty = second.to_dict()["data"]["novelty"]
+    payload = second.to_dict()
+    novelty = payload["data"]["novelty"]
     assert novelty["state"] == "no_new_evidence"
     assert "all_returned_evidence_already_seen" in novelty["basis"]
-    assert second.to_dict()["evidence"] == []
-    assert len(second.canonical_result["evidence"]) == 1
+    assert payload["evidence"] == []
+    assert second.canonical_result["evidence"] == []
+    repeated = second.canonical_result["data"]["matched_existing_evidence"]
+    assert len(repeated) == 1
+    assert repeated[0]["uri"].startswith("evidence://sha256/")
+    assert repeated[0]["start_line"] == 2
 
 
 def test_retrieval_session_remains_novelty_owner_without_audit_executions(tmp_path) -> None:
