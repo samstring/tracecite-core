@@ -1,7 +1,7 @@
-trigger: 2026-09-04 cross-component reciprocal-closure diagnostic after clean convergence failure
+trigger: 2026-09-04 structural-diversity reciprocal diagnostic after clean convergence failure
 tracecite_only_tools: true
 runtime_agent_steering: false
-pi_agent_system_steering: full-tracecite-skill-contract-plus-literal-sync-query-firewall
+pi_agent_system_steering: full-tracecite-skill-contract-plus-literal-sync-query-firewall-plus-structural-diversity-reciprocal-guidance
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
@@ -10,5 +10,5 @@ skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-6
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: first valid Go stack orientation query must be a single synchronization token, normally semacquire; complementary Lock/RLock waiter is an orientation clue only and never a reciprocal endpoint; after materializing it, immediately use an exact caller/component symbol from that path to retrieve the opposite cross-component nesting; structural inversion requires two directly observed reversed cross-component paths; whole answer starts Observed and contains exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
+diagnostic_focus: after the first representative synchronization-bearing path, prefer exact function/type/component symbols from that path and follow TraceCite structural-diversity/navigation hints to differently nested synchronization paths before complementary Lock/RLock spellings; never treat one literal no-match as absence evidence; structural inversion still requires two directly observed reversed cross-component paths; whole answer starts Observed and contains exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
 agent_timeout_seconds: 900
