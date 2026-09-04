@@ -34,26 +34,36 @@ jobs:
 
           start = s.find('\ndef _matched_records_path(')
           end = s.find('\ndef _attach_search_fidelity(', start)
-          if start == -1 or end == -1:
-              raise SystemExit('matched-record helper block not found')
-          s = s[:start] + s[end:]
+          if start != -1:
+              if end == -1:
+                  raise SystemExit('matched-record helper block end not found')
+              s = s[:start] + s[end:]
 
           start = s.find('\ndef _attach_signal_hints(')
           end = s.find('\ndef _correct_range_novelty(', start)
-          if start == -1 or end == -1:
-              raise SystemExit('signal hint block not found')
-          s = s[:start] + s[end:]
+          if start != -1:
+              if end == -1:
+                  raise SystemExit('signal hint block end not found')
+              s = s[:start] + s[end:]
           s = s.replace('    result = _attach_signal_hints(result, routed_request, policy)\n', '')
           p.write_text(s, encoding='utf-8')
 
-          selection = Path('src/tracecite/runtime/evidence_selection.py')
-          if selection.exists():
-              selection.unlink()
+          for path in (
+              Path('src/tracecite/runtime/evidence_selection.py'),
+              Path('tests/test_evidence_selection.py'),
+              Path('tests/test_signal_hint_routing.py'),
+          ):
+              if path.exists():
+                  path.unlink()
 
-          for test in Path('tests').glob('test_*.py'):
-              text = test.read_text(encoding='utf-8')
-              if 'signal_hint_limit' in text or 'select_signal_hints' in text:
-                  raise SystemExit(f'stale signal hint test/reference remains in {test}')
+          stale = []
+          for root in (Path('src'), Path('tests')):
+              for path in root.rglob('*.py'):
+                  text = path.read_text(encoding='utf-8')
+                  if 'signal_hint_limit' in text or 'signal_signature_cap' in text or 'select_signal_hints' in text or '_attach_signal_hints' in text:
+                      stale.append(str(path))
+          if stale:
+              raise SystemExit('stale signal hint references remain: ' + ', '.join(stale))
           PY
           python -m pip install -e '.[dev]'
           pytest -q
@@ -63,7 +73,7 @@ jobs:
           set -euo pipefail
           git config user.name sam
           git config user.email woshidengshangfu@163.com
-          git add -A src/tracecite/runtime
+          git add -A src/tracecite/runtime tests
           if git diff --cached --quiet; then
             echo 'no cleanup changes'
             exit 0
