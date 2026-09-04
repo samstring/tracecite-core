@@ -28,7 +28,7 @@ if TYPE_CHECKING:  # pragma: no cover - imports are intentionally lazy at runtim
 
 
 INVESTIGATION_SCHEMA_VERSION = 1
-BUDGET_POLICY_SCHEMA_VERSION = 1
+BUDGET_POLICY_SCHEMA_VERSION = 2
 INVESTIGATION_STATUSES = frozenset({"active", "completed"})
 HYPOTHESIS_STATUSES = frozenset({"open", "supported", "contradicted", "unknown"})
 FINDING_OUTCOMES = frozenset({"supported", "contradicted", "unknown"})
@@ -68,6 +68,9 @@ BUDGET_USAGE_FIELDS = (
     "elapsed_seconds",
 )
 BUDGET_RESERVATION_FIELDS = BUDGET_USAGE_FIELDS
+DEFAULT_MAX_ROUNDS = 64
+DEFAULT_MAX_INPUT_PER_ROUND = 128_000
+LEGACY_BUDGET_LIMIT_FIELDS = BUDGET_LIMIT_FIELDS
 MAX_BUDGET_RESERVATIONS = 100
 MAX_CACHE_ENTRIES = 100
 MAX_CACHE_SOURCES = 100
@@ -129,35 +132,54 @@ def _positive_limit(value: Any, *, field_name: str, elapsed: bool = False) -> Op
     return int(value)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class BudgetPolicy:
-    """Optional, strict investigation-level execution limits.
+    """Two-dimensional user budget for an Agent investigation.
 
-    ``None`` means unlimited.  Limits are intentionally independent from
-    domain extensions and are persisted with a small schema version so older
-    InvestigationState documents remain readable.
+    ``max_rounds`` bounds how many Runtime calls may be attempted.  A round is
+    one linked Runtime operation. ``max_input_per_round`` bounds the serialized
+    Agent-visible result for any one round. Defaults are intentionally generous
+    but finite.
+
+    Legacy v1 budget keys are accepted only to read existing callers/state.
+    ``max_executions`` maps to ``max_rounds``; all other old per-dimension limits
+    are ignored because they are no longer user budget concepts.
     """
 
-    schema_version: int = BUDGET_POLICY_SCHEMA_VERSION
-    max_executions: Optional[int] = None
-    max_searches: Optional[int] = None
-    max_queries: Optional[int] = None
-    max_recorded_evidence_pointers: Optional[int] = None
-    max_expand_requested_chars: Optional[int] = None
-    max_expand_returned_chars: Optional[int] = None
-    max_elapsed_seconds: Optional[float] = None
+    schema_version: int
+    max_rounds: int
+    max_input_per_round: int
 
-    def __post_init__(self) -> None:
-        if self.schema_version != BUDGET_POLICY_SCHEMA_VERSION:
+    def __init__(
+        self,
+        schema_version: int = BUDGET_POLICY_SCHEMA_VERSION,
+        max_rounds: Optional[int] = None,
+        max_input_per_round: Optional[int] = None,
+        **legacy: Any,
+    ) -> None:
+        if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+            raise InvestigationError("budget_policy.schema_version 必须是整数")
+        if schema_version not in {1, BUDGET_POLICY_SCHEMA_VERSION}:
+            raise InvestigationError(f"不支持 budget policy schema {schema_version!r}")
+        unsupported = set(legacy) - set(LEGACY_BUDGET_LIMIT_FIELDS)
+        if unsupported:
             raise InvestigationError(
-                f"不支持 budget policy schema {self.schema_version!r}"
+                "budget_policy 含有不支持的字段: "
+                + ", ".join(sorted(str(item) for item in unsupported))
             )
-        for field_name in BUDGET_LIMIT_FIELDS:
-            _positive_limit(
-                getattr(self, field_name),
-                field_name=f"budget_policy.{field_name}",
-                elapsed=field_name == "max_elapsed_seconds",
-            )
+        if max_rounds is None and legacy.get("max_executions") not in {None, ""}:
+            max_rounds = legacy.get("max_executions")
+        rounds = DEFAULT_MAX_ROUNDS if max_rounds is None else max_rounds
+        input_cap = (
+            DEFAULT_MAX_INPUT_PER_ROUND
+            if max_input_per_round is None
+            else max_input_per_round
+        )
+        _positive_limit(rounds, field_name="budget_policy.max_rounds")
+        _positive_limit(input_cap, field_name="budget_policy.max_input_per_round")
+        object.__setattr__(self, "schema_version", BUDGET_POLICY_SCHEMA_VERSION)
+        object.__setattr__(self, "max_rounds", int(rounds))
+        object.__setattr__(self, "max_input_per_round", int(input_cap))
 
     @classmethod
     def from_mapping(cls, raw: Optional[Mapping[str, Any]]) -> "BudgetPolicy":
@@ -165,43 +187,34 @@ class BudgetPolicy:
             return cls()
         if not isinstance(raw, Mapping):
             raise InvestigationError("budget_policy 必须是对象或 null")
-        allowed = {"schema_version", *BUDGET_LIMIT_FIELDS}
+        allowed = {
+            "schema_version",
+            "max_rounds",
+            "max_input_per_round",
+            *LEGACY_BUDGET_LIMIT_FIELDS,
+        }
         unsupported = set(raw) - allowed
         if unsupported:
             raise InvestigationError(
                 "budget_policy 含有不支持的字段: "
                 + ", ".join(sorted(str(item) for item in unsupported))
             )
-        version = raw.get("schema_version", BUDGET_POLICY_SCHEMA_VERSION)
-        if isinstance(version, bool) or not isinstance(version, int):
-            raise InvestigationError("budget_policy.schema_version 必须是整数")
-        kwargs: Dict[str, Any] = {"schema_version": version}
-        for field_name in BUDGET_LIMIT_FIELDS:
-            if field_name in raw:
-                kwargs[field_name] = raw.get(field_name)
+        kwargs = dict(raw)
         return cls(**kwargs)
 
     def to_dict(self) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"schema_version": self.schema_version}
-        for field_name in BUDGET_LIMIT_FIELDS:
-            value = getattr(self, field_name)
-            if value is not None:
-                payload[field_name] = value
-        return payload
+        return {
+            "schema_version": BUDGET_POLICY_SCHEMA_VERSION,
+            "max_rounds": self.max_rounds,
+            "max_input_per_round": self.max_input_per_round,
+        }
 
-    def remaining(self, usage: Mapping[str, Any]) -> Dict[str, Optional[Union[int, float]]]:
-        result: Dict[str, Optional[Union[int, float]]] = {}
-        for limit_name, usage_name in zip(BUDGET_LIMIT_FIELDS, BUDGET_USAGE_FIELDS):
-            limit = getattr(self, limit_name)
-            used = float(usage.get(usage_name) or 0)
-            if limit is None:
-                result[usage_name] = None
-            else:
-                remaining = float(limit) - used
-                result[usage_name] = (
-                    int(remaining) if usage_name != "elapsed_seconds" else remaining
-                )
-        return result
+    def remaining(self, usage: Mapping[str, Any]) -> Dict[str, int]:
+        rounds_used = int(usage.get("executions") or 0)
+        return {
+            "rounds": max(0, self.max_rounds - rounds_used),
+            "input_per_round": self.max_input_per_round,
+        }
 
 
 def _empty_budget_usage() -> Dict[str, Union[int, float]]:
@@ -1917,25 +1930,16 @@ class InvestigationStore:
                 for key in BUDGET_USAGE_FIELDS
             }
             violations: List[Dict[str, Any]] = []
-            for limit_name, usage_name in zip(BUDGET_LIMIT_FIELDS, BUDGET_USAGE_FIELDS):
-                limit = getattr(policy, limit_name)
-                exhausted_elapsed = (
-                    usage_name == "elapsed_seconds"
-                    and float(limit or 0) <= float(usage[usage_name])
-                    and float(requested["executions"]) > 0
+            if projected["executions"] > float(policy.max_rounds):
+                violations.append(
+                    {
+                        "limit": "max_rounds",
+                        "usage": int(usage["executions"]),
+                        "requested": int(requested["executions"]),
+                        "maximum": policy.max_rounds,
+                        "remaining": policy.remaining(usage)["rounds"],
+                    }
                 )
-                if limit is not None and (
-                    projected[usage_name] > float(limit) or exhausted_elapsed
-                ):
-                    violations.append(
-                        {
-                            "limit": limit_name,
-                            "usage": usage[usage_name],
-                            "requested": requested[usage_name],
-                            "maximum": limit,
-                            "remaining": policy.remaining(usage).get(usage_name),
-                        }
-                    )
             if violations:
                 detail = (
                     f"{resolved_operation} 被调查预算拒绝: "
@@ -1990,6 +1994,9 @@ class InvestigationStore:
         """Replace a reservation with measured counters under the state lock."""
 
         resolved_id = _validate_id(reservation_id, field_name="budget_reservation.id")
+        input_returned_chars = int(actual.get("input_returned_chars", 0))
+        if input_returned_chars < 0:
+            raise InvestigationError("input_returned_chars 必须是非负整数")
         actual_values = self._budget_request(
             executions=int(actual.get("executions", 1)),
             searches=int(actual.get("searches", 0)),
@@ -2015,10 +2022,10 @@ class InvestigationStore:
             del state.budget_reservations[resolved_id]
             policy = BudgetPolicy.from_mapping(state.budget_policy)
             violations: List[str] = []
-            for limit_name, usage_name in zip(BUDGET_LIMIT_FIELDS, BUDGET_USAGE_FIELDS):
-                limit = getattr(policy, limit_name)
-                if limit is not None and float(usage[usage_name]) > float(limit):
-                    violations.append(limit_name)
+            if int(usage["executions"]) > policy.max_rounds:
+                violations.append("max_rounds")
+            if input_returned_chars > policy.max_input_per_round:
+                violations.append("max_input_per_round")
             if violations and state.status == "active":
                 state.status = "completed"
                 state.stop_reason = self._bounded_end_reason(

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 SCENARIO_SCHEMA_VERSION = 2
 RESULT_SCHEMA_VERSION = 1
-RESULT_STATUSES = frozenset({"ok", "no_match", "partial", "error"})
+RESULT_STATUSES = frozenset({"ok", "no_match", "partial", "error", "budget_exhausted"})
 RESULT_OUTCOMES = frozenset({"supported", "contradicted", "unknown", "not_assessed"})
 # These operations only acquire/materialize evidence. A successful match or
 # expansion is not itself an assessment of any hypothesis. Keep this invariant
@@ -98,6 +98,7 @@ class AgentResult:
     warnings: List[str] = field(default_factory=list)
     data: Dict[str, Any] = field(default_factory=dict)
     error: Optional[Dict[str, Any]] = None
+    should_stop: bool = False
 
     def __post_init__(self) -> None:
         if self.status not in RESULT_STATUSES:
@@ -135,6 +136,8 @@ class AgentResult:
             payload["confidence"] = self.confidence
         if self.error:
             payload["error"] = dict(self.error)
+        if self.should_stop:
+            payload["should_stop"] = True
         return payload
 
     @classmethod

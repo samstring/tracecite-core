@@ -1,0 +1,5 @@
+{
+  "schema_version": 2,
+  "max_rounds": 64,
+  "max_input_per_round": 128000
+}

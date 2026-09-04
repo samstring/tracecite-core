@@ -127,20 +127,22 @@ def _mark_cache(result: Mapping[str, Any], metadata: Mapping[str, Any]) -> Dict[
 
 
 def _budget_error(operation: str, exc: BudgetExhausted) -> Dict[str, Any]:
-    payload = _error(operation, exc)
-    payload["error"] = {
-        "type": type(exc).__name__,
-        "message": str(exc),
-        "budget": dict(exc.details),
-    }
-    data = dict(payload.get("data") or {})
-    data["budget"] = {
-        "status": "exhausted",
-        **dict(exc.details),
-    }
-    data["stop_reason"] = {"kind": "budget_exhausted", "detail": str(exc)}
-    payload["data"] = data
-    return payload
+    details = dict(exc.details)
+    return AgentResult(
+        operation=operation,
+        status="budget_exhausted",
+        outcome="unknown",
+        should_stop=True,
+        error={
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "budget": details,
+        },
+        data={
+            "budget": {"status": "exhausted", **details},
+            "stop_reason": {"kind": "budget_exhausted", "detail": str(exc)},
+        },
+    ).to_dict()
 
 
 def _segmenter_key(kind: Any) -> str:
@@ -289,6 +291,9 @@ def _actual_budget_usage(
         if operation == "expand"
         else 0,
         "expand_returned_chars": len(str(text)) if operation == "expand" and text is not None else 0,
+        "input_returned_chars": len(
+            json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
+        ),
     }
     return usage
 
@@ -321,7 +326,11 @@ def _record_result(
                 "remaining": budget_status.get("remaining"),
             }
             if budget_status.get("violations"):
-                data["stop_reason"] = budget_status.get("stop_reason")
+                detail = str((budget_status.get("stop_reason") or {}).get("detail") or "budget exhausted")
+                return _budget_error(
+                    operation,
+                    BudgetExhausted(detail, details=budget_status),
+                )
             payload["data"] = data
         except InvestigationError as exc:
             payload = _error(operation, exc)

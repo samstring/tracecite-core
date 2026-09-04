@@ -162,12 +162,17 @@ SCHEMA_REGISTRY: Tuple[SchemaSpec, ...] = (
         schema_id="tracecite.investigation_budget_policy",
         classification="persisted_nested",
         versioning="versioned",
-        current_version=1,
+        current_version=2,
         source_path="src/tracecite/runtime/investigation.py",
         source_symbol="BUDGET_POLICY_SCHEMA_VERSION",
         reader="budget_policy",
-        fixtures=(_fixture("budget-policy-v1.json", 1),),
-        notes="BudgetPolicy is nested in InvestigationState; the fixture covers its standalone reader.",
+        legacy_versions=(1,),
+        migration_handler="tracecite.runtime.schema_compat:_migrate_budget_policy",
+        fixtures=(
+            _fixture("budget-policy-v1.json", 1),
+            _fixture("budget-policy-v2.json", 2),
+        ),
+        notes="v2 exposes only max_rounds and max_input_per_round; v1 execution limits remain readable migration input.",
     ),
     SchemaSpec(
         schema_id="tracecite.investigation_cache",
@@ -389,6 +394,12 @@ READERS.update(
 )
 
 
+def _migrate_budget_policy(path: Path) -> Dict[str, Any]:
+    from .investigation import BudgetPolicy
+
+    return BudgetPolicy.from_mapping(_load_json(path)).to_dict()
+
+
 def _migrate_knowledge_governance(path: Path) -> Dict[str, Any]:
     from tracecite.knowledge import KnowledgeGovernanceStore
 
@@ -396,6 +407,7 @@ def _migrate_knowledge_governance(path: Path) -> Dict[str, Any]:
 
 
 MIGRATORS: Dict[str, Callable[[Path], Mapping[str, Any]]] = {
+    "tracecite.investigation_budget_policy": _migrate_budget_policy,
     "tracecite.knowledge_governance": _migrate_knowledge_governance,
 }
 

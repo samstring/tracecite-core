@@ -26,46 +26,57 @@ def _state(tmp_path: Path, policy: BudgetPolicy | None = None) -> tuple[Path, In
     return state_path, store
 
 
-def test_budget_policy_is_strict_and_optional(tmp_path: Path) -> None:
+def test_budget_policy_exposes_only_rounds_and_input_size(tmp_path: Path) -> None:
     path, store = _state(
         tmp_path,
-        BudgetPolicy(
-            max_executions=2,
-            max_searches=1,
-            max_queries=1,
-            max_recorded_evidence_pointers=3,
-            max_expand_requested_chars=100,
-            max_expand_returned_chars=80,
-            max_elapsed_seconds=10,
-        ),
+        BudgetPolicy(max_rounds=2, max_input_per_round=10_000),
     )
     status = store.budget_status()
-    assert status["policy"]["max_executions"] == 2
+    assert status["policy"] == {
+        "schema_version": 2,
+        "max_rounds": 2,
+        "max_input_per_round": 10_000,
+    }
     assert status["usage"]["executions"] == 0
-    assert status["remaining"]["executions"] == 2
-    assert json.loads(path.read_text(encoding="utf-8"))["budget_policy"]["schema_version"] == 1
+    assert status["remaining"]["rounds"] == 2
+    assert status["remaining"]["input_per_round"] == 10_000
+    assert json.loads(path.read_text(encoding="utf-8"))["budget_policy"]["schema_version"] == 2
     with pytest.raises(Exception):
-        BudgetPolicy(max_executions=0)
+        BudgetPolicy(max_rounds=0)
     with pytest.raises(Exception):
-        BudgetPolicy.from_mapping({"max_executions": 1, "unexpected": 2})
+        BudgetPolicy.from_mapping({"max_rounds": 1, "unexpected": 2})
 
 
-def test_budget_refusal_stops_without_recording_execution(tmp_path: Path) -> None:
-    path, store = _state(tmp_path, BudgetPolicy(max_executions=1))
+def test_legacy_execution_budget_maps_to_rounds_and_other_legacy_caps_are_not_public() -> None:
+    policy = BudgetPolicy(
+        schema_version=1,
+        max_executions=3,
+        max_searches=1,
+        max_queries=1,
+        max_recorded_evidence_pointers=1,
+        max_expand_requested_chars=10,
+        max_expand_returned_chars=10,
+        max_elapsed_seconds=1,
+    )
+    assert policy.max_rounds == 3
+    assert set(policy.to_dict()) == {"schema_version", "max_rounds", "max_input_per_round"}
+
+
+def test_round_budget_refusal_returns_terminal_stop_without_recording_execution(tmp_path: Path) -> None:
+    _path, store = _state(tmp_path, BudgetPolicy(max_rounds=1))
     reservation = store.reserve_budget("probe")
-    reservation.finalize({"executions": 1})
+    reservation.finalize({"executions": 1, "input_returned_chars": 100})
     with pytest.raises(BudgetExhausted) as caught:
         store.reserve_budget("probe")
-    assert caught.value.details["violations"][0]["limit"] == "max_executions"
+    assert caught.value.details["violations"][0]["limit"] == "max_rounds"
     loaded = store.load()
     assert loaded.status == "completed"
     assert loaded.stop_reason["kind"] == "budget_exhausted"
     assert loaded.executions == []
-    assert "probe 被调查预算拒绝" in loaded.stop_reason["detail"]
 
 
-def test_budget_reservations_are_concurrency_safe(tmp_path: Path) -> None:
-    _path, store = _state(tmp_path, BudgetPolicy(max_executions=1))
+def test_round_reservations_are_concurrency_safe(tmp_path: Path) -> None:
+    _path, store = _state(tmp_path, BudgetPolicy(max_rounds=1))
     results: list[str] = []
     reservations = []
     lock = threading.Lock()
@@ -86,9 +97,34 @@ def test_budget_reservations_are_concurrency_safe(tmp_path: Path) -> None:
     for thread in threads:
         thread.join()
     assert sorted(results) == ["refused", "reserved"]
-    reservations[0].finalize({"executions": 1})
-    assert store.load().executions == []
+    reservations[0].finalize({"executions": 1, "input_returned_chars": 10})
     assert store.budget_status()["usage"]["executions"] == 1
+
+
+def test_runtime_round_exhaustion_returns_budget_exhausted_and_should_stop(tmp_path: Path) -> None:
+    source = tmp_path / "source.log"
+    source.write_text("one\n", encoding="utf-8")
+    state_path, _store = _state(tmp_path, BudgetPolicy(max_rounds=1))
+    first = probe(source, investigation_path=state_path)
+    assert first["status"] == "ok"
+    refused = probe(source, investigation_path=state_path)
+    assert refused["status"] == "budget_exhausted"
+    assert refused["should_stop"] is True
+    assert refused["data"]["stop_reason"]["kind"] == "budget_exhausted"
+
+
+def test_runtime_input_budget_stops_oversized_round(tmp_path: Path) -> None:
+    source = tmp_path / "source.log"
+    source.write_text("x" * 4_000 + "\n", encoding="utf-8")
+    state_path, store = _state(
+        tmp_path,
+        BudgetPolicy(max_rounds=4, max_input_per_round=500),
+    )
+    result = expand(source, start_line=1, investigation_path=state_path)
+    assert result["status"] == "budget_exhausted"
+    assert result["should_stop"] is True
+    assert result["data"]["stop_reason"]["kind"] == "budget_exhausted"
+    assert store.load().status == "completed"
 
 
 def test_probe_cache_hit_records_fresh_execution_and_no_raw_body(tmp_path: Path) -> None:
@@ -150,55 +186,6 @@ def test_search_does_not_cache_a_snapshot_from_a_different_source_digest(
     assert second["data"]["cache"]["status"] == "miss"
 
 
-def test_search_pointer_budget_refuses_before_scan_when_cap_is_below_result_bound(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = tmp_path / "source.log"
-    source.write_text("target\ntarget\ntarget\n", encoding="utf-8")
-    state_path, store = _state(
-        tmp_path,
-        BudgetPolicy(
-            max_executions=2,
-            max_searches=2,
-            max_queries=2,
-            max_recorded_evidence_pointers=1,
-        ),
-    )
-    called = {"scan": False}
-
-    def should_not_scan(*_args, **_kwargs):
-        called["scan"] = True
-        raise AssertionError("search must reserve its bounded pointer capacity first")
-
-    monkeypatch.setattr(acquisition, "search_text", should_not_scan)
-    refused = search(source, "target", investigation_path=state_path)
-    assert refused["status"] == "error"
-    assert refused["error"]["type"] == "BudgetExhausted"
-    assert called["scan"] is False
-    assert store.load().executions == []
-    assert store.load().stop_reason["kind"] == "budget_exhausted"
-
-
-def test_non_snapshot_raw_tools_do_not_reserve_immutable_pointer_budget(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "source.log"
-    source.write_text("context\n", encoding="utf-8")
-    state_path, store = _state(
-        tmp_path,
-        BudgetPolicy(max_executions=3, max_recorded_evidence_pointers=1),
-    )
-    result = sample(
-        source,
-        snapshot=False,
-        count=20,
-        investigation_path=state_path,
-    )
-    assert result["status"] == "ok"
-    assert result["coverage"]["evidence_withheld"] is True
-    assert store.budget_status()["usage"]["recorded_evidence_pointers"] == 0
-
-
 @pytest.mark.parametrize(
     ("operation", "kwargs", "reason"),
     [
@@ -256,39 +243,10 @@ def test_verify_and_run_consume_execution_budget_before_work(
 
     monkeypatch.setattr(acquisition, "run_scenario", should_not_run)
     refused = tools.run({"version": 1}, investigation_path=state_path)
-    assert refused["status"] == "error"
+    assert refused["status"] == "budget_exhausted"
+    assert refused["should_stop"] is True
     assert refused["error"]["type"] == "BudgetExhausted"
     assert called["run"] is False
-
-
-def test_run_reserves_worst_case_evidence_cap_before_extension(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    state_path, store = _state(
-        tmp_path,
-        BudgetPolicy(max_executions=2, max_recorded_evidence_pointers=1),
-    )
-    called = {"run": False}
-
-    def should_not_run(*_args, **_kwargs):
-        called["run"] = True
-        raise AssertionError("scenario extension must be refused before execution")
-
-    monkeypatch.setattr(acquisition, "run_scenario", should_not_run)
-    refused = tools.run({"version": 1}, investigation_path=state_path)
-    assert refused["status"] == "error"
-    assert refused["error"]["type"] == "BudgetExhausted"
-    assert called["run"] is False
-    assert store.load().executions == []
-    assert store.load().stop_reason["kind"] == "budget_exhausted"
-
-
-def test_elapsed_limit_at_boundary_refuses_next_execution(tmp_path: Path) -> None:
-    _path, store = _state(tmp_path, BudgetPolicy(max_executions=3, max_elapsed_seconds=1))
-    reservation = store.reserve_budget("probe")
-    reservation.finalize({"executions": 1}, elapsed_seconds=1.0)
-    with pytest.raises(BudgetExhausted):
-        store.reserve_budget("probe")
 
 
 def test_cache_rejects_oversized_entry_and_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -439,3 +397,19 @@ def test_concurrent_cache_puts_preserve_entries_and_revision(tmp_path: Path) -> 
     persisted = json.loads(cache.path.read_text(encoding="utf-8"))
     assert len(persisted["entries"]) == 8
     assert persisted["revision"] == 8
+
+
+def test_legacy_dimension_specific_limits_do_not_gate_runtime(tmp_path: Path) -> None:
+    source = tmp_path / "source.log"
+    source.write_text("target\n", encoding="utf-8")
+    state_path, _store = _state(
+        tmp_path,
+        BudgetPolicy(
+            max_rounds=3,
+            max_searches=1,
+            max_recorded_evidence_pointers=1,
+            max_elapsed_seconds=0.001,
+        ),
+    )
+    assert search(source, "target", investigation_path=state_path)["status"] == "ok"
+    assert search(source, "target", investigation_path=state_path)["status"] == "ok"
