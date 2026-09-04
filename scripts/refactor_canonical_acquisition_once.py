@@ -117,7 +117,7 @@ def main() -> None:
 
     zh = ROOT / "docs/architecture.zh-CN.md"
     zh_text = zh.read_text(encoding="utf-8")
-    zh_runtime = "负责 canonical Evidence 机制，包括 RetrievalSession、有界 routing/selection、novelty/repetition/Coverage/acquisition-end 事实、identity/correlation safety、确定性 aggregate/traverse，以及可选 InvestigationState 协调。\n"
+    zh_runtime = "负责 canonical Evidence mechanics，包括 RetrievalSession、bounded routing/selection、novelty/repetition/Coverage/acquisition-end facts、identity/correlation safety、deterministic aggregate/traverse，以及可选 InvestigationState coordination。\n"
     zh_extra = zh_runtime + "\n本地 canonical acquisition 的唯一实现位于 `tracecite.runtime.acquisition`。`tracecite.runtime.tools` 仅保留为旧调用方/Integration 的兼容 facade，Runtime 内部不得再依赖它。\n"
     if zh_runtime not in zh_text:
         raise SystemExit("architecture.zh-CN.md Runtime ownership paragraph not found")
