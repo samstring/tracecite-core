@@ -18,7 +18,7 @@ env:
   GMI_BASE_URL: https://api.gmi-serving.com/v1
   PI_SKIP_VERSION_CHECK: "1"
   PI_TELEMETRY: "0"
-  INDEX_PROTOCOL_VERSION: "3"
+  INDEX_PROTOCOL_VERSION: "4"
 
 jobs:
   arm:
