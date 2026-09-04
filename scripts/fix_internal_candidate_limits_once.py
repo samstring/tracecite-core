@@ -5,6 +5,12 @@ import re
 from pathlib import Path
 
 
+def replace_once(text: str, old: str, new: str, *, label: str) -> str:
+    if old not in text:
+        raise RuntimeError(f"missing expected block: {label}")
+    return text.replace(old, new, 1)
+
+
 # The compatibility surface remains a pure forwarding module. We intentionally
 # do not preserve max_evidence as another public search knob.
 tools_path = Path("src/tracecite/runtime/tools.py")
@@ -46,8 +52,67 @@ session = session.replace(', max_evidence=1)', ')')
 session_path.write_text(session, encoding="utf-8")
 
 
+# The normal CLI no longer exposes candidate/body page limits. Agent input size
+# is governed by the investigation max_input_per_round budget and progressive
+# disclosure. Compact transport still has its own complete-document bound.
+cli_path = Path("src/tracecite/integrations/cli.py")
+cli = cli_path.read_text(encoding="utf-8")
+cli = replace_once(
+    cli,
+    '''    search_parser.add_argument(\n        "--max-evidence",\n        type=int,\n        default=None,\n        metavar="N",\n        help=(\n            f"maximum evidence rows in the agent view "\n            f"(default {DEFAULT_AGENT_MAX_EVIDENCE} for agent profiles)"\n        ),\n    )\n    search_parser.add_argument(\n        "--max-line-chars",\n        type=int,\n        default=None,\n        metavar="N",\n        help=(\n            f"truncate matched evidence lines to N characters "\n            f"(default {DEFAULT_FILTER_MAX_LINE_CHARS} for agent profiles)"\n        ),\n    )\n''',
+    '',
+    label="CLI candidate/body options",
+)
+cli = replace_once(
+    cli,
+    '''        max_evidence = (\n            args.max_evidence\n            if args.max_evidence is not None\n            else (DEFAULT_AGENT_MAX_EVIDENCE if agent_transport else None)\n        )\n        max_line_chars = (\n            args.max_line_chars\n            if args.max_line_chars is not None\n            else (DEFAULT_FILTER_MAX_LINE_CHARS if agent_transport else None)\n        )\n        if max_evidence is not None and max_evidence < 1:\n            raise ValueError("max-evidence must be at least 1")\n        if max_line_chars is not None and max_line_chars < 1:\n            raise ValueError("max-line-chars must be at least 1")\n''',
+    '',
+    label="CLI candidate/body derivation",
+)
+cli = replace_once(
+    cli,
+    '''            fold=args.fold,\n            max_evidence=max_evidence,\n            max_line_chars=max_line_chars,\n            cache=args.cache,''',
+    '''            fold=args.fold,\n            cache=args.cache,''',
+    label="CLI search candidate/body kwargs",
+)
+cli_path.write_text(cli, encoding="utf-8")
+
+
+# Stateful CLI keeps the artifact-writing compatibility branch, but neither the
+# canonical request nor the raw compatibility search exposes result-page knobs.
+stateful_path = Path("src/tracecite/integrations/stateful_cli.py")
+stateful = stateful_path.read_text(encoding="utf-8")
+stateful = stateful.replace('        max_evidence=None,\n        max_line_chars=None,\n', '', 1)
+stateful = stateful.replace(
+    '                max_evidence=max_evidence,\n                max_line_chars=max_line_chars,\n',
+    '',
+    1,
+)
+stateful = stateful.replace(
+    '                fold=fold,\n                max_evidence=max_evidence,\n                max_line_chars=max_line_chars,\n            ),',
+    '                fold=fold,\n            ),',
+    1,
+)
+stateful_path.write_text(stateful, encoding="utf-8")
+
+
+# GMI hosts exercise the canonical contract; None-valued legacy knobs were only
+# vestigial and must not survive on QueryTarget.
+for host_name in (
+    "benchmarks/agent-investigation/gmi_canonical_host.py",
+    "benchmarks/agent-investigation/gmi_evidence_contract_host.py",
+):
+    host_path = Path(host_name)
+    host = host_path.read_text(encoding="utf-8")
+    host = host.replace(
+        '                    snapshot=False,\n                    max_evidence=None,\n                    max_line_chars=None,\n',
+        '                    snapshot=False,\n',
+    )
+    host_path.write_text(host, encoding="utf-8")
+
+
 # Enforce the migration contract over all Python sources/tests so no hidden
-# canonical QueryTarget call silently keeps the retired knob.
+# canonical QueryTarget or search call silently keeps the retired knobs.
 offenders: list[str] = []
 for root in (Path("src"), Path("tests"), Path("benchmarks")):
     for path in root.rglob("*.py"):
@@ -60,12 +125,12 @@ for root in (Path("src"), Path("tests"), Path("benchmarks")):
                 continue
             func = node.func
             name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
-            if name != "QueryTarget":
-                continue
             retired = [kw.arg for kw in node.keywords if kw.arg in {"max_evidence", "max_line_chars"}]
-            if retired:
-                offenders.append(f"{path}:{node.lineno}: {','.join(retired)}")
+            if not retired:
+                continue
+            if name in {"QueryTarget", "search"}:
+                offenders.append(f"{path}:{node.lineno}: {name}({','.join(retired)})")
 if offenders:
-    raise RuntimeError("retired QueryTarget limit fields remain:\n" + "\n".join(offenders))
+    raise RuntimeError("retired public candidate/body limit fields remain:\n" + "\n".join(offenders))
 
 print("candidate limit migration follow-up applied")
