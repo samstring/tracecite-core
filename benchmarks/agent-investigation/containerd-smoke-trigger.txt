@@ -1,14 +1,14 @@
-trigger: 2026-09-05 hard reciprocal-handoff diagnostic after clean semantic/convergence failure
+trigger: 2026-09-05 direction-independent first-pair reciprocal-handoff diagnostic after clean semantic/convergence failure
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-literal-sync-query-firewall-plus-component-family-reciprocal
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: explicit-tracecite-activation-before-diagnosis-plus-stack-only-six-call-hard-stop-plus-all-invocations-count-plus-authoritative-host-count-plus-mandatory-sync-first-orientation-plus-structural-diversity-hint-first-reciprocal-plus-cross-component-reciprocal-closure-plus-nearest-application-component-pair-selection-plus-hard-reciprocal-handoff-after-complementary-expand-plus-reciprocal-search-precedence-after-pair-naming-plus-no-same-block-expand-after-pair-naming-plus-reserved-final-outer-component-family-slot-plus-four-endpoint-membership-plus-exact-four-paragraph-final
+adaptive_stopping_skill: explicit-tracecite-activation-before-diagnosis-plus-stack-only-six-call-hard-stop-plus-all-invocations-count-plus-authoritative-host-count-plus-mandatory-sync-first-orientation-plus-direction-independent-first-materialized-component-pair-handoff-plus-structural-diversity-hint-first-reciprocal-plus-cross-component-reciprocal-closure-plus-nearest-application-component-pair-selection-plus-reciprocal-search-precedence-after-pair-naming-plus-no-same-block-expand-after-pair-naming-plus-reserved-final-outer-component-family-slot-plus-four-endpoint-membership-plus-exact-four-paragraph-final
 skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-6
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: immediately after a complementary synchronization path is expanded and exposes acquisition component A plus nearest non-library application caller B, the next evidence invocation is fixed to tracecite_search for B's receiver/type family; do not re-expand any materialized block or follow unrelated hints first; preserve six-call ceiling and exact four-paragraph terminal serializer; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
+diagnostic_focus: after any synchronization-bearing tracecite_expand exposes acquisition component A plus nearest non-library application caller B, bind B->A immediately and make the next evidence invocation a receiver/type-family search for B regardless of whether the path was reached as the first representative, a structural-diversity hint, or a complementary path; do not spend the next slot on Lock/RLock spelling, re-expansion, or unrelated hints; preserve six-call ceiling and exact four-paragraph terminal serializer; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
 agent_timeout_seconds: 900
