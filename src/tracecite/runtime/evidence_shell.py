@@ -1,15 +1,12 @@
-"""Budget-gated Agent evidence shell.
+"""Budget-gated Agent Evidence Shell.
 
-The shell is a mechanical query surface.  The Agent chooses how to search, but
-TraceCite owns source/evidence integrity and the transport boundary.  A search
-that would expose more complete logical-record text than the host/user policy
-allows returns ``too_broad`` and no record bodies/pointers; the Agent must
-refine the query instead of increasing the budget.
+The Agent chooses a mechanical search program. TraceCite owns evidence
+integrity and the model transport boundary. Ordinary searches either fit the
+user/host Evidence policy in full or return ``too_broad`` with no Evidence.
 
-This first implementation intentionally reuses the proven ``search_text``
-engine for the first search stage so all current search scoping/segmenter
-semantics remain available.  Later hot-path work can replace its legacy
-artifacts without changing this public shell contract.
+The first implementation intentionally reuses ``search_text`` for the initial
+search stage so existing literal/regex/time/fold/segmenter semantics remain
+available while the legacy artifact hot path is migrated separately.
 """
 
 from __future__ import annotations
@@ -22,6 +19,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
+from uuid import uuid4
 
 from tracecite_core.records import estimate_tokens
 from tracecite_core.segmenter import build_segmenter, detect_segmenter_kind
@@ -39,12 +37,7 @@ DEFAULT_MAX_EVIDENCE_BYTES = 64 * 1024
 
 @dataclass(frozen=True)
 class EvidenceShellPolicy:
-    """Host/user-owned evidence transport policy.
-
-    This object is deliberately not part of the Agent tool request.  Hosts may
-    construct it from user settings, environment/configuration, or product
-    policy.  The Agent can refine its query but cannot override these limits.
-    """
+    """User/host-owned transport policy; never an Agent request field."""
 
     max_evidence_tokens: int = DEFAULT_MAX_EVIDENCE_TOKENS
     max_evidence_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES
@@ -104,6 +97,9 @@ _COMPARE: dict[str, Callable[[Any, Any], bool]] = {
     "<": operator.lt,
     "<=": operator.le,
 }
+_TERMINALS = frozenset({"count", "group", "distinct", "first", "last", "take"})
+_AGGREGATES = frozenset({"count", "group", "distinct"})
+_SELECTIONS = frozenset({"first", "last", "take"})
 
 
 def _sha256(path: Path) -> str:
@@ -137,17 +133,20 @@ def _tokenize_program(program: str) -> list[_Stage]:
 
 def _first_search(stages: Sequence[_Stage]) -> tuple[str, bool, tuple[_Stage, ...]]:
     first = stages[0]
-    command = first.command
     args = list(first.args)
-    if command in {"search", "grep"}:
+    if first.command in {"search", "grep"}:
         regex = False
-        if command == "grep" and args and args[0] in {"-e", "--extended-regexp", "-E"}:
+        while first.command == "grep" and args and args[0] in {
+            "-E",
+            "-e",
+            "--extended-regexp",
+        }:
             regex = True
-            args = args[1:]
+            args.pop(0)
         if not args:
-            raise ValueError(f"{command} requires a pattern")
+            raise ValueError(f"{first.command} requires a pattern")
         return " ".join(args), regex, tuple(stages[1:])
-    if command == "regex":
+    if first.command == "regex":
         if not args:
             raise ValueError("regex requires a pattern")
         return " ".join(args), True, tuple(stages[1:])
@@ -198,22 +197,27 @@ def _coerce(value: str) -> Any:
         return value
 
 
-def _apply_predicate(row: _RecordRow, stage: _Stage) -> bool:
+def _predicate(row: _RecordRow, stage: _Stage) -> bool:
     command = stage.command
-    args = stage.args
+    args = list(stage.args)
     if command in {"search", "grep"}:
         invert = False
         regex = False
-        values = list(args)
-        while values and values[0] in {"-v", "--invert-match", "-E", "-e", "--extended-regexp"}:
-            flag = values.pop(0)
+        while args and args[0] in {
+            "-v",
+            "--invert-match",
+            "-E",
+            "-e",
+            "--extended-regexp",
+        }:
+            flag = args.pop(0)
             if flag in {"-v", "--invert-match"}:
                 invert = True
             else:
                 regex = True
-        if not values:
+        if not args:
             raise ValueError(f"{command} requires a pattern")
-        pattern = " ".join(values)
+        pattern = " ".join(args)
         matched = bool(re.search(pattern, row.text)) if regex else pattern in row.text
         return not matched if invert else matched
     if command == "regex":
@@ -253,53 +257,61 @@ def _load_records(path: Path) -> Iterable[_RecordRow]:
             if not isinstance(payload, Mapping):
                 continue
             metadata = payload.get("metadata") or {}
-            if not isinstance(metadata, Mapping):
-                metadata = {}
-            yield _RecordRow(str(payload.get("text") or ""), dict(metadata))
+            yield _RecordRow(
+                text=str(payload.get("text") or ""),
+                metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
+            )
+
+
+def _terminal(stages: Sequence[_Stage]) -> _Stage | None:
+    terminals = [stage for stage in stages if stage.command in _TERMINALS]
+    if len(terminals) > 1:
+        raise ValueError("evidence shell currently supports one terminal stage")
+    return terminals[0] if terminals else None
 
 
 def _filter_rows(rows: Iterable[_RecordRow], stages: Sequence[_Stage]) -> Iterable[_RecordRow]:
     for row in rows:
         keep = True
         for stage in stages:
-            if stage.command in {"count", "group", "distinct", "first", "last", "take", "emit"}:
+            if stage.command in _TERMINALS or stage.command == "emit":
                 continue
-            if not _apply_predicate(row, stage):
+            if not _predicate(row, stage):
                 keep = False
                 break
         if keep:
             yield row
 
 
-def _terminal(stages: Sequence[_Stage]) -> _Stage | None:
-    terminals = [
-        stage
-        for stage in stages
-        if stage.command in {"count", "group", "distinct", "first", "last", "take"}
-    ]
-    if len(terminals) > 1:
-        raise ValueError("evidence shell currently supports one terminal selection/aggregate stage")
-    return terminals[0] if terminals else None
-
-
-def _aggregate(rows: Iterable[_RecordRow], stage: _Stage) -> dict[str, Any]:
+def _aggregate(rows: Iterable[_RecordRow], stage: _Stage) -> tuple[dict[str, Any], int]:
     if stage.command == "count":
-        return {"count": sum(1 for _ in rows)}
+        count = sum(1 for _ in rows)
+        return {"count": count}, count
     if not stage.args:
         raise ValueError(f"{stage.command} requires a field")
+
     field = stage.args[0]
     counts: dict[str, int] = {}
+    matched = 0
     for row in rows:
+        matched += 1
         value = _field_value(row, field)
         key = "<missing>" if value is None else str(value)
         counts[key] = counts.get(key, 0) + 1
     ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     if stage.command == "group":
-        return {"field": field, "groups": [{"key": key, "count": count} for key, count in ordered]}
-    return {"field": field, "values": [key for key, _ in ordered], "distinct_total": len(ordered)}
+        return {
+            "field": field,
+            "groups": [{"key": key, "count": count} for key, count in ordered],
+        }, matched
+    return {
+        "field": field,
+        "values": [key for key, _ in ordered],
+        "distinct_total": len(ordered),
+    }, matched
 
 
-def _select_rows(rows: Iterable[_RecordRow], stage: _Stage) -> list[_RecordRow]:
+def _select(rows: Iterable[_RecordRow], stage: _Stage) -> list[_RecordRow]:
     if not stage.args:
         raise ValueError(f"{stage.command} requires N")
     n = int(stage.args[0])
@@ -312,6 +324,7 @@ def _select_rows(rows: Iterable[_RecordRow], stage: _Stage) -> list[_RecordRow]:
             if len(selected) >= n:
                 break
         return selected
+
     selected = []
     for row in rows:
         selected.append(row)
@@ -320,18 +333,15 @@ def _select_rows(rows: Iterable[_RecordRow], stage: _Stage) -> list[_RecordRow]:
     return selected
 
 
-def _budgeted_rows(
-    rows: Iterable[_RecordRow],
-    policy: EvidenceShellPolicy,
+def _budgeted(
+    rows: Iterable[_RecordRow], policy: EvidenceShellPolicy
 ) -> tuple[list[_RecordRow], int, int, bool]:
     selected: list[_RecordRow] = []
     tokens = 0
     bytes_used = 0
     for row in rows:
-        row_tokens = estimate_tokens(row.text)
-        row_bytes = len(row.text.encode("utf-8", errors="replace"))
-        tokens += row_tokens
-        bytes_used += row_bytes
+        tokens += estimate_tokens(row.text)
+        bytes_used += len(row.text.encode("utf-8", errors="replace"))
         if tokens > policy.max_evidence_tokens or bytes_used > policy.max_evidence_bytes:
             return [], tokens, bytes_used, True
         selected.append(row)
@@ -339,7 +349,9 @@ def _budgeted_rows(
 
 
 def _request_fingerprint(source_version: str, program: str) -> str:
-    return hashlib.sha256(f"evidence-shell\0{source_version}\0{program}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        f"evidence-shell\0{source_version}\0{program}".encode("utf-8")
+    ).hexdigest()
 
 
 def _apply_session(
@@ -351,6 +363,7 @@ def _apply_session(
 ) -> dict[str, Any]:
     if session is None or payload.get("status") == "too_broad":
         return payload
+
     rows = [item for item in payload.get("evidence") or [] if isinstance(item, Mapping)]
     ids = tuple(str(item.get("uri") or "") for item in rows if str(item.get("uri") or ""))
     with state_lock(session.path):
@@ -358,11 +371,14 @@ def _apply_session(
         prior = set(state.seen_evidence)
         new_rows = [dict(item) for item in rows if str(item.get("uri") or "") not in prior]
         repeated = max(0, len(rows) - len(new_rows))
+        operation_status = (
+            "no_new_evidence" if rows and not new_rows else str(payload.get("status") or "ok")
+        )
         next_state, _ = state.advance(
             evidence=ids,
             operation=RetrievalOperation(
                 operation="evidence_shell",
-                status=str(payload.get("status") or "ok"),
+                status=operation_status,
                 request_fingerprint=_request_fingerprint(source_version, program),
                 new_evidence=len(new_rows),
                 repeated_evidence=repeated,
@@ -370,13 +386,15 @@ def _apply_session(
             ),
         )
         session.save(next_state)
-    payload = dict(payload)
-    payload["evidence"] = new_rows
-    coverage = dict(payload.get("coverage") or {})
+
+    result = dict(payload)
+    result["evidence"] = new_rows
+    coverage = dict(result.get("coverage") or {})
     coverage["new_evidence"] = len(new_rows)
     coverage["repeated_evidence"] = repeated
-    payload["coverage"] = coverage
-    data = dict(payload.get("data") or {})
+    result["coverage"] = coverage
+
+    data = dict(result.get("data") or {})
     if repeated:
         data["matched_existing_evidence"] = [
             {"uri": str(item.get("uri") or "")}
@@ -389,10 +407,19 @@ def _apply_session(
         "repeated_evidence": repeated,
         "source_version": source_version,
     }
-    payload["data"] = data
-    if rows and not new_rows:
-        payload["status"] = "no_new_evidence"
-    return payload
+    result["data"] = data
+    # Canonical AgentResult.status stays within RESULT_STATUSES. The mechanical
+    # no-new-evidence state belongs to RetrievalSession/novelty, matching the
+    # existing retrieve_with_session contract.
+    return result
+
+
+def _budget_data(policy: EvidenceShellPolicy) -> dict[str, Any]:
+    return {
+        "max_tokens": policy.max_evidence_tokens,
+        "max_bytes": policy.max_evidence_bytes,
+        "owner": "user_policy",
+    }
 
 
 def run_evidence_shell(
@@ -411,21 +438,21 @@ def run_evidence_shell(
     source = Path(request.source).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(source)
+
     stages = _tokenize_program(request.program)
     query, regex, remaining = _first_search(stages)
     terminal = _terminal(remaining)
     kind = detect_segmenter_kind(source) if request.segmenter == "auto" else request.segmenter
 
-    # The first release keeps the legacy engine behind the shell so current
-    # regex/time/fold/segmenter semantics remain intact.  The Agent-facing
-    # contract no longer exposes its artifacts; a later hot-path refactor can
-    # stream Records directly without changing callers.
+    # Transitional implementation: preserve legacy search parity while keeping
+    # artifacts private to Runtime. The next hot-path phase streams Records
+    # directly so these files are no longer required for Agent execution.
     run_dir = source.parent / ".tracecite" / "evidence-shell"
     run_dir.mkdir(parents=True, exist_ok=True)
-    output_path = run_dir / f"shell-{hashlib.sha256(request.program.encode('utf-8')).hexdigest()[:16]}.log"
+    output_path = run_dir / f"shell-{uuid4().hex}.log"
     result = search_text(
         source,
-        pattern=query if regex else re.escape(query),
+        pattern=query,
         regex=regex,
         output_path=output_path,
         snapshot=True,
@@ -436,6 +463,7 @@ def run_evidence_shell(
         fold=request.fold,
         max_line_chars=None,
     )
+
     records_path = result.records_path
     if records_path is None or not records_path.is_file():
         return AgentResult(
@@ -443,35 +471,36 @@ def run_evidence_shell(
             status="no_match",
             outcome="not_assessed",
             coverage={"match_records": 0},
-            data={"program": request.program, "segmenter": kind},
+            data={
+                "program": request.program,
+                "segmenter": kind,
+                "evidence_budget": _budget_data(policy),
+            },
         ).to_dict()
 
     filtered = _filter_rows(_load_records(records_path), remaining)
 
-    if terminal is not None and terminal.command in {"count", "group", "distinct"}:
-        aggregate = _aggregate(filtered, terminal)
+    if terminal is not None and terminal.command in _AGGREGATES:
+        aggregate, matched = _aggregate(filtered, terminal)
         return AgentResult(
             operation="evidence_shell",
             status="ok",
             outcome="not_assessed",
-            coverage={"complete": True, "match_records": result.match_records},
+            coverage={"complete": True, "match_records": matched},
             data={
                 "program": request.program,
                 "segmenter": kind,
                 "aggregate": aggregate,
-                "evidence_budget": {
-                    "max_tokens": policy.max_evidence_tokens,
-                    "max_bytes": policy.max_evidence_bytes,
-                    "owner": "user_policy",
-                },
+                "evidence_budget": _budget_data(policy),
             },
         ).to_dict()
 
-    explicitly_selected = terminal is not None and terminal.command in {"first", "last", "take"}
+    explicitly_selected = terminal is not None and terminal.command in _SELECTIONS
     rows: Iterable[_RecordRow] = filtered
     if explicitly_selected and terminal is not None:
-        rows = _select_rows(rows, terminal)
-    selected, token_count, byte_count, exceeded = _budgeted_rows(rows, policy)
+        rows = _select(rows, terminal)
+
+    selected, token_count, byte_count, exceeded = _budgeted(rows, policy)
     if exceeded:
         return AgentResult(
             operation="evidence_shell",
@@ -479,7 +508,8 @@ def run_evidence_shell(
             outcome="unknown",
             evidence=[],
             warnings=[
-                "Matched evidence exceeds the user-configured evidence budget. Refine the search; the Agent cannot increase this budget."
+                "Matched evidence exceeds the user-configured Evidence budget. "
+                "Refine the search; the Agent cannot increase this budget."
             ],
             coverage={
                 "complete": False,
@@ -492,11 +522,28 @@ def run_evidence_shell(
                 "program": request.program,
                 "refine_query": True,
                 "reason": "MATCHED_EVIDENCE_BUDGET_EXCEEDED",
-                "evidence_budget": {
-                    "max_tokens": policy.max_evidence_tokens,
-                    "max_bytes": policy.max_evidence_bytes,
-                    "owner": "user_policy",
-                },
+                "evidence_budget": _budget_data(policy),
+            },
+        ).to_dict()
+
+    if not selected:
+        return AgentResult(
+            operation="evidence_shell",
+            status="no_match",
+            outcome="not_assessed",
+            coverage={
+                "complete": not explicitly_selected,
+                "selection_explicit": explicitly_selected,
+                "match_records": 0,
+                "evidence_returned": 0,
+                "evidence_tokens": 0,
+                "evidence_bytes": 0,
+                "too_broad": False,
+            },
+            data={
+                "program": request.program,
+                "segmenter": kind,
+                "evidence_budget": _budget_data(policy),
             },
         ).to_dict()
 
@@ -526,7 +573,7 @@ def run_evidence_shell(
 
     payload = AgentResult(
         operation="evidence_shell",
-        status="ok" if evidence else "no_match",
+        status="ok",
         outcome="not_assessed",
         evidence=evidence,
         coverage={
@@ -543,11 +590,7 @@ def run_evidence_shell(
             "segmenter": kind,
             "source_sha256": digest,
             "source_version": source_version,
-            "evidence_budget": {
-                "max_tokens": policy.max_evidence_tokens,
-                "max_bytes": policy.max_evidence_bytes,
-                "owner": "user_policy",
-            },
+            "evidence_budget": _budget_data(policy),
         },
     ).to_dict()
     return _apply_session(
