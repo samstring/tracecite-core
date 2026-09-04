@@ -11,14 +11,16 @@ from typing import Any, Dict, List, Mapping, Optional
 
 SCENARIO_SCHEMA_VERSION = 2
 RESULT_SCHEMA_VERSION = 1
-RESULT_STATUSES = frozenset({"ok", "no_match", "partial", "error", "budget_exhausted"})
+RESULT_STATUSES = frozenset(
+    {"ok", "no_match", "partial", "error", "budget_exhausted", "too_broad"}
+)
 RESULT_OUTCOMES = frozenset({"supported", "contradicted", "unknown", "not_assessed"})
 # These operations only acquire/materialize evidence. A successful match or
 # expansion is not itself an assessment of any hypothesis. Keep this invariant
 # at the shared Result boundary so CLI, Python, MCP and host integrations cannot
 # accidentally reinterpret retrieval success as semantic support.
 NON_ASSESSING_OPERATIONS = frozenset(
-    {"probe", "search", "survey", "probe_format", "sample", "expand"}
+    {"probe", "search", "survey", "probe_format", "sample", "expand", "evidence_shell"}
 )
 MAX_RESULT_EVIDENCE = 100
 
