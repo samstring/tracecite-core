@@ -408,9 +408,6 @@ def _apply_session(
         "source_version": source_version,
     }
     result["data"] = data
-    # Canonical AgentResult.status stays within RESULT_STATUSES. The mechanical
-    # no-new-evidence state belongs to RetrievalSession/novelty, matching the
-    # existing retrieve_with_session contract.
     return result
 
 
@@ -444,15 +441,16 @@ def run_evidence_shell(
     terminal = _terminal(remaining)
     kind = detect_segmenter_kind(source) if request.segmenter == "auto" else request.segmenter
 
-    # Transitional implementation: preserve legacy search parity while keeping
-    # artifacts private to Runtime. The next hot-path phase streams Records
-    # directly so these files are no longer required for Agent execution.
+    # search_text's literal compatibility contract accepts an escaped pattern
+    # (the existing acquisition.search path does the same). The future direct
+    # Record-streaming backend will take the raw literal directly.
+    backend_pattern = query if regex else re.escape(query)
     run_dir = source.parent / ".tracecite" / "evidence-shell"
     run_dir.mkdir(parents=True, exist_ok=True)
     output_path = run_dir / f"shell-{uuid4().hex}.log"
     result = search_text(
         source,
-        pattern=query,
+        pattern=backend_pattern,
         regex=regex,
         output_path=output_path,
         snapshot=True,
