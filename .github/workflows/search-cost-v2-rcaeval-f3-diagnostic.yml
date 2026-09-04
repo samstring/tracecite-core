@@ -1,0 +1,55 @@
+name: Search Cost V2 RCAEval F3 Diagnostic
+on:
+  push:
+    branches: [experiment/evidence-intelligence-search-cost-v2]
+    paths: [.github/workflows/search-cost-v2-rcaeval-f3-diagnostic.yml]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Inspect route-service evidence around onset
+        run: |
+          python -m pip install --quiet huggingface_hub pandas pyarrow
+          python - <<'PY'
+          import pandas as pd, re, json
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          case='re3tt_ts-route-service_f3_6'; root=Path('/tmp/rca')
+          snapshot_download(repo_id='phamquiluan/RCAEval',repo_type='dataset',allow_patterns=[f'{case}/*'],local_dir=root)
+          src=root/case; onset=int((src/'inject_time.txt').read_text()); logs=pd.read_parquet(src/'logs.parquet')
+          print('ONSET',onset,'columns',list(logs.columns),'rows',len(logs))
+          # Normalize likely fields without assuming exact schema.
+          cols={c.lower():c for c in logs.columns}
+          tc=next((cols[k] for k in ('timestamp','time','ts') if k in cols),None)
+          cc=next((cols[k] for k in ('container_name','container','service','service_name') if k in cols),None)
+          mc=next((cols[k] for k in ('message','msg','log') if k in cols),None)
+          print('FIELDS',tc,cc,mc)
+          if not (tc and cc and mc): raise SystemExit('unexpected schema')
+          route=logs[logs[cc].astype(str).str.contains('ts-route-service',case=False,na=False)].copy()
+          print('ROUTE_ROWS',len(route),'time',route[tc].min(),route[tc].max())
+          win=route[(route[tc]>=onset-120)&(route[tc]<=onset+180)]
+          print('\n=== ROUTE ONSET WINDOW ===')
+          for idx,row in win.iterrows():
+            msg=str(row[mc]).replace('\n','\\n')
+            if re.search(r'ERROR|Exception|Error|failed|WARN|Route|route|findBy|Controller|ServiceImpl|Repository|javaagent|shutdown|Starting|Started',msg,re.I):
+              print(idx, row[tc], msg[:2400])
+          print('\n=== ROUTE STACK/ERROR SIGNATURES ALL ===')
+          sig={}
+          for idx,row in route.iterrows():
+            msg=str(row[mc])
+            if re.search(r'ERROR|Exception|Error|failed|javaagent',msg,re.I):
+              first=msg.splitlines()[0][:500]
+              sig.setdefault(first,[]).append((idx,row[tc]))
+          for s,where in sorted(sig.items(),key=lambda kv:-len(kv[1]))[:40]:
+            print('COUNT',len(where),'FIRST',where[:5],s)
+          print('\n=== ALL SERVICES ERROR LINES +-90s ===')
+          allwin=logs[(logs[tc]>=onset-90)&(logs[tc]<=onset+120)]
+          for idx,row in allwin.iterrows():
+            msg=str(row[mc])
+            if re.search(r'ERROR|Exception|Error|failed',msg,re.I):
+              print(idx,row[tc],row[cc],msg.replace('\n','\\n')[:1800])
+          PY
