@@ -14,6 +14,7 @@ env:
   GMI_BASE_URL: https://api.gmi-serving.com/v1
   PI_SKIP_VERSION_CHECK: "1"
   PI_TELEMETRY: "0"
+  INDEX_PROTOCOL_VERSION: "2"
   CASE_ID: re3ss_orders_f3_3
   ARM: tracecite
   BENCH_MODEL: ${{ vars.GMI2_MODEL }}
