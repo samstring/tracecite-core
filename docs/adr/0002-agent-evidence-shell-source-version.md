@@ -145,7 +145,7 @@ Costs and risks:
 - live-cut performance is best with writer cooperation; the fallback assumes mechanically verified append continuity;
 - deterministic token estimation is model-agnostic, so the exact byte cap remains a second hard transport guard.
 
-## Migration status
+## Migration and validation
 
 Implemented on `feature_for_agent_refacotr_shell`:
 
