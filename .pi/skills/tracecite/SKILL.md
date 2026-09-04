@@ -84,7 +84,7 @@ The Agent still owns the decision to continue, switch hypotheses, answer, or dec
 
 Large evidence sources make repeated semantically broad retrieval expensive for the Agent even when each TraceCite operation is mechanically fast. Keep the Agent in control, but default to a bounded evidence loop:
 
-1. Inspect the source shape once; do not rediscover filenames or schemas with synonym searches.
+1. Inspect the source shape once; do not rediscover filenames or schemas with synonym searches. In a controlled Host, the canonical tool schema may list `Host-authorized evidence files`; treat that inventory as source metadata and use those exact names instead of guessing paths.
 2. Use one broad retrieval to identify a concrete error signature, service, trace ID, request ID, or other correlation key.
 3. Once a concrete correlation key is available, pivot to that key and materialize only the bounded spans/ranges needed to establish the causal chain.
 4. Prefer correlation-local evidence over unrelated confirmatory sampling. In particular, do not sample arbitrary metric rows after a trace/log chain already resolves the active causal question unless the metric evidence answers a specific unresolved contradiction.

@@ -14,6 +14,13 @@ const SESSION = process.env.TRACECITE_PI_SESSION ||
   join(tmpdir(), `tracecite-pi-${process.pid}`, "retrieval-session.json");
 const ACTIVITY_PATH = process.env.TRACECITE_PI_ACTIVITY ||
   join(dirname(SESSION), "host-tool-activity.json");
+const AUTHORIZED_EVIDENCE_FILES = (process.env.TRACECITE_EVIDENCE_FILES || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+const AUTHORIZED_EVIDENCE_HINT = AUTHORIZED_EVIDENCE_FILES.length > 0
+  ? ` Host-authorized evidence files: ${AUTHORIZED_EVIDENCE_FILES.join(", ")}.`
+  : "";
 const TRACE_TOOLS = new Set([
   "tracecite_retrieve", "tracecite_materialize", "tracecite_replay",
   "tracecite_aggregate", "tracecite_traverse", "tracecite_verify",
@@ -287,9 +294,9 @@ export default function traceciteTools(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "tracecite_retrieve", label: "TraceCite Retrieve",
-    description: "Canonical retrieve for caller-selected local evidence. Preserves provenance, coverage, identity safety and RetrievalSession novelty. Host feedback may require investigation_goal after a convergence checkpoint; the Agent still owns hypotheses and stopping.",
+    description: "Canonical retrieve for caller-selected local evidence. Preserves provenance, coverage, identity safety and RetrievalSession novelty. Host feedback may require investigation_goal after a convergence checkpoint; the Agent still owns hypotheses and stopping." + AUTHORIZED_EVIDENCE_HINT,
     parameters: Type.Object({
-      file: Type.String(), query: Type.Optional(Type.String()), regex: Type.Optional(Type.Boolean()),
+      file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }), query: Type.Optional(Type.String()), regex: Type.Optional(Type.Boolean()),
       max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
       glob: Type.Optional(Type.String()), recursive: Type.Optional(Type.Boolean()), investigation_goal: investigationGoal,
     }),
@@ -309,7 +316,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_materialize", label: "TraceCite Materialize",
     description: "Canonical materialize of exact bounded caller-selected source context with immutable identity and session coverage. Radius is 0..30. Host feedback may require investigation_goal after a convergence checkpoint.",
     parameters: Type.Object({
-      file: Type.String(), line: Type.Integer({ minimum: 1 }),
+      file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }), line: Type.Integer({ minimum: 1 }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.Optional(Type.String()), investigation_goal: investigationGoal,
     }),
     async execute(_id, p, signal, _update, ctx) {
@@ -323,7 +330,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
     name: "tracecite_replay", label: "TraceCite Replay",
     description: "Canonical replay of previously materialized immutable context without counting it as new evidence. Radius is 0..30. Replay does not expand the evidence frontier.",
     parameters: Type.Object({
-      file: Type.String(), line: Type.Integer({ minimum: 1 }),
+      file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }), line: Type.Integer({ minimum: 1 }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.String(), investigation_goal: investigationGoal,
     }),
     async execute(_id, p, signal, _update, ctx) {
@@ -398,7 +405,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
   });
   pi.registerTool({
     name: "tracecite_expand", label: "TraceCite Expand (compat)", description: "Compatibility alias for tracecite_materialize/replay.",
-    parameters: Type.Object({ file: Type.String(), line: Type.Integer({ minimum: 1 }), radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.Optional(Type.String()), replay: Type.Optional(Type.Boolean()), investigation_goal: investigationGoal }),
+    parameters: Type.Object({ file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }), line: Type.Integer({ minimum: 1 }), radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })), sha256: Type.Optional(Type.String()), replay: Type.Optional(Type.Boolean()), investigation_goal: investigationGoal }),
     async execute(_id, p, signal, _update, ctx) {
       const op = p.replay ? "replay" : "materialize";
       const blocked = checkpointGate(op, p.investigation_goal);
