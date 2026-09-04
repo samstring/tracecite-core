@@ -144,7 +144,7 @@ def test_repeated_query_same_source_does_not_repeat_raw_direct_dump(tmp_path) ->
 
     assert first["data"]["routing"]["mode"] == "direct"
     assert "direct_raw" in first["data"]
-    assert second["data"]["routing"]["mode"] == "bounded"
+    assert second["data"]["routing"]["mode"] == "progressive"
     assert "source_already_seen" in second["data"]["routing"]["reasons"]
     assert "direct_raw" not in second["data"]
 
@@ -158,7 +158,7 @@ def _assert_complete_error_index(payload: dict) -> None:
     ]
 
 
-def test_after_direct_read_query_becomes_bounded_and_can_escalate(tmp_path) -> None:
+def test_after_direct_read_query_becomes_progressive(tmp_path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("".join(f"ERROR item={i}\n" for i in range(20)), encoding="utf-8")
     state_path = tmp_path / "investigation.json"
@@ -187,8 +187,8 @@ def test_after_direct_read_query_becomes_bounded_and_can_escalate(tmp_path) -> N
     )
     payload = searched.to_dict()
 
-    assert payload["data"]["routing"]["mode"] == "bounded"
-    assert payload["data"]["routing"]["next_mode"] == "focused"
+    assert payload["data"]["routing"]["mode"] == "progressive"
+    assert "next_mode" not in payload["data"]["routing"]
     assert payload["coverage"]["match_records"] == 20
     assert payload["coverage"]["evidence_returned"] == 0
     assert payload["coverage"]["evidence_indexed"] is True
@@ -196,7 +196,7 @@ def test_after_direct_read_query_becomes_bounded_and_can_escalate(tmp_path) -> N
     _assert_complete_error_index(payload)
 
 
-def test_deep_query_uses_tighter_investigate_transport_cap(tmp_path) -> None:
+def test_deep_query_uses_tighter_internal_progressive_cap(tmp_path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("".join(f"ERROR item={i}\n" for i in range(20)), encoding="utf-8")
     state_path = tmp_path / "investigation.json"
@@ -230,7 +230,7 @@ def test_deep_query_uses_tighter_investigate_transport_cap(tmp_path) -> None:
     )
     payload = result.to_dict()
 
-    assert payload["data"]["routing"]["mode"] == EvidenceRoute.FOCUSED.value
+    assert payload["data"]["routing"]["mode"] == EvidenceRoute.PROGRESSIVE.value
     assert "exploration_depth" in payload["data"]["routing"]["reasons"]
     assert payload["coverage"]["match_records"] == 20
     assert payload["coverage"]["evidence_returned"] == 0
@@ -239,7 +239,7 @@ def test_deep_query_uses_tighter_investigate_transport_cap(tmp_path) -> None:
     _assert_complete_error_index(payload)
 
 
-def test_large_first_source_uses_bounded_uniform_navigation_sample(tmp_path) -> None:
+def test_large_first_source_uses_progressive_uniform_navigation_sample(tmp_path) -> None:
     source = tmp_path / "large.log"
     rows = [f"record {index}" for index in range(623)]
     rows[88] = "MIDPOINT_STRUCTURAL_LANDMARK"
@@ -257,7 +257,7 @@ def test_large_first_source_uses_bounded_uniform_navigation_sample(tmp_path) -> 
     payload = result.to_dict()
 
     assert result.operation == "sample"
-    assert payload["data"]["routing"]["mode"] == "bounded"
+    assert payload["data"]["routing"]["mode"] == "progressive"
     assert "direct_output_exceeds_budget" in payload["data"]["routing"]["reasons"]
     assert payload["data"]["strategy"] == "uniform"
     assert payload["data"]["navigation_only"] is True
@@ -270,7 +270,7 @@ def test_large_first_source_uses_bounded_uniform_navigation_sample(tmp_path) -> 
     )
 
 
-def test_deep_history_monotonically_escalates_source_inspection_to_investigate(tmp_path) -> None:
+def test_deep_history_keeps_progressive_mode_with_internal_survey(tmp_path) -> None:
     source = tmp_path / "runtime.log"
     source.write_text("alpha\nbeta\ngamma\ndelta\n", encoding="utf-8")
     state_path = tmp_path / "investigation.json"
@@ -296,6 +296,32 @@ def test_deep_history_monotonically_escalates_source_inspection_to_investigate(t
     )
     payload = result.to_dict()
 
-    assert payload["data"]["routing"]["mode"] == EvidenceRoute.FOCUSED.value
+    assert payload["data"]["routing"]["mode"] == EvidenceRoute.PROGRESSIVE.value
     assert "exploration_depth" in payload["data"]["routing"]["reasons"]
     assert result.operation == "survey"
+
+
+def test_public_disclosure_modes_are_only_direct_and_progressive(tmp_path) -> None:
+    source = tmp_path / "routing.log"
+    source.write_text("ERROR one\nERROR two\n", encoding="utf-8")
+    state_path = tmp_path / "investigation.json"
+    InvestigationStore(state_path).create("routing contract")
+
+    first = retrieve(
+        EvidenceRequest(SourceTarget(source), investigation_path=state_path),
+        routing_policy=EvidenceRoutingPolicy(fallback_direct_chars=8_000, max_direct_chars=8_000),
+    ).to_dict()
+    second = retrieve(
+        EvidenceRequest(QueryTarget(source, "ERROR", snapshot=False), investigation_path=state_path),
+        routing_policy=EvidenceRoutingPolicy(fallback_direct_chars=8_000, max_direct_chars=8_000),
+    ).to_dict()
+
+    modes = {first["data"]["routing"]["mode"], second["data"]["routing"]["mode"]}
+    assert modes <= {"direct", "progressive"}
+    assert "bounded" not in modes
+    assert "focused" not in modes
+
+
+def test_legacy_bounded_and_focused_policy_inputs_normalize_to_progressive() -> None:
+    assert EvidenceRoutingPolicy(mode="bounded").mode == "progressive"
+    assert EvidenceRoutingPolicy(mode="focused").mode == "progressive"

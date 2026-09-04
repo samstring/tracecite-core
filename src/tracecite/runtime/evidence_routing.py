@@ -1,8 +1,11 @@
 """Deterministic adaptive routing for Agent-facing evidence retrieval.
 
 Routing is intentionally about evidence transport cost/risk, not diagnosis.
-The default policy starts with the cheapest safe path and only escalates:
-DIRECT -> BOUNDED -> FOCUSED.
+The public disclosure model has only two modes:
+DIRECT -> PROGRESSIVE.
+
+PROGRESSIVE may internally tighten sampling or result caps as retrieval history
+grows, but those are implementation details rather than public disclosure modes.
 
 DIRECT is a fidelity-first transport mode. An unseen local source may stay on
 DIRECT even after other sources were inspected when the aggregate fully
@@ -23,11 +26,11 @@ from typing import Any, Mapping, Sequence
 
 class EvidenceRoute(str, Enum):
     DIRECT = "direct"
-    BOUNDED = "bounded"
-    FOCUSED = "focused"
+    PROGRESSIVE = "progressive"
 
 
 _ROUTING_MODES = frozenset({"adaptive", *(item.value for item in EvidenceRoute)})
+_LEGACY_PROGRESSIVE_MODES = frozenset({"bounded", "focused"})
 
 
 @dataclass(frozen=True)
@@ -64,8 +67,10 @@ class EvidenceRoutingPolicy:
 
     def __post_init__(self) -> None:
         mode = str(self.mode or "").strip().lower()
+        if mode in _LEGACY_PROGRESSIVE_MODES:
+            mode = EvidenceRoute.PROGRESSIVE.value
         if mode not in _ROUTING_MODES:
-            raise ValueError("routing mode must be adaptive/direct/bounded/investigate")
+            raise ValueError("routing mode must be adaptive/direct/progressive")
         object.__setattr__(self, "mode", mode)
         if self.remaining_context_tokens is not None and (
             isinstance(self.remaining_context_tokens, bool)
@@ -291,7 +296,7 @@ def decide_route(
 
     if target_kind == "provider":
         return RoutingDecision(
-            route=EvidenceRoute.FOCUSED,
+            route=EvidenceRoute.PROGRESSIVE,
             reasons=("provider_identity_expansion",),
             direct_char_budget=direct_budget,
             previous_executions=hist.executions,
@@ -372,21 +377,7 @@ def decide_route(
         and hist.repeated_evidence_ratio >= policy.repeated_evidence_ratio
     ):
         escalation.append("repeated_evidence")
-    if escalation:
-        return RoutingDecision(
-            route=EvidenceRoute.FOCUSED,
-            reasons=tuple(escalation),
-            source_bytes=source_bytes,
-            estimated_direct_chars=direct_chars,
-            aggregate_direct_chars=aggregate_direct_chars,
-            direct_char_budget=direct_budget,
-            previous_executions=hist.executions,
-            source_count=hist.source_count,
-            max_match_records=hist.max_match_records,
-            repeated_evidence_ratio=hist.repeated_evidence_ratio,
-        )
-
-    reasons: list[str] = []
+    reasons: list[str] = list(escalation)
     if hist.max_match_records >= policy.bounded_match_records:
         reasons.append("match_cardinality_requires_bounds")
     if source_seen:
@@ -402,7 +393,7 @@ def decide_route(
     if not reasons:
         reasons.append("bounded_default")
     return RoutingDecision(
-        route=EvidenceRoute.BOUNDED,
+        route=EvidenceRoute.PROGRESSIVE,
         reasons=tuple(reasons),
         source_bytes=source_bytes,
         estimated_direct_chars=direct_chars,
@@ -431,14 +422,10 @@ def refine_route_after_result(
         match_records = 0
     truncated = bool(coverage.get("evidence_truncated"))
     next_route: EvidenceRoute | None = None
-    if match_records >= policy.focused_match_records:
-        next_route = EvidenceRoute.FOCUSED
-    elif decision.route == EvidenceRoute.DIRECT and (
+    if decision.route == EvidenceRoute.DIRECT and (
         truncated or match_records >= policy.bounded_match_records
     ):
-        next_route = EvidenceRoute.BOUNDED
-    elif decision.route == EvidenceRoute.BOUNDED and truncated:
-        next_route = EvidenceRoute.FOCUSED
+        next_route = EvidenceRoute.PROGRESSIVE
     if next_route is None or next_route == decision.route:
         return decision
     return RoutingDecision(

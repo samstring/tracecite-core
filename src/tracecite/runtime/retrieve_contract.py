@@ -3,7 +3,7 @@
 The low-level Agent API remains deterministic and target-specific. This wrapper
 owns product retrieval semantics:
 
-1. adaptive DIRECT -> BOUNDED -> INVESTIGATE transport;
+1. adaptive DIRECT -> PROGRESSIVE transport;
 2. fidelity-first DIRECT raw access for small unseen sources;
 3. bounded structured-context recovery for search results;
 4. mechanical evidence-integrity observations and actionable evidence gaps;
@@ -142,9 +142,9 @@ def _with_actionable_gap_progress(result: RetrievalResult) -> RetrievalResult:
     )
 
 
-def _bounded_decision(decision: RoutingDecision, reason: str) -> RoutingDecision:
+def _progressive_decision(decision: RoutingDecision, reason: str) -> RoutingDecision:
     return RoutingDecision(
-        route=EvidenceRoute.BOUNDED,
+        route=EvidenceRoute.PROGRESSIVE,
         reasons=(*decision.reasons, reason),
         source_bytes=decision.source_bytes,
         estimated_direct_chars=decision.estimated_direct_chars,
@@ -216,7 +216,7 @@ def _direct_source(
     )
     coverage = result.get("coverage") or {}
     if isinstance(coverage, Mapping) and bool(coverage.get("truncated")):
-        decision = _bounded_decision(decision, "direct_render_exceeded_budget")
+        decision = _progressive_decision(decision, "direct_render_exceeded_budget")
     return _with_routing(resolved, decision)
 
 
@@ -257,13 +257,13 @@ def _direct_query(
             context_end=lines,
         )
     except (OSError, ValueError, RunIntegrityError):
-        return _with_routing(result, _bounded_decision(decision, "direct_raw_read_unavailable"))
+        return _with_routing(result, _progressive_decision(decision, "direct_raw_read_unavailable"))
     if expected and digest.lower() != expected:
-        return _with_routing(result, _bounded_decision(decision, "source_changed_after_search"))
+        return _with_routing(result, _progressive_decision(decision, "source_changed_after_search"))
 
     text = _qualify_raw_rows(rows, path.name)
     if len(text) > policy.direct_char_budget:
-        return _with_routing(result, _bounded_decision(decision, "direct_raw_exceeded_budget"))
+        return _with_routing(result, _progressive_decision(decision, "direct_raw_exceeded_budget"))
 
     data["text"] = text
     data["direct_raw"] = {
@@ -281,7 +281,7 @@ def _direct_query(
     return _with_routing(resolved, decision)
 
 
-def _bounded_source(
+def _progressive_source(
     request: EvidenceRequest,
     decision: RoutingDecision,
 ) -> RetrievalResult:
@@ -366,15 +366,19 @@ def _investigate_source(
     return _with_routing(resolved, decision)
 
 
-def _bounded_query(
+def _progressive_query(
     request: EvidenceRequest,
     policy: EvidenceRoutingPolicy,
     *,
-    route: EvidenceRoute,
+    decision: RoutingDecision,
 ) -> EvidenceRequest:
     assert isinstance(request.target, QueryTarget)
     target = request.target
-    if route == EvidenceRoute.FOCUSED:
+    deep_progressive = any(
+        reason in {"high_match_cardinality", "exploration_depth", "repeated_evidence", "multiple_sources"}
+        for reason in decision.reasons
+    )
+    if deep_progressive:
         evidence_cap = policy.focused_max_evidence
         line_cap = policy.focused_max_line_chars
     else:
@@ -597,16 +601,20 @@ def retrieve(
     if isinstance(request.target, SourceTarget):
         if decision.route == EvidenceRoute.DIRECT:
             return _direct_source(request, decision, policy)
-        if decision.route == EvidenceRoute.FOCUSED:
+        deep_progressive = any(
+            reason in {"high_match_cardinality", "exploration_depth", "repeated_evidence", "multiple_sources"}
+            for reason in decision.reasons
+        )
+        if deep_progressive:
             return _investigate_source(request, decision, policy)
-        return _bounded_source(request, decision)
+        return _progressive_source(request, decision)
 
     if isinstance(request.target, QueryTarget) and decision.route == EvidenceRoute.DIRECT:
         return _direct_query(request, decision, policy)
 
     routed_request = request
     if isinstance(request.target, QueryTarget):
-        routed_request = _bounded_query(request, policy, route=decision.route)
+        routed_request = _progressive_query(request, policy, decision=decision)
     result = _correct_range_novelty(_retrieve(routed_request), routed_request)
     result = _attach_search_fidelity(result, routed_request)
     result = _attach_identity_verification(result, routed_request)
