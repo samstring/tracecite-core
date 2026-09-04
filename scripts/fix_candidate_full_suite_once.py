@@ -35,6 +35,19 @@ pi_identity = replace_once(
 pi_identity_path.write_text(pi_identity, encoding="utf-8")
 
 
+# The benchmark contract should verify that benchmark-specific page caps are
+# absent rather than expecting explicit None-valued legacy kwargs.
+benchmark_modes_path = Path("tests/test_agent_benchmark_evidence_modes.py")
+benchmark_modes = benchmark_modes_path.read_text(encoding="utf-8")
+benchmark_modes = replace_once(
+    benchmark_modes,
+    '''        assert captured["snapshot"] is False\n        assert captured["max_evidence"] is None\n        assert captured["max_line_chars"] is None\n        assert captured["cache"] is True''',
+    '''        assert captured["snapshot"] is False\n        assert "max_evidence" not in captured\n        assert "max_line_chars" not in captured\n        assert captured["cache"] is True''',
+    label="benchmark scale legacy cap assertions",
+)
+benchmark_modes_path.write_text(benchmark_modes, encoding="utf-8")
+
+
 # Replace old CLI configurability/default tests with the new public-contract
 # invariant: candidate/body page limits are not user-visible search options.
 runtime_cli_path = Path("tests/test_runtime_cli.py")
