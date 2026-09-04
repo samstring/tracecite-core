@@ -31,7 +31,17 @@ jobs:
 
       - name: Run focused regressions
         run: |
-          python -m pytest tests/test_scenario_services_migration.py tests/test_extension_contract_v2.py tests/test_runtime_schema_tools.py tests/test_stateful_cli.py tests/test_scenario.py tests/test_extension_runtime.py
+          python -m pytest \
+            tests/test_scenario_services_migration.py \
+            tests/test_extension_contract.py \
+            tests/test_extension_models.py \
+            tests/test_extension_public_naming.py \
+            tests/test_runtime_schema_tools.py \
+            tests/test_stateful_cli.py \
+            tests/test_runtime_cli.py \
+            tests/test_scenario_cli_base_dir.py \
+            tests/test_scenario_pattern.py \
+            tests/test_preset_provenance.py
           python scripts/check_architecture.py
 
       - name: Run full Core test suite
