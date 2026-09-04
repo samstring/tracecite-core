@@ -2,11 +2,11 @@
 
 [English](architecture.md) | **简体中文**
 
-状态：**规范性 / 当前（Normative / Current）**。适用于 `feature_for_agent`、官方领域扩展以及 Pi / Codex / Cursor / CLI / MCP / 自定义 Host。已更新到 CA258 验证基线。
+状态：**规范性 / 当前（Normative / Current）**。适用于 `feature_for_agent_refacotr_shell` 的重构工作、官方领域扩展以及 Pi / Codex / Cursor / CLI / MCP / 自定义 Host。
 
 > **Agent 负责想和决定；TraceCite 负责证据。**
 
-本文是最高级 Living Architecture Contract。旧实验/交接说明不再作为当前架构依据；ADR / migrations 保留历史决策/迁移语义。
+本文是最高级 Living Architecture Contract。ADR / migrations 记录长期决策和迁移语义；本次 Evidence Shell / SourceVersion 重构详见 `docs/adr/0002-agent-evidence-shell-source-version.zh-CN.md`。
 
 ## 1. 产品边界
 
@@ -14,19 +14,21 @@ Agent 负责：
 
 - 理解 Problem / Scope；
 - 建立 Hypothesis 与调查方向；
+- 选择搜索表达式和 Evidence Shell 程序；
 - 因果推理和竞争解释；
 - 判断 Evidence 是否足够；
-- 最终答案和限定；
-- Stop decision。
+- 最终答案、限定和 Stop decision。
 
 TraceCite 负责确定性的 Evidence 机制：
 
 - source/version 与 evidence identity；
-- acquisition、snapshot、provenance、Coverage 与 integrity；
+- acquisition、snapshot/freeze、provenance、Coverage 与 integrity；
+- 一次用户问题内稳定的 SourceVersion / QuestionSourceView；
 - RetrievalSession 的 seen/repeated/covered-range memory；
+- Evidence Shell 的机械执行和中间结果隔离；
+- 用户配置的 Evidence transport budget 强制执行；
 - 精确 materialization 与显式 replay；
 - deterministic aggregate 与 caller-scoped traverse；
-- bounded evidence projection/selection 与恢复；
 - 可选 InvestigationState coordination metadata；
 - Extension / trust contract。
 
@@ -35,19 +37,19 @@ TraceCite Runtime 不得把 `root_cause_confidence`、`evidence_sufficient`、`n
 ## 2. 架构不变量
 
 1. Core 只提供通用、确定性的 Evidence 机制，不包含设备/产品/公司/应用/领域知识。
-2. Core 不导入 Runtime 或具体 Domain package。
-3. Runtime 可依赖 Core；Runtime 不导入具体 Domain package。
-4. Extension 只依赖公开 TraceCite contract，贡献领域事实/能力，不贡献 Agent reasoning policy。
-5. Agent-facing view 即使被有界/去重，Canonical Evidence / Result 仍必须可恢复。
-6. Lossy/bounded operation 必须显式暴露 Coverage、truncation/omission 或等价恢复/边界事实。
-7. `status`（执行）与认识层 `outcome` 分离。
-8. Zero match、Coverage 不完整、missing evidence、source change、provider failure 都不能证明真实世界不存在。
-9. Search match 是 Observation，不自动等于 causal proof。
-10. RetrievalSession 只拥有机械 Evidence-session memory；不拥有 Hypothesis/root cause/sufficiency/stopping。
-11. Host tool telemetry 不是 canonical Evidence。
-12. Agent 结论不能自我验证，也不能自动晋升为可信 Knowledge。
-13. Extension Protocol 顶层保持小，领域扩展通过独立版本化 Capability 演进。
-14. 公开 Evidence/schema 变化需要 migration + tests；长期架构取舍需要 ADR。
+2. Core 不导入 Runtime 或具体 Domain package；Runtime 可依赖 Core。
+3. Extension 只依赖公开 TraceCite contract，贡献领域事实/能力，不贡献 Agent reasoning policy。
+4. 一个用户问题绑定一个固定 SourceVersion；调查中不得悄悄切换到更新后的 live bytes。
+5. Search hit 不是 Evidence；至少要先经过 Segmenter 恢复完整 logical record。
+6. Evidence transport token/byte budget 是 **User/Host Policy**，Agent 无权提高、绕过或动态覆盖。
+7. 普通 Evidence Shell 搜索要么完整 matched records 在预算内，要么返回 `too_broad`；不得 first-N 后伪装成完整结果。
+8. Oversized match set 不得通过完整 locator / EvidenceIndex dump 进入模型上下文。
+9. Shell 中间数据和内部 MatchSet 不跨模型边界；只有最终小结果和显式 materialize 的 Evidence 可以进入 Agent context。
+10. Canonical Evidence / Result 必须保持 provenance 与可恢复性。
+11. `status`（执行）与认识层 `outcome` 分离；`too_broad` 是 transport fact，不是认识论结论。
+12. Zero match、Coverage 不完整、missing evidence、source change、provider failure 都不能证明真实世界不存在。
+13. RetrievalSession 只拥有机械 Evidence-session memory；不拥有 Hypothesis/root cause/sufficiency/stopping。
+14. SHA 对每个 TraceCite 管理的 immutable SourceVersion/segment 只建立一次并复用。
 15. Efficiency 只有在 correctness/support/provenance/recoverability 可接受后才算收益。
 
 ## 3. 逻辑架构
@@ -57,94 +59,188 @@ TraceCite Runtime 不得把 `root_cause_confidence`、`evidence_sufficient`、`n
                               Mobile / CI / third-party
                                         |
                                         v
-Raw Sources -> Evidence Core -> Evidence Runtime -> Integrations -> Agent Host
-               |                |                  |              |
-               |                |                  |              +-- Pi
-               |                |                  |              +-- Codex
-               |                |                  |              +-- Cursor
-               |                |                  |              +-- MCP/custom
-               |                |                  |
-               |                |                  +-- projection / Ledger / Context
-               |                |
-               |                +-- RetrievalSession
-               |                +-- bounded evidence selection
-               |                +-- identity/correlation safety
-               |                +-- aggregate / traverse
-               |                +-- InvestigationState (optional)
+Raw Sources -> SourceVersion -> Evidence Runtime -> Integrations -> Agent Host
+               |               |                  |              |
+               |               |                  |              +-- Pi
+               |               |                  |              +-- Codex
+               |               |                  |              +-- Cursor
+               |               |                  |              +-- MCP/custom
+               |               |                  |
+               |               |                  +-- compact projection / Context
+               |               |
+               |               +-- Evidence Shell / QueryPlan
+               |               +-- internal MatchSet / intermediate rows
+               |               +-- user Evidence budget gate
+               |               +-- RetrievalSession
+               |               +-- materialize / replay / aggregate / traverse
                |
-               +-- source/version identity
-               +-- snapshot / provenance / manifest / verify
+               +-- immutable file / snapshot / live segments
+               +-- SHA / manifest / line metadata / provenance
 
-Agent owns: hypothesis -> causal reasoning -> sufficiency -> answer -> stop
+Agent owns: query program -> hypothesis -> causal reasoning -> sufficiency -> answer -> stop
 ```
 
-![Architecture overview](../architecture.svg)
+## 4. SourceVersion / QuestionSourceView
 
-## 4. 分层职责
+`SourceVersion` 表示调查实际看到的不可变 bytes，而不是一个可能继续变化的 pathname。
 
-### `tracecite_core` — Evidence Core
+一个用户问题开始时，Host/Runtime 解析一次 `QuestionSourceView`；本轮所有 search/run/materialize/replay 都复用该版本。
 
-负责 domain-neutral Source descriptor、不可变 source/version identity、segmentation/filtering/snapshotting、Evidence pointer/range、Manifest 和 deterministic verification。它不判断重要性、因果或 Evidence 是否足够。
+### 静态来源
 
-### `tracecite.runtime` — Evidence Runtime
+明确 immutable 的文件不要求物理 copy。原文件本身可以作为 immutable source；SHA 第一次建立后缓存复用。
 
-负责 canonical Evidence mechanics，包括 RetrievalSession、bounded routing/selection、novelty/repetition/Coverage/acquisition-end facts、identity/correlation safety、deterministic aggregate/traverse，以及可选 InvestigationState coordination。
+### 可能变化的普通文件
 
-本地 canonical acquisition 的唯一实现位于 `tracecite.runtime.acquisition`。`tracecite.runtime.tools` 仅保留为旧调用方/Integration 的兼容 facade，Runtime 内部不得再依赖它。
-
-Runtime 可以报告：
+新用户问题开始时先用 cheap fingerprint 判断是否可复用已有版本：
 
 ```text
-new_evidence = 0
-repeated_evidence > 0
-frontier_exhausted = true
-budget_limit_reached = true
-source_changed = true
+device / file-id
+inode when available
+size
+mtime_ns
+optional ctime/provider revision
 ```
 
-这些只是机械事实，不是 stop/sufficiency advice。
+fingerprint 不变 -> 复用旧 snapshot/path、SHA、line/index metadata。
 
-### `tracecite.integrations` — Transport / Host Integration
+fingerprint 变化 -> 建立新 SourceVersion。Fingerprint 只是“是否可以复用已验证强 identity”的 cheap key，最终 Evidence identity 仍依赖 immutable bytes + SHA/version。
 
-负责 Agent-facing projection、Evidence Ledger/recovery、Context Engine/delta、capability/profile negotiation、CLI 与 Host adapter。Pi/Codex/Cursor/MCP/custom Host 共享同一 canonical Evidence/Coverage 语义。
+### Live 来源
 
-### `tracecite.extension` — Domain Capability Contract
-
-Extension 通过公开 Contract 提供 Domain Source 解析、Event、Scenario/Assertion/Report capability 和领域 Agent capability。Extension 不拥有 model-specific token policy、RetrievalSession seen-state、root-cause ranking 或 stopping policy。
-
-### `tracecite.knowledge` — 经审核的可复用 Knowledge
-
-Knowledge 位于 Evidence-backed Finding 下游，需要独立验证、审核、版本和失效治理。Stored Knowledge 不能替代当前 Incident 的 Evidence。
-
-## 5. Canonical Evidence API
-
-长期语义收敛为六类机械原语：
-
-- `retrieve`：caller 指定 source/scope/predicate -> bounded Evidence + Coverage + Provenance + novelty/repetition。
-- `materialize`：精确展开 caller 指定的不可变 source/version range/ref。
-- `replay`：显式重读旧不可变 Evidence；novelty 仍为 0。
-- `aggregate`：确定性的 caller-selected count/distinct/group；不做 causal ranking。
-- `traverse`：在 caller 指定 seed/scope/direction/limits 下机械遍历；不做 investigation planning。
-- `verify`：验证 integrity/source-version/Manifest/exact Evidence；不独立验证 Agent 的因果结论。
-
-`probe`、`search`、`expand`、`expand-many` 是 CLI/Adapter convenience surface，必须归约到 canonical semantics，不拥有第二套 session/reasoning model。
-
-## 6. RetrievalSession：唯一机械 Evidence Memory Owner
-
-RetrievalSession 保存：
+Live 大文件优先使用 cooperative `live_cut` + immutable segments，不应每个问题重新复制完整累计文件。
 
 ```text
-session id / revision
-seen evidence/result identities
-covered immutable source-version ranges
-source generations/observations
-recent retrieval operations
-request fingerprints
-repeated-evidence accounting
-replay state
+writer -> live.log
+question boundary -> live cut -> immutable segment N
+writer continues -> new live.log
 ```
 
-重复 Evidence 的要求：
+历史 segment 不重新 copy、不重新 SHA。逻辑 SourceVersion 可以由 segment manifest 组成。
+
+无法 cooperative cut 时按能力退化：CoW clone/reflink -> 可证明 append-only 的 bounded byte view -> full copy fallback。
+
+## 5. Evidence Shell / `tracecite_run`
+
+Evidence Shell 是 Agent-facing 的统一机械搜索程序入口。Agent 可以组合搜索步骤，但 TraceCite 决定如何在当前 SourceVersion 上确定性执行。
+
+示例：
+
+```text
+search '"statusCode":500'
+| search 'ts-route-service'
+| where latency >= 1000
+```
+
+Shell 的能力族包括：
+
+- literal / grep-like search；
+- regex；
+- time/range/source scope；
+- structured field predicate；
+- filter/exclude；
+- aggregate/count/group/distinct；
+- sort/top/take/first/last；
+- seek/near/range 等机械导航；
+- 后续由 Capability Registry 注册的通用搜索 backend。
+
+Evidence Shell 默认不是 unrestricted host bash；它只能只读访问授权 SourceVersion 和已注册 evidence/search primitives。不得 network、任意文件读取、shell escape、修改 Evidence 或绕过 transport policy。
+
+Agent-facing 工具面应保持很小，目标形态是：
+
+```text
+tracecite_describe
+tracecite_run
+tracecite_materialize
+```
+
+旧 `retrieve/search/aggregate/...` 可以继续作为 canonical/compatibility surface，但复杂多步机械调查优先通过一次 `tracecite_run` 完成，避免每一步 tool output 都进入模型上下文。
+
+## 6. Search -> Segment -> Complete Records
+
+Evidence Shell 第一阶段产生 raw hit locator；Segmenter 决定一条完整 logical record 的边界。
+
+```text
+Raw SourceVersion
+   -> search hits
+   -> Segmenter
+   -> Complete Records
+   -> Evidence Budget Gate
+```
+
+不能把单个 grep physical line 当成最终 Evidence，尤其是 multiline log/trace。
+
+当前实现阶段仍可复用 legacy `search_text` 以保持 regex/time/fold/segmenter 语义；目标 hot path 是直接 stream Record，不再要求 `matched_records.jsonl`、`hits.jsonl`、`evidence.log` 或 filter history。
+
+## 7. Evidence Budget Contract
+
+Evidence 最大 transport 预算只能由用户/Host 配置，例如：
+
+```text
+max_evidence_tokens
+max_evidence_bytes  # hard safety cap
+```
+
+Agent tool schema **不得**暴露允许 Agent 调大这些值的参数。
+
+如果完整 matched records 超过预算：
+
+```text
+status = too_broad
+reason = MATCHED_EVIDENCE_BUDGET_EXCEEDED
+refine_query = true
+evidence = []
+```
+
+可以报告 `observed_at_least_tokens/bytes`；若为节省 I/O 提前停止，不得伪造 exact total。
+
+`too_broad` 后 Agent 可以：
+
+- 更精确 literal/regex；
+- 增加 filter/where；
+- 缩小 time/range/source；
+- 使用 aggregate 回答 count/group/distinct；
+- 更换更合适的搜索组合。
+
+Agent 不可以：
+
+- 调大 budget；
+- 要求跳过 budget；
+- 要求完整 locator dump；
+- 用 first-N 伪装完整搜索。
+
+显式 `first/last/top/take/sample` 仍可作为用户真正要求的 selection semantics，但必须明确是选择结果，不是完整匹配集合。
+
+## 8. Internal MatchSet / intermediate state
+
+`MatchSet` 是 Runtime 内部实现概念，不要求 Agent理解。它可以是 locator array、bitmap、range set、lazy iterator、spill file 或 backend handle。
+
+大型中间集合默认留在 Runtime：
+
+```text
+173,320 -> 4,901 -> 331 -> 5
+```
+
+Agent 只看到最终小结果。若跨 tool call 必须继续使用大型集合，可以用稳定 `result_handle`，handle 必须绑定 SourceVersion 与 QueryPlan identity；不得把完整集合重新传给模型。
+
+## 9. Canonical Evidence API
+
+长期 canonical 机械原语继续保留：
+
+- `retrieve`：caller 指定 source/scope/predicate -> Evidence + Coverage + Provenance + novelty/repetition；
+- `materialize`：精确展开 caller 指定的不可变 source/version range/ref；
+- `replay`：显式重读旧不可变 Evidence；novelty 仍为 0；
+- `aggregate`：确定性的 caller-selected count/distinct/group；
+- `traverse`：caller 指定 seed/scope/direction/limits 下机械遍历；
+- `verify`：验证 integrity/source-version/Manifest/exact Evidence。
+
+`tracecite_run` 是组合这些搜索/机械处理能力的 Agent program surface，不创建第二套 Evidence identity/session 语义。
+
+## 10. RetrievalSession：唯一机械 Evidence Memory Owner
+
+RetrievalSession 保存：seen Evidence identity、covered immutable ranges、source observations/generations、recent operations、request fingerprints、repeated/replay facts。
+
+重复 Evidence：
 
 ```text
 query A -> body E
@@ -155,55 +251,38 @@ repeated_evidence > 0
 matched_existing_evidence = [E ref]
 ```
 
-当前 query 与 E 的 relevance 保留，但不自动重复发送 body。需要重新考虑时使用显式 materialize/replay。RetrievalSession 不保存 Agent 的 Hypothesis、proof、sufficiency 或 stop decision。
+`too_broad` 没有把 Evidence body 正式暴露给 Agent，因此不得把其内部扫描到的 rows 加入 `seen_evidence` 或 Coverage。
 
-## 7. Selection / Routing / Identity Safety
+## 11. Materialize / Provenance / Citation
 
-Routing/selection 只属于 Transport，可以依据 source size/version、output/context limit、covered range、repeated ratio 和有界 lexical/structural diversity。Lossy selection 必须显式 omission/truncation 并保持可恢复。
+Search candidate 与最终 Evidence 分离。只有在候选足够小、Agent 需要阅读/引用时才 materialize exact context。
 
-Selection 不能被解释为“最因果”“最可能根因”或“下一个最该查的 entity”。
-
-Correlation constraint 是 deterministic identity-safety fact。如果 supplied Evidence 没建立关系，不得凭 unsafe identifier、附近 address 或 filename proximity 合并 timeline。
-
-## 8. Agent / Host Boundary
-
-Host 可以拥有 model/tool/context/wall-time budget、tool exposure、prompt、native-tool telemetry 和可选机械 checkpoint。Checkpoint 可以报告 activity/budget 并让 Agent 重新决定继续还是回答，但不能声称“Evidence 已足够”或替 Agent 选择 root cause。
-
-当前仓库方法：
-
-- Pi：bounded prompt + `.pi/skills/tracecite/SKILL.md` + Pi Evidence adapter。
-- Codex/OpenAI-compatible：根 `AGENTS.md` + `.agents/skills/tracecite-investigate/SKILL.md`。
-- Cursor：`.cursor/rules/tracecite-investigation.mdc`。
-
-详见 [Agent 接入](agent-integration.zh-CN.md)。
-
-## 9. Context Engine / Evidence Ledger
-
-Canonical Result 先可恢复，再允许 Agent-facing View 省略稳定 Host context 已见的 Evidence body；省略必须显式、可恢复，并且只有实际更小时才使用 Delta。
-
-Context state 是 Transport Memory，不是 Evidence truth，也不是 InvestigationState。不同 context ID 不共享 seen-state；没有稳定 identity 的 Evidence 不会被静默去重。
-
-详见 [Context Engine](context-engine.zh-CN.md)。
-
-## 10. InvestigationState 与 Knowledge
-
-InvestigationState 是可选 coordination metadata，可以记录 Problem/Scope/Hypothesis/Test/Finding/Notes/Audit link 和显式 user/Agent stop reason。它不是 Evidence retrieval 的前提，也不是 novelty/Coverage/sufficiency source of truth。
-
-Knowledge 生命周期：
+最终 Evidence 必须可解析到：
 
 ```text
-Evidence-backed Finding -> Candidate -> independent validation -> review -> versioned Knowledge -> expiry/revalidation
+source/version identity
+segment/file SHA when applicable
+exact line/range or equivalent locator
+exact raw content
 ```
 
-详见 [Knowledge governance](knowledge-governance.zh-CN.md)。
+TraceCite 管理的 immutable SourceVersion 已有 SHA 后，下游 search/materialize/bridge 应复用该 identity，而不是每次重新 hash 全文件。对于 TraceCite 未冻结、仍可能被外部修改的 pathname，仍需要 integrity revalidation。
 
-## 11. Correctness 与 Benchmark Validity
+## 12. Agent / Host Boundary
 
-只有在 correctness/support/provenance/recoverability gate 后才评价效率。正式 Agent benchmark 区分 `task_result` 与 `run_validity`；Provider 429/quota/outage/harness failure 是 infrastructure-invalid，不是 model/product loss。
+Host 拥有 model/tool/context/wall-time budget、Evidence token policy、tool exposure、prompt 和 native-tool telemetry。
 
-详见 [Agent 对比数据](benchmark-results.zh-CN.md)。
+Agent skill 必须教会 Agent：优先用 `tracecite_run` 合并机械搜索；`too_broad` 时 refine query；不能提高用户 budget；不请求全部 locator；最终需要引用时 materialize。
 
-## 12. Dependency Direction
+当前仓库 Agent instruction source：`.agents/skills/tracecite-investigate/SKILL.md`。
+
+## 13. Context / Correctness / Benchmark
+
+TraceCite 的 token 目标不是“压缩已经准备返回的大结果”，而是让低价值中间大结果从一开始就不跨模型边界。
+
+效率比较必须在 correctness/support/provenance/recoverability gate 后进行。正式 Agent benchmark 区分 `task_result` 与 `run_validity`；Provider 429/quota/outage/harness failure 是 infrastructure-invalid。
+
+## 14. Dependency Direction
 
 ```text
 tracecite_core
@@ -221,26 +300,26 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 
 任何 Domain package 都不得成为 Core 或 Runtime 的 required dependency。
 
-## 13. 当前实现与目标差距
+## 15. 当前实现与目标差距
 
-| Capability | Status | 当前基线 |
+| Capability | Status | 当前重构分支 |
 |---|---|---|
-| Evidence Core：source/version、snapshot、provenance、manifest、verify | 已实现 | `feature_for_agent` |
-| Canonical Evidence 语义：retrieve/materialize/replay/aggregate/traverse/verify | 已实现 | Runtime + compatibility wrappers |
-| RetrievalSession seen/repeated/range/replay memory | 已实现 | CA258 baseline |
-| Bounded evidence selection、Coverage、identity/correlation safety | 已实现 | CA258 baseline |
-| Candidate-first literal search fast path | 已实现 | parity 已证明的单行 literal 子集；Runtime search dispatch 使用确定性 legacy fallback，multiline local recovery 仍保持 internal |
-| Canonical acquisition 实现归属 | 已实现 | `tracecite.runtime.acquisition` 负责确定性 acquisition；`runtime.tools` 仅为 compatibility surface |
-| Evidence Ledger + Context Engine / cross-turn delta | 已实现 | `tracecite.integrations` |
-| Pi bounded investigation integration | 已实现 | 已验证 A/B adapter + `.pi` skill |
-| Codex/OpenAI-compatible repository skill integration | 已实现 | `AGENTS.md` + `.agents/skills` |
-| Cursor Project Rule integration | 已实现 | `.cursor/rules/tracecite-investigation.mdc` |
-| Extension Protocol / Domain Capability Contract | 已实现 | Public extension layer |
-| ScenarioCapability execution services | 已实现 | 当前执行链使用内部 `ScenarioServices`；`ScenarioRuntime` 仅为 compatibility alias |
-| MCP / 其他 Host 作为单一 packaged universal integration | 部分实现 | Host-specific adapter 独立演进 |
+| Existing SourceVersion identity (`sha256/cursor/generation/mutable`) | 已实现 | `evidence_identity.py` |
+| RetrievalSession seen/repeated/range/replay | 已实现 | 既有 Runtime |
+| Candidate-first literal scanner/local recovery | 已实现 | 既有 Runtime internal |
+| `EvidenceShellPolicy` user/host-owned budget | 已实现第一版 | Agent request 无 budget override |
+| `tracecite_run` Evidence Shell | 已实现第一版 | literal/regex/filter/where/count/group/distinct/explicit selection；继续扩展到全部现有搜索能力 |
+| `too_broad` canonical transport status | 已实现第一版 | 超预算不返回 Evidence body/locator dump |
+| Pi `tracecite_run` adapter | 已实现第一版 | budget 从 Host 环境/产品配置读取 |
+| Agent skill for shell/refinement | 已更新 | `.agents/skills/tracecite-investigate/SKILL.md` |
+| Search hot path 去除 `matched_records.jsonl` / legacy artifacts | 进行中 | 当前 shell 第一阶段仍暂用 `search_text` 保持语义兼容 |
+| Agent query path 去除 high-cardinality EvidenceIndex | 进行中 | 新 shell 不生成 EvidenceIndex；旧 retrieve compatibility 尚待迁移 |
+| Question-level SourceVersion cache / fingerprint reuse | 待实现 | 设计已在 ADR 固化 |
+| LiveCut + immutable segment SourceVersion | 待接入 Agent Runtime | Core 已有 `live_cut.py` / `segment_store.py` 基础 |
+| SHA/count full-file pass 合并与缓存 | 待实现 | bridge 已优先读取 `data.source_sha256`，完整 SourceVersion cache 尚未接入 |
 
-## 14. 文档 / Governance 规则
+## 16. 文档 / Governance
 
-架构边界变化必须在同一个 change 同时更新 `architecture.md` 和 `architecture.zh-CN.md`。不兼容架构变化需要 ADR；公开 schema/API 变化需要 migration note + tests。
+架构边界变化必须同步更新 `architecture.md` 和 `architecture.zh-CN.md`。不兼容架构变化需要 ADR；公开 schema/API 变化需要 migration note + tests。
 
-当前文档地图：[docs/README.md](README.md)。
+当前设计 ADR：[ADR-0002](adr/0002-agent-evidence-shell-source-version.zh-CN.md)。
