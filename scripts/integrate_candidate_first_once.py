@@ -199,7 +199,7 @@ def test_runtime_tools_search_routes_through_search_engine(tmp_path: Path, monke
 
     en = ROOT / "docs/architecture.md"
     en_marker = "| Evidence Ledger + Context Engine / cross-turn delta | Implemented | `tracecite.integrations` |\n"
-    en_row = "| Candidate-first literal search fast path | Implemented for the parity-proven single-line literal subset | Runtime search dispatch with deterministic legacy fallback; multiline local recovery remains internal |\n"
+    en_row = "| Candidate-first literal search fast path | Implemented | Parity-proven single-line literal subset; Runtime search dispatch uses deterministic legacy fallback and multiline local recovery remains internal |\n"
     en_text = en.read_text(encoding="utf-8")
     if en_marker not in en_text:
         raise SystemExit("architecture.md status marker not found")
@@ -208,7 +208,7 @@ def test_runtime_tools_search_routes_through_search_engine(tmp_path: Path, monke
 
     zh = ROOT / "docs/architecture.zh-CN.md"
     zh_marker = "| Evidence Ledger + Context Engine / cross-turn delta | 已实现 | `tracecite.integrations` |\n"
-    zh_row = "| Candidate-first literal search fast path | 已在 parity 已证明的单行 literal 子集正式接入 | Runtime search dispatch + 确定性 legacy fallback；multiline local recovery 仍保持 internal |\n"
+    zh_row = "| Candidate-first literal search fast path | 已实现 | parity 已证明的单行 literal 子集；Runtime search dispatch 使用确定性 legacy fallback，multiline local recovery 仍保持 internal |\n"
     zh_text = zh.read_text(encoding="utf-8")
     if zh_marker not in zh_text:
         raise SystemExit("architecture.zh-CN.md status marker not found")
