@@ -100,6 +100,28 @@ function resolveInputPath(raw: unknown, cwd: string): string | null {
   return resolve(cwd, value);
 }
 
+function traceSourceMatchesRuntime(raw: unknown, cwd: string): boolean {
+  const value = String(raw || "").trim();
+  if (!value) return false;
+
+  if (isAbsolute(value)) {
+    const resolved = resolve(value);
+    return resolved === RUNTIME_LOG || within(EVIDENCE_ROOT, resolved);
+  }
+
+  // TraceCite MCP accepts Host-authorized logical source names relative to the
+  // evidence root. The benchmark host previously resolved them relative to the
+  // source checkout cwd, which made real MCP calls invisible to channel
+  // verification. Mirror the MCP logical-name boundary here for observability.
+  const evidenceResolved = resolve(EVIDENCE_ROOT, value);
+  if (evidenceResolved === RUNTIME_LOG) return true;
+  if (basename(value) === basename(RUNTIME_LOG)) return true;
+
+  // Keep cwd resolution as a compatibility fallback for older absolute-ish
+  // caller behavior without widening the runtime-evidence boundary.
+  return resolve(cwd, value) === RUNTIME_LOG;
+}
+
 async function appendJsonl(path: string, payload: unknown) {
   if (!path) return;
   await mkdir(dirname(path), { recursive: true });
@@ -126,10 +148,8 @@ function traceSourceCandidates(event: any): unknown[] {
 
 async function recordTraceCiteRuntimeAccess(event: any, cwd: string) {
   if (!ACCESS_PATH || !TRACE_TOOLS.has(String(event?.toolName || ""))) return;
-  const resolved = traceSourceCandidates(event)
-    .map((value) => resolveInputPath(value, cwd))
-    .filter((value): value is string => Boolean(value));
-  if (!resolved.some((value) => value === RUNTIME_LOG || within(EVIDENCE_ROOT, value))) return;
+  const candidates = traceSourceCandidates(event);
+  if (!candidates.some((value) => traceSourceMatchesRuntime(value, cwd))) return;
   await appendJsonl(ACCESS_PATH, {
     channel: "tracecite_mcp",
     tool: event.toolName,
