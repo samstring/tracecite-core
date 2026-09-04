@@ -23,7 +23,7 @@ TraceCite 负责确定性的 Evidence 机制：
 
 - source/version 与 evidence identity；
 - acquisition、snapshot/freeze、provenance、Coverage 与 integrity；
-- 一次用户问题内稳定的 SourceVersion / QuestionSourceView；
+- 一个 RetrievalSession 内稳定的 SourceVersion / SessionSourceView；
 - RetrievalSession 的 seen/repeated/covered-range memory；
 - Evidence Shell 的机械执行和中间结果隔离；
 - 用户配置的 Evidence transport budget 强制执行；
@@ -39,7 +39,7 @@ TraceCite Runtime 不得把 `root_cause_confidence`、`evidence_sufficient`、`n
 1. Core 只提供通用、确定性的 Evidence 机制，不包含设备/产品/公司/应用/领域知识。
 2. Core 不导入 Runtime 或具体 Domain package；Runtime 可依赖 Core。
 3. Extension 只依赖公开 TraceCite contract，贡献领域事实/能力，不贡献 Agent reasoning policy。
-4. 一个用户问题绑定一个固定 SourceVersion；调查中不得悄悄切换到更新后的 live bytes。
+4. 一个 RetrievalSession 对同一个 logical source 只绑定一个固定 SourceVersion；整个 session 内不得因为原始 mutable/live path 更新而悄悄切换版本。
 5. Search hit 不是 Evidence；至少要先经过 Segmenter 恢复完整 logical record。
 6. Evidence transport token/byte budget 是 **User/Host Policy**，Agent 无权提高、绕过或动态覆盖。
 7. 普通 Evidence Shell 搜索要么完整 matched records 在预算内，要么返回 `too_broad`；不得 first-N 后伪装成完整结果。
@@ -80,11 +80,13 @@ Raw Sources -> SourceVersion -> Evidence Runtime -> Integrations -> Agent Host
 Agent owns: query program -> hypothesis -> causal reasoning -> sufficiency -> answer -> stop
 ```
 
-## 4. SourceVersion / QuestionSourceView
+## 4. SourceVersion / SessionSourceView
 
 `SourceVersion` 表示调查实际看到的不可变 bytes，而不是一个可能继续变化的 pathname。
 
-一个用户问题开始时，Host/Runtime 解析一次 `QuestionSourceView`；本轮所有 search/run/materialize/replay 都复用该版本。Host 必须让一个 RetrievalSession/context 对应一个用户问题，或者在新问题开始时提供新的 question/session identity。
+一个 RetrievalSession 第一次访问某个 logical source 时，Runtime 解析并绑定一个 `SessionSourceView`。之后同一个 session 内所有 search/run/materialize/replay 都复用该版本，即使原始 mutable/live source 已经变化，也不会重新 stat、snapshot、SHA 或 live cut。一次对话若持续复用同一个 RetrievalSession，就持续面对同一个稳定数据世界。
+
+新 RetrievalSession 第一次访问该 source 时，才重新检查当前 source fingerprint。若 fingerprint 与最近已验证版本相同，则跨 session 直接复用原 snapshot/path、SHA 和 line metadata；只有 source 确实变化时才建立新 SourceVersion。
 
 ### 静态来源
 
@@ -92,7 +94,7 @@ Agent owns: query program -> hypothesis -> causal reasoning -> sufficiency -> an
 
 ### 可能变化的普通文件
 
-新用户问题开始时先用 cheap fingerprint 判断是否可复用已有版本：
+新 RetrievalSession 第一次访问 source 时先用 cheap fingerprint 判断是否可复用已有版本：
 
 ```text
 device / file-id
@@ -108,17 +110,21 @@ fingerprint 变化 -> 建立新 SourceVersion。Snapshot copy 时在同一顺序
 
 ### Live 来源
 
-Live 大文件优先使用 cooperative `live_cut` + immutable segments，不应每个问题重新复制完整累计文件。
+Live 大文件优先使用 cooperative `live_cut` + immutable segments，不应在一个长对话里反复复制或切分同一累计文件。
 
 ```text
 writer -> live.log
-question boundary -> live cut -> immutable segment N
+session first access -> live cut -> immutable segment N
 writer continues -> new live.log
+same session -> keep using bound immutable view
+new session -> capture newer live bytes if source changed
 ```
 
 历史 segment 不重新 copy、不重新 SHA。逻辑 SourceVersion 由有序 immutable segment manifest 组成；每条 Evidence 仍绑定具体 segment SHA + segment-local line range。
 
 若 writer 未协作，当前实现使用机械验证的 append-only fallback：验证上一 capture boundary 附近 bytes 未变化后，只复制新增的完整行 bytes 到新 immutable segment。若不能证明连续性，则重新建立新的 immutable capture，而不是把未知变化错误地当 append。
+
+当前 canonical public 名称是 `SessionSourceView` / `SessionSourceVersionStore`。内部历史实现仍保留 `QuestionSourceView` / `question_id` 兼容别名和旧持久化字段，不改变 session-bound 语义。
 
 ## 5. Evidence Shell / `tracecite_run`
 
@@ -267,7 +273,7 @@ matched_existing_evidence = [E ref]
 
 `too_broad` 没有把 Evidence body 正式暴露给 Agent，因此不得把其内部扫描到的 rows 加入 `seen_evidence` 或 Coverage。
 
-同一用户问题的 SourceVersion binding 与 RetrievalSession/context identity 关联；Host 若复用长生命周期会话，必须在用户新问题开始时切换 question/session identity，不能让上一问题的 frozen view 悄悄延续为新问题的“当前”数据。
+同一 RetrievalSession/context 对同一个 logical source 始终复用第一次绑定的 SourceVersion。Host 不需要识别每条用户 message 的边界；如果“一次对话”就是一个 RetrievalSession，则整个对话固定使用同一 SourceVersion。只有创建新的 RetrievalSession，或未来显式调用 refresh source，才允许建立更新版本；禁止静默刷新。
 
 ## 11. Materialize / Provenance / Citation
 
@@ -282,13 +288,15 @@ exact line/range or equivalent locator
 exact raw content
 ```
 
-TraceCite 管理的 immutable SourceVersion/segment 已有 SHA 后，Shell EvidencePointer、managed materialize 和 replay 直接复用该 identity，不重新 hash 全文件。SourceVersionStore 同时保留 latest source state 与 question-bound historical view，使旧 immutable segment 在新 SourceVersion 建立后仍可 replay。
+TraceCite 管理的 immutable SourceVersion/segment 已有 SHA 后，Shell EvidencePointer、managed materialize 和 replay 直接复用该 identity，不重新 hash 全文件。SourceVersionStore 同时保留 latest source state 与 session-bound historical view，使旧 immutable segment 在新 SourceVersion 建立后仍可 replay。
 
 对于 TraceCite 未冻结、仍可能被外部修改的 pathname，仍需要 integrity revalidation。
 
 ## 12. Agent / Host Boundary
 
-Host 拥有 model/tool/context/wall-time budget、Evidence token/byte policy、source mode、用户问题边界、tool exposure、prompt 和 native-tool telemetry。
+Host 拥有 model/tool/context/wall-time budget、Evidence token/byte policy、source mode、RetrievalSession/conversation identity、tool exposure、prompt 和 native-tool telemetry。
+
+Host 不需要为每条用户消息创建新 SourceVersion。只要同一次对话持续使用同一个 RetrievalSession/context，TraceCite 就持续复用其 source binding。新对话若使用新的 RetrievalSession，Runtime 会在该 session 第一次访问 source 时检查 fingerprint，并在未变化时跨 session 复用已有 snapshot + SHA。
 
 Agent skill 必须教会 Agent：优先用 `tracecite_run` 合并机械搜索；`too_broad` 时 refine query；不能提高用户 budget；不请求全部 locator；最终需要引用时使用返回的 immutable `source_path + SHA + range` materialize。
 
@@ -330,10 +338,10 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 | `too_broad` canonical transport status | 已实现 | 超预算不返回 Evidence body/locator dump |
 | Artifact-free Agent search hot path | 已实现 | 不依赖 matched_records/hits/evidence.log/filter history |
 | Agent QueryTarget 去除 high-cardinality EvidenceIndex | 已实现 | text retrieve/search 归一到 Evidence Shell |
-| Question-level SourceVersion binding | 已实现 | SourceVersionStore + question-bound persisted views；Host 负责 question/session boundary |
-| Mutable fingerprint snapshot reuse | 已实现 | unchanged -> reuse snapshot + SHA + line metadata |
+| Session-level SourceVersion binding | 已实现 | 同一 RetrievalSession/source 固定一个版本；`SessionSourceView` 为 canonical public 名称 |
+| Mutable fingerprint snapshot reuse | 已实现 | 新 session 首次访问时 unchanged -> reuse snapshot + SHA + line metadata |
 | Snapshot SHA/count 单 pass | 已实现 | copy 同时 hash + newline count；不做 count snapshot + count original |
-| LiveCut + immutable segment SourceVersion | 已实现 | cooperative cut；无协作时 verified append-only incremental fallback |
+| LiveCut + immutable segment SourceVersion | 已实现 | 一个 session 首次访问时 freeze；新 session 可捕获新增 live bytes |
 | Managed materialize/replay SHA reuse | 已实现 | immutable snapshot/segment 读取 exact range，不重新 whole-file SHA |
 | Agent skill for shell/refinement | 已实现 | `.agents/skills/tracecite-investigate/SKILL.md` |
 | Pi `tracecite_run` adapter | 已实现 | budget/source policy 由 Host 环境/产品配置持有 |
