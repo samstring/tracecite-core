@@ -84,7 +84,7 @@ Agent owns: query program -> hypothesis -> causal reasoning -> sufficiency -> an
 
 `SourceVersion` 表示调查实际看到的不可变 bytes，而不是一个可能继续变化的 pathname。
 
-一个用户问题开始时，Host/Runtime 解析一次 `QuestionSourceView`；本轮所有 search/run/materialize/replay 都复用该版本。
+一个用户问题开始时，Host/Runtime 解析一次 `QuestionSourceView`；本轮所有 search/run/materialize/replay 都复用该版本。Host 必须让一个 RetrievalSession/context 对应一个用户问题，或者在新问题开始时提供新的 question/session identity。
 
 ### 静态来源
 
@@ -99,12 +99,12 @@ device / file-id
 inode when available
 size
 mtime_ns
-optional ctime/provider revision
+ctime_ns
 ```
 
-fingerprint 不变 -> 复用旧 snapshot/path、SHA、line/index metadata。
+fingerprint 不变 -> 复用旧 snapshot/path、SHA、line metadata，不重新 copy、不重新 hash、不重新 count。
 
-fingerprint 变化 -> 建立新 SourceVersion。Fingerprint 只是“是否可以复用已验证强 identity”的 cheap key，最终 Evidence identity 仍依赖 immutable bytes + SHA/version。
+fingerprint 变化 -> 建立新 SourceVersion。Snapshot copy 时在同一顺序读取中同时计算 SHA 和 line count。Fingerprint 只是“是否可以复用已验证强 identity”的 cheap key，最终 Evidence identity 仍依赖 immutable bytes + SHA/version。
 
 ### Live 来源
 
@@ -116,9 +116,9 @@ question boundary -> live cut -> immutable segment N
 writer continues -> new live.log
 ```
 
-历史 segment 不重新 copy、不重新 SHA。逻辑 SourceVersion 可以由 segment manifest 组成。
+历史 segment 不重新 copy、不重新 SHA。逻辑 SourceVersion 由有序 immutable segment manifest 组成；每条 Evidence 仍绑定具体 segment SHA + segment-local line range。
 
-无法 cooperative cut 时按能力退化：CoW clone/reflink -> 可证明 append-only 的 bounded byte view -> full copy fallback。
+若 writer 未协作，当前实现使用机械验证的 append-only fallback：验证上一 capture boundary 附近 bytes 未变化后，只复制新增的完整行 bytes 到新 immutable segment。若不能证明连续性，则重新建立新的 immutable capture，而不是把未知变化错误地当 append。
 
 ## 5. Evidence Shell / `tracecite_run`
 
@@ -132,19 +132,24 @@ search '"statusCode":500'
 | where latency >= 1000
 ```
 
-Shell 的能力族包括：
+当前 Shell 支持的通用机械能力包括：
 
-- literal / grep-like search；
-- regex；
-- time/range/source scope；
-- structured field predicate；
-- filter/exclude；
-- aggregate/count/group/distinct；
-- sort/top/take/first/last；
-- seek/near/range 等机械导航；
-- 后续由 Capability Registry 注册的通用搜索 backend。
+- `all`；
+- literal `search`；
+- grep-like fixed / regex / invert / case-insensitive search；
+- safe `regex`；
+- `exclude` / `exclude-regex`；
+- structured `where` comparison / contains / startswith / endswith / matches；
+- `exists` / `missing`；
+- `lines`；
+- Host/tool 级 `last` / `since` / `until` / `segmenter` scope；
+- `sort` / `reverse`；
+- `take` / `head` / `first` / `last` / `tail`；
+- `near` / `seek`；
+- `count` / `group` / `distinct` / `uniq`；
+- `emit`。
 
-Evidence Shell 默认不是 unrestricted host bash；它只能只读访问授权 SourceVersion 和已注册 evidence/search primitives。不得 network、任意文件读取、shell escape、修改 Evidence 或绕过 transport policy。
+Evidence Shell 不是 unrestricted host bash；它只能只读访问授权 SourceVersion 和 TraceCite evidence/search primitives。不得 network、任意文件读取、shell escape、修改 Evidence 或绕过 transport policy。
 
 Agent-facing 工具面应保持很小，目标形态是：
 
@@ -154,23 +159,29 @@ tracecite_run
 tracecite_materialize
 ```
 
-旧 `retrieve/search/aggregate/...` 可以继续作为 canonical/compatibility surface，但复杂多步机械调查优先通过一次 `tracecite_run` 完成，避免每一步 tool output 都进入模型上下文。
+旧 `retrieve/search/aggregate/...` 可继续作为 canonical/compatibility surface。Text `QueryTarget` 已归一到 Evidence Shell contract；复杂多步机械调查优先通过一次 `tracecite_run` 完成，避免每一步 tool output 都进入模型上下文。
 
 ## 6. Search -> Segment -> Complete Records
 
-Evidence Shell 第一阶段产生 raw hit locator；Segmenter 决定一条完整 logical record 的边界。
+普通 Evidence Shell 搜索优先按下面顺序执行：
 
 ```text
-Raw SourceVersion
-   -> search hits
-   -> Segmenter
-   -> Complete Records
+Raw immutable SourceVersion
+   -> raw physical-line candidate search
+   -> candidate locator
+   -> Segmenter local recovery
+   -> Complete logical Record
+   -> additional shell stages
    -> Evidence Budget Gate
 ```
 
 不能把单个 grep physical line 当成最终 Evidence，尤其是 multiline log/trace。
 
-当前实现阶段仍可复用 legacy `search_text` 以保持 regex/time/fold/segmenter 语义；目标 hot path 是直接 stream Record，不再要求 `matched_records.jsonl`、`hits.jsonl`、`evidence.log` 或 filter history。
+对于可安全局部恢复的 JsonLine、单行 RawText、FormatSegmenter，以及 literal multiline FormatSegmenter，Runtime 先做 raw hit search，再只对 candidate 做 record recovery；没有隐藏 candidate-count limit。
+
+如果 regex 语义可能跨多行、continuation state 无法局部证明，或者 time/range/pid scope 需要完整 record 语义，Runtime 可以回退到全 logical-record iteration，以 correctness 为先。
+
+当前 Agent Shell hot path 不依赖 `search_text`，也不要求 `matched_records.jsonl`、`hits.jsonl`、`evidence.log`、filter history 或 unmatched-token summary。
 
 ## 7. Evidence Budget Contract
 
@@ -181,7 +192,7 @@ max_evidence_tokens
 max_evidence_bytes  # hard safety cap
 ```
 
-Agent tool schema **不得**暴露允许 Agent 调大这些值的参数。
+Agent tool schema **不得**暴露允许 Agent 调大这些值的参数。Materialize/replay 的 transport 上限同样必须服从 Host/User Evidence policy，而不是由 Agent 参数放宽。
 
 如果完整 matched records 超过预算：
 
@@ -194,12 +205,15 @@ evidence = []
 
 可以报告 `observed_at_least_tokens/bytes`；若为节省 I/O 提前停止，不得伪造 exact total。
 
+若内部 aggregate 本身结果过大，则返回 `AGGREGATE_OUTPUT_BUDGET_EXCEEDED`，而不是把超大 group/distinct 列表传给模型。
+
 `too_broad` 后 Agent 可以：
 
 - 更精确 literal/regex；
-- 增加 filter/where；
+- 增加 search/filter/where；
 - 缩小 time/range/source；
 - 使用 aggregate 回答 count/group/distinct；
+- 已知有效 anchor 时使用 near/seek；
 - 更换更合适的搜索组合。
 
 Agent 不可以：
@@ -209,11 +223,11 @@ Agent 不可以：
 - 要求完整 locator dump；
 - 用 first-N 伪装完整搜索。
 
-显式 `first/last/top/take/sample` 仍可作为用户真正要求的 selection semantics，但必须明确是选择结果，不是完整匹配集合。
+显式 `first/last/head/tail/take` 仍可作为用户真正要求的 selection semantics，但必须明确是选择结果，不是完整匹配集合。
 
 ## 8. Internal MatchSet / intermediate state
 
-`MatchSet` 是 Runtime 内部实现概念，不要求 Agent理解。它可以是 locator array、bitmap、range set、lazy iterator、spill file 或 backend handle。
+`MatchSet` 是 Runtime 内部实现概念，不要求 Agent 理解，也不是当前 Agent API 的必要公开对象。它可以是 iterator、locator array、bitmap、range set、spill file 或 backend handle。
 
 大型中间集合默认留在 Runtime：
 
@@ -221,20 +235,20 @@ Agent 不可以：
 173,320 -> 4,901 -> 331 -> 5
 ```
 
-Agent 只看到最终小结果。若跨 tool call 必须继续使用大型集合，可以用稳定 `result_handle`，handle 必须绑定 SourceVersion 与 QueryPlan identity；不得把完整集合重新传给模型。
+Agent 只看到最终小结果。当前 all-or-refine shell 不要求公开 ResultHandle；如果未来真实跨调用 workflow 需要复用大型集合，再引入绑定 SourceVersion + QueryPlan identity 的稳定 handle，仍不得把完整集合传给模型。
 
 ## 9. Canonical Evidence API
 
 长期 canonical 机械原语继续保留：
 
-- `retrieve`：caller 指定 source/scope/predicate -> Evidence + Coverage + Provenance + novelty/repetition；
+- `retrieve`：caller 指定 source/scope/predicate -> Evidence + Coverage + Provenance + novelty/repetition；text QueryTarget 归一到 Evidence Shell；
 - `materialize`：精确展开 caller 指定的不可变 source/version range/ref；
 - `replay`：显式重读旧不可变 Evidence；novelty 仍为 0；
-- `aggregate`：确定性的 caller-selected count/distinct/group；
+- `aggregate`：兼容性的确定性 count/distinct/group；Agent 文本调查优先使用 Shell aggregate；
 - `traverse`：caller 指定 seed/scope/direction/limits 下机械遍历；
 - `verify`：验证 integrity/source-version/Manifest/exact Evidence。
 
-`tracecite_run` 是组合这些搜索/机械处理能力的 Agent program surface，不创建第二套 Evidence identity/session 语义。
+`tracecite_run` 是组合搜索/机械处理能力的 Agent program surface，不创建第二套 Evidence identity/session 语义。
 
 ## 10. RetrievalSession：唯一机械 Evidence Memory Owner
 
@@ -253,6 +267,8 @@ matched_existing_evidence = [E ref]
 
 `too_broad` 没有把 Evidence body 正式暴露给 Agent，因此不得把其内部扫描到的 rows 加入 `seen_evidence` 或 Coverage。
 
+同一用户问题的 SourceVersion binding 与 RetrievalSession/context identity 关联；Host 若复用长生命周期会话，必须在用户新问题开始时切换 question/session identity，不能让上一问题的 frozen view 悄悄延续为新问题的“当前”数据。
+
 ## 11. Materialize / Provenance / Citation
 
 Search candidate 与最终 Evidence 分离。只有在候选足够小、Agent 需要阅读/引用时才 materialize exact context。
@@ -266,13 +282,15 @@ exact line/range or equivalent locator
 exact raw content
 ```
 
-TraceCite 管理的 immutable SourceVersion 已有 SHA 后，下游 search/materialize/bridge 应复用该 identity，而不是每次重新 hash 全文件。对于 TraceCite 未冻结、仍可能被外部修改的 pathname，仍需要 integrity revalidation。
+TraceCite 管理的 immutable SourceVersion/segment 已有 SHA 后，Shell EvidencePointer、managed materialize 和 replay 直接复用该 identity，不重新 hash 全文件。SourceVersionStore 同时保留 latest source state 与 question-bound historical view，使旧 immutable segment 在新 SourceVersion 建立后仍可 replay。
+
+对于 TraceCite 未冻结、仍可能被外部修改的 pathname，仍需要 integrity revalidation。
 
 ## 12. Agent / Host Boundary
 
-Host 拥有 model/tool/context/wall-time budget、Evidence token policy、tool exposure、prompt 和 native-tool telemetry。
+Host 拥有 model/tool/context/wall-time budget、Evidence token/byte policy、source mode、用户问题边界、tool exposure、prompt 和 native-tool telemetry。
 
-Agent skill 必须教会 Agent：优先用 `tracecite_run` 合并机械搜索；`too_broad` 时 refine query；不能提高用户 budget；不请求全部 locator；最终需要引用时 materialize。
+Agent skill 必须教会 Agent：优先用 `tracecite_run` 合并机械搜索；`too_broad` 时 refine query；不能提高用户 budget；不请求全部 locator；最终需要引用时使用返回的 immutable `source_path + SHA + range` materialize。
 
 当前仓库 Agent instruction source：`.agents/skills/tracecite-investigate/SKILL.md`。
 
@@ -300,23 +318,27 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 
 任何 Domain package 都不得成为 Core 或 Runtime 的 required dependency。
 
-## 15. 当前实现与目标差距
+## 15. 当前实现状态
 
 | Capability | Status | 当前重构分支 |
 |---|---|---|
 | Existing SourceVersion identity (`sha256/cursor/generation/mutable`) | 已实现 | `evidence_identity.py` |
-| RetrievalSession seen/repeated/range/replay | 已实现 | 既有 Runtime |
-| Candidate-first literal scanner/local recovery | 已实现 | 既有 Runtime internal |
-| `EvidenceShellPolicy` user/host-owned budget | 已实现 | 第一版；Agent request 无 budget override |
-| `tracecite_run` Evidence Shell | 部分实现 | literal/regex/filter/where/count/group/distinct/explicit selection 已有；其余现有搜索/导航语义仍在迁移 |
+| RetrievalSession seen/repeated/range/replay | 已实现 | 既有 Runtime + Shell admission |
+| Raw-hit candidate-first + local complete-record recovery | 已实现 | `record_search.py` + `candidate_recovery.py` |
+| `EvidenceShellPolicy` user/host-owned budget | 已实现 | Agent request 无 budget override；Pi materialize/replay 也服从 Host budget |
+| `tracecite_run` Evidence Shell | 已实现 | literal/grep/regex/where/filter/sort/selection/near/seek/count/group/distinct |
 | `too_broad` canonical transport status | 已实现 | 超预算不返回 Evidence body/locator dump |
-| Pi `tracecite_run` adapter | 已实现 | budget 从 Host 环境/产品配置读取 |
+| Artifact-free Agent search hot path | 已实现 | 不依赖 matched_records/hits/evidence.log/filter history |
+| Agent QueryTarget 去除 high-cardinality EvidenceIndex | 已实现 | text retrieve/search 归一到 Evidence Shell |
+| Question-level SourceVersion binding | 已实现 | SourceVersionStore + question-bound persisted views；Host 负责 question/session boundary |
+| Mutable fingerprint snapshot reuse | 已实现 | unchanged -> reuse snapshot + SHA + line metadata |
+| Snapshot SHA/count 单 pass | 已实现 | copy 同时 hash + newline count；不做 count snapshot + count original |
+| LiveCut + immutable segment SourceVersion | 已实现 | cooperative cut；无协作时 verified append-only incremental fallback |
+| Managed materialize/replay SHA reuse | 已实现 | immutable snapshot/segment 读取 exact range，不重新 whole-file SHA |
 | Agent skill for shell/refinement | 已实现 | `.agents/skills/tracecite-investigate/SKILL.md` |
-| Search hot path 去除 `matched_records.jsonl` / legacy artifacts | 部分实现 | 当前 shell 第一阶段仍暂用 `search_text` 保持语义兼容 |
-| Agent query path 去除 high-cardinality EvidenceIndex | 部分实现 | 新 shell 不生成 EvidenceIndex；旧 retrieve compatibility 尚待迁移 |
-| Question-level SourceVersion cache / fingerprint reuse | 待实现 | 设计已在 ADR 固化 |
-| LiveCut + immutable segment SourceVersion | 待实现 | Core 已有 `live_cut.py` / `segment_store.py` 基础 |
-| SHA/count full-file pass 合并与缓存 | 待实现 | bridge 已优先读取 `data.source_sha256`，完整 SourceVersion cache 尚未接入 |
+| Pi `tracecite_run` adapter | 已实现 | budget/source policy 由 Host 环境/产品配置持有 |
+| Public ResultHandle/MatchSet API | 延后 | 当前 all-or-refine contract 不需要公开 |
+| Full regression + Native/TraceCite benchmark validation | 待验证 | 代码完成后统一跑，不属于架构实现本身 |
 
 ## 16. 文档 / Governance
 
