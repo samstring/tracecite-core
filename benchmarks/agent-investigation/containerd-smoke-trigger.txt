@@ -1,7 +1,7 @@
-trigger: 2026-09-04 synchronization-first six-call diagnostic after early-stop miss
+trigger: 2026-09-04 literal-sync orientation diagnostic after semantic-query miss
 tracecite_only_tools: true
 runtime_agent_steering: false
-pi_agent_system_steering: full-tracecite-skill-contract-plus-bounded-root-cause-firewall
+pi_agent_system_steering: full-tracecite-skill-contract-plus-literal-sync-query-firewall
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
@@ -10,5 +10,5 @@ skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-6
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: source repair preserves the same unresolved claim; orientation must land on a synchronization-bearing causal path rather than generic chan/logger/fifo symptoms; after orientation each call targets one missing reciprocal endpoint with no duplicate expansions or parallel speculative searches; whole answer must start Observed and contain exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
+diagnostic_focus: TraceCite search is literal-or-regex rather than semantic; synchronization orientation uses one exact synchronization-bearing token or single-construct regex per search; no-match repairs the same synchronization claim and never falls back to generic goroutine/process/symptom/lifecycle queries; after orientation each call targets one missing reciprocal endpoint; whole answer starts Observed and contains exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
 agent_timeout_seconds: 900
