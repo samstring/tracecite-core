@@ -236,6 +236,7 @@ No domain package may become a required dependency of Core or Runtime.
 | Codex/OpenAI-compatible repository skill integration | Implemented | `AGENTS.md` + `.agents/skills` |
 | Cursor project-rule integration | Implemented | `.cursor/rules/tracecite-investigation.mdc` |
 | Extension Protocol / domain capability contracts | Implemented | Public extension layer |
+| ScenarioCapability execution services | Implemented | Active chain uses internal `ScenarioServices`; `ScenarioRuntime` is compatibility-only |
 | MCP / other host adapters as a single packaged universal integration | Partially implemented | Host-specific adapters evolve separately |
 
 ## 14. Documentation / governance rule

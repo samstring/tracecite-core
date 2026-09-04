@@ -236,6 +236,7 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 | Codex/OpenAI-compatible repository skill integration | 已实现 | `AGENTS.md` + `.agents/skills` |
 | Cursor Project Rule integration | 已实现 | `.cursor/rules/tracecite-investigation.mdc` |
 | Extension Protocol / Domain Capability Contract | 已实现 | Public extension layer |
+| ScenarioCapability execution services | 已实现 | 当前执行链使用内部 `ScenarioServices`；`ScenarioRuntime` 仅为 compatibility alias |
 | MCP / 其他 Host 作为单一 packaged universal integration | 部分实现 | Host-specific adapter 独立演进 |
 
 ## 14. 文档 / Governance 规则

@@ -16,7 +16,7 @@ from tracecite_core.plugin_sdk import PluginAPI, load_entrypoint_plugins, loaded
 from tracecite.runtime.assertions import register_assertion_type
 from tracecite.runtime.capabilities import register_capability
 from tracecite.runtime.reporting import register_report_outputter
-from tracecite.runtime.runtime import DEFAULT_RUNTIME, ScenarioRuntime
+from tracecite.runtime.scenario_services import DEFAULT_SCENARIO_SERVICES, ScenarioServices
 
 from .contracts import (
     CAPABILITY_PROTOCOL_VERSIONS,
@@ -44,41 +44,55 @@ class ExtensionError(RuntimeError):
 
 
 _EXTENSIONS: Dict[str, TraceCiteExtension] = {}
-_RUNTIMES: Dict[str, ScenarioRuntime] = {"default": DEFAULT_RUNTIME}
+_SCENARIO_SERVICES: Dict[str, ScenarioServices] = {
+    "default": DEFAULT_SCENARIO_SERVICES
+}
 _LOADED_DOMAIN_ENTRYPOINTS: Set[Tuple[str, str]] = set()
 _DOMAIN_RESULTS: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
 
-def _register_runtime(name: str, runtime: ScenarioRuntime) -> None:
+def _register_scenario_services(name: str, services: ScenarioServices) -> None:
     key = str(name).strip().lower()
     if not key:
-        raise ExtensionError("runtime 名不能为空")
-    if not isinstance(runtime, ScenarioRuntime):
-        raise ExtensionError("runtime 必须是 ScenarioRuntime")
-    current = _RUNTIMES.get(key)
-    if current is not None and current is not runtime:
-        raise ExtensionError(f"runtime {key!r} 已注册")
-    _RUNTIMES[key] = runtime
+        raise ExtensionError("scenario services 名不能为空")
+    if not isinstance(services, ScenarioServices):
+        raise ExtensionError("scenario services 必须是 ScenarioServices")
+    current = _SCENARIO_SERVICES.get(key)
+    if current is not None and current is not services:
+        raise ExtensionError(f"scenario services {key!r} 已注册")
+    _SCENARIO_SERVICES[key] = services
 
 
-def get_runtime(name: str = "default") -> ScenarioRuntime:
-    """Host integration helper; ScenarioRuntime is not a public extension contract."""
+def get_scenario_services(name: str = "default") -> ScenarioServices:
+    """Return the internal execution services assembled from ScenarioCapability."""
 
     key = str(name).strip().lower() or "default"
     try:
-        return _RUNTIMES[key]
+        return _SCENARIO_SERVICES[key]
     except KeyError as exc:
-        known = ", ".join(available_runtimes())
-        raise ExtensionError(f"未知 runtime {key!r}（可用: {known}）") from exc
+        known = ", ".join(available_scenario_services())
+        raise ExtensionError(f"未知 scenario services {key!r}（可用: {known}）") from exc
+
+
+def available_scenario_services() -> List[str]:
+    """Return installed scenario service adapters."""
+
+    return sorted(_SCENARIO_SERVICES)
+
+
+def get_runtime(name: str = "default") -> ScenarioServices:
+    """Compatibility alias for :func:`get_scenario_services`."""
+
+    return get_scenario_services(name)
 
 
 def available_runtimes() -> List[str]:
-    """Return internal scenario adapters made available by installed extensions."""
+    """Compatibility alias for :func:`available_scenario_services`."""
 
-    return sorted(_RUNTIMES)
+    return available_scenario_services()
 
 
-def _scenario_runtime(capability: ScenarioCapability) -> ScenarioRuntime:
+def _scenario_services(capability: ScenarioCapability) -> ScenarioServices:
     kwargs: Dict[str, Any] = {
         "allow_live_source": bool(capability.allow_live_source),
         "allow_actions": bool(capability.allow_actions),
@@ -93,7 +107,7 @@ def _scenario_runtime(capability: ScenarioCapability) -> ScenarioRuntime:
         value = getattr(capability, field_name)
         if value is not None:
             kwargs[field_name] = value
-    return ScenarioRuntime(**kwargs)
+    return ScenarioServices(**kwargs)
 
 
 def _install_extension(extension: TraceCiteExtension) -> None:
@@ -109,7 +123,7 @@ def _install_extension(extension: TraceCiteExtension) -> None:
         elif isinstance(capability, ReportCapability):
             register_report_outputter(capability.name, capability.outputter)
         elif isinstance(capability, ScenarioCapability):
-            _register_runtime(capability.name, _scenario_runtime(capability))
+            _register_scenario_services(capability.name, _scenario_services(capability))
         else:  # pragma: no cover - TraceCiteExtension validation prevents this.
             raise ExtensionError(f"未知 extension capability: {type(capability).__name__}")
 
@@ -270,6 +284,8 @@ __all__ = [
     "load_extensions",
     "loaded_extensions",
     "loaded_plugins",
+    "get_scenario_services",
+    "available_scenario_services",
     "get_runtime",
     "available_runtimes",
 ]

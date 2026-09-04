@@ -14,7 +14,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from tracecite import __version__
-from tracecite.extension import available_runtimes, get_runtime, load_extensions
+from tracecite.extension import (
+    available_scenario_services,
+    get_scenario_services,
+    load_extensions,
+)
 from tracecite.runtime.investigation import (
     FINDING_OUTCOMES,
     STOP_KINDS,
@@ -741,7 +745,7 @@ def _invoke(args: argparse.Namespace) -> Mapping[str, Any]:
     if args.command == "run":
         if args.load_extensions:
             load_extensions(strict=False)
-        runtime = get_runtime(args.runtime)
+        runtime = get_scenario_services(args.runtime)
         return run(
             Path(args.scenario),
             base_dir=Path(args.base_dir) if args.base_dir else None,
@@ -883,7 +887,7 @@ def _invoke(args: argparse.Namespace) -> Mapping[str, Any]:
             ],
             data={
                 "loaded": discovered,
-                "runtimes": available_runtimes(),
+                "runtimes": available_scenario_services(),
                 "explicit_load": args.extension_command == "load",
             },
         ).to_dict()

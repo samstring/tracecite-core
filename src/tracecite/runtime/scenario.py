@@ -70,7 +70,7 @@ from tracecite_core.text_filter import (
 
 from .assertions import AssertionSpecError, build_assertions
 from .reporting import ReportContext, ReportOutputError, render_reports
-from .runtime import DEFAULT_RUNTIME, ScenarioRuntime
+from .scenario_services import DEFAULT_SCENARIO_SERVICES, ScenarioServices
 from .schema import SCENARIO_SCHEMA_VERSION
 
 # 命中记录数超过该阈值，提示 Agent「证据可能过多，建议收窄」
@@ -111,7 +111,7 @@ def _safe_component_id(prefix: str, name: Any) -> str:
 
 
 def _enforce_runtime_capabilities(
-    spec: Dict[str, Any], runtime: ScenarioRuntime
+    spec: Dict[str, Any], runtime: ScenarioServices
 ) -> None:
     """Reject command execution unless the embedding domain grants it."""
     source_type = str((spec.get("source") or {}).get("type") or "file").lower()
@@ -619,7 +619,7 @@ def resolve_pattern_details(
     platform: str = "",
     start_dir: Optional[Path] = None,
     profile: Optional[Any] = None,
-    runtime: ScenarioRuntime = DEFAULT_RUNTIME,
+    runtime: ScenarioServices = DEFAULT_SCENARIO_SERVICES,
 ) -> Dict[str, Any]:
     """Resolve a filter and retain component-level provenance.
 
@@ -741,7 +741,7 @@ def resolve_pattern(
     platform: str = "",
     start_dir: Optional[Path] = None,
     profile: Optional[Any] = None,
-    runtime: ScenarioRuntime = DEFAULT_RUNTIME,
+    runtime: ScenarioServices = DEFAULT_SCENARIO_SERVICES,
 ) -> Tuple[str, Optional[str]]:
     """Backward-compatible ``(pattern, tag)`` resolver wrapper."""
     details = resolve_pattern_details(
@@ -1048,7 +1048,7 @@ def _run_scenario_impl(
     run: AnalysisRun,
     platform: str = "",
     start_dir: Optional[Path] = None,
-    runtime: ScenarioRuntime = DEFAULT_RUNTIME,
+    runtime: ScenarioServices = DEFAULT_SCENARIO_SERVICES,
 ) -> Dict[str, Any]:
     """执行一个场景，返回结构化结果（正文在磁盘，返回值只给指针与结论）。
 
@@ -1552,7 +1552,7 @@ def run_scenario(
     platform: str = "",
     start_dir: Optional[Path] = None,
     spec_path: Optional[Path] = None,
-    runtime: ScenarioRuntime = DEFAULT_RUNTIME,
+    runtime: ScenarioServices = DEFAULT_SCENARIO_SERVICES,
 ) -> Dict[str, Any]:
     """执行 v2 场景，并写入可复现、可校验的运行 manifest。"""
     spec = validate_scenario_spec(spec)
@@ -1758,7 +1758,7 @@ def explain_scenario(
     base_dir: Path,
     platform: str = "",
     start_dir: Optional[Path] = None,
-    runtime: ScenarioRuntime = DEFAULT_RUNTIME,
+    runtime: ScenarioServices = DEFAULT_SCENARIO_SERVICES,
 ) -> Dict[str, Any]:
     """无过滤副作用地解析场景执行计划。"""
     import tempfile
@@ -1854,7 +1854,7 @@ def explain_scenario(
     }
 
 
-def cmd_scenario(args, *, runtime: ScenarioRuntime = DEFAULT_RUNTIME) -> int:
+def cmd_scenario(args, *, runtime: ScenarioServices = DEFAULT_SCENARIO_SERVICES) -> int:
     """CLI entry point shared by Agent and domain packages."""
     spec_path = Path(getattr(args, "spec", "")).expanduser()
     explicit_base_dir = getattr(args, "base_dir", None)

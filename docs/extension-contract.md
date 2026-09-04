@@ -67,6 +67,8 @@ my_domain = "my_tracecite.extension:extension"
 - Core plugin bundle：Source / Segmenter / Preprocessor / Event transformer 等低层 domain-neutral 插件注册包；
 - Agent Capability：领域只读查询或经授权的动作能力；
 - Scenario Capability：领域 profile / preset / scenario resolver；
+
+`ScenarioCapability` 在 Runtime 内部被适配为 `ScenarioServices`；Extension 不依赖该内部类型。历史 `ScenarioRuntime` 名称仅保留兼容别名，不再位于 Extension 执行链。
 - Assertion Capability：领域断言；
 - Report Capability：领域报告；
 - 后续能力应优先新增独立版本化 Capability，而不是扩大顶层 Extension API。

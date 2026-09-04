@@ -31,7 +31,7 @@ from .investigation import (
     SAFE_CACHE_OPERATIONS,
     attach_investigation_result,
 )
-from .runtime import DEFAULT_RUNTIME, ScenarioRuntime
+from .scenario_services import DEFAULT_SCENARIO_SERVICES, ScenarioServices
 from .schema import AgentResult, EvidencePointer, MAX_RESULT_EVIDENCE, ScenarioDocument
 from .scenario import load_spec, run_scenario
 
@@ -1373,7 +1373,7 @@ def run(
     *,
     base_dir: Optional[Union[str, Path]] = None,
     platform: str = "",
-    runtime: ScenarioRuntime = DEFAULT_RUNTIME,
+    runtime: ScenarioServices = DEFAULT_SCENARIO_SERVICES,
     investigation_path: Optional[Union[str, Path]] = None,
     hypothesis_id: Optional[str] = None,
     test_id: Optional[str] = None,
