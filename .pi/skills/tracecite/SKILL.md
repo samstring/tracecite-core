@@ -80,6 +80,20 @@ A search miss is not the same as evidence insufficiency. One miss may justify a 
 
 The Agent still owns the decision to continue, switch hypotheses, answer, or declare insufficient evidence. The Host checkpoint only exposes recent evidence progress and requires deliberate reassessment.
 
+## Cost-aware default investigation loop
+
+Large evidence sources make repeated semantically broad retrieval expensive for the Agent even when each TraceCite operation is mechanically fast. Keep the Agent in control, but default to a bounded evidence loop:
+
+1. Inspect the source shape once; do not rediscover filenames or schemas with synonym searches.
+2. Use one broad retrieval to identify a concrete error signature, service, trace ID, request ID, or other correlation key.
+3. Once a concrete correlation key is available, pivot to that key and materialize only the bounded spans/ranges needed to establish the causal chain.
+4. Prefer correlation-local evidence over unrelated confirmatory sampling. In particular, do not sample arbitrary metric rows after a trace/log chain already resolves the active causal question unless the metric evidence answers a specific unresolved contradiction.
+5. `no_match` and `no_new_evidence` should usually end that exact search direction; do not retry a list of synonyms unless the next query targets a materially different evidence class.
+6. After a Host convergence checkpoint, do not continue merely to increase confidence. Continue only for a concrete unresolved question whose answer could change the conclusion or evidence boundary.
+7. As a default cost target, aim to finish a straightforward single-incident RCA within roughly a dozen evidence operations. This is not a hard stop: exceed it only when the unresolved question and expected new evidence are explicit and materially different.
+
+The budget is an Agent cost discipline, not a Runtime planner or causal stopping decision. TraceCite still does not choose the next query, root cause, or final answer.
+
 ## `tracecite_retrieve`
 
 `tracecite_retrieve` performs caller-selected evidence retrieval.
