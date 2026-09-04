@@ -181,8 +181,10 @@ def test_after_direct_read_query_becomes_bounded_and_can_escalate(tmp_path) -> N
     assert payload["data"]["routing"]["mode"] == "bounded"
     assert payload["data"]["routing"]["next_mode"] == "focused"
     assert payload["coverage"]["match_records"] == 20
-    assert payload["coverage"]["evidence_returned"] == 5
-    assert payload["coverage"]["evidence_truncated"] is True
+    assert payload["coverage"]["evidence_returned"] == 0
+    assert payload["coverage"]["evidence_indexed"] is True
+    assert payload["coverage"]["evidence_truncated"] is False
+    assert payload["coverage"]["evidence_index"]["total_matches"] == 20
 
 
 def test_deep_query_uses_tighter_investigate_transport_cap(tmp_path) -> None:
@@ -222,8 +224,10 @@ def test_deep_query_uses_tighter_investigate_transport_cap(tmp_path) -> None:
     assert payload["data"]["routing"]["mode"] == EvidenceRoute.FOCUSED.value
     assert "exploration_depth" in payload["data"]["routing"]["reasons"]
     assert payload["coverage"]["match_records"] == 20
-    assert payload["coverage"]["evidence_returned"] == 2
-    assert payload["coverage"]["evidence_truncated"] is True
+    assert payload["coverage"]["evidence_returned"] == 0
+    assert payload["coverage"]["evidence_indexed"] is True
+    assert payload["coverage"]["evidence_truncated"] is False
+    assert payload["coverage"]["evidence_index"]["total_matches"] == 20
 
 
 def test_large_first_source_uses_bounded_uniform_navigation_sample(tmp_path) -> None:
