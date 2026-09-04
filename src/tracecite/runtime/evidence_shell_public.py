@@ -68,13 +68,17 @@ def _pointers_fit(
     evidence: list[dict[str, Any]],
     policy: EvidenceShellPolicy,
 ) -> tuple[bool, int, int]:
+    """Bound pointer transport without charging pointer metadata as Evidence body tokens.
+
+    ``max_evidence_tokens`` governs the matched record bodies selected by the
+    Agent program. Pointer metadata is unavoidable transport overhead and is
+    instead protected by the hard byte cap. This keeps tiny exact results usable
+    under small body-token budgets while still preventing a high-cardinality
+    locator list from recreating the old EvidenceIndex context explosion.
+    """
+
     tokens, bytes_used = _transport_size({"evidence": evidence})
-    return (
-        tokens <= policy.max_evidence_tokens
-        and bytes_used <= policy.max_evidence_bytes,
-        tokens,
-        bytes_used,
-    )
+    return bytes_used <= policy.max_evidence_bytes, tokens, bytes_used
 
 
 def _normalize_repeated(payload: dict[str, Any]) -> dict[str, Any]:
@@ -261,7 +265,7 @@ def run_evidence_shell(
             "selection_explicit": selected_subset,
             "match_records": len(selected),
             "evidence_returned": len(evidence),
-            "evidence_tokens": max(record_tokens, pointer_tokens),
+            "evidence_tokens": record_tokens,
             "evidence_bytes": max(record_bytes, pointer_bytes),
             "record_tokens": record_tokens,
             "record_bytes": record_bytes,
