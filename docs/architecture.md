@@ -331,7 +331,7 @@ No domain package may become a required dependency of Core or Runtime.
 | Managed materialize/replay SHA reuse | Implemented | exact range reads on immutable managed source without whole-file rehash |
 | Agent skill for shell/refinement | Implemented | `.agents/skills/tracecite-investigate/SKILL.md` |
 | Pi `tracecite_run` adapter | Implemented | budget/source policy comes from Host environment/product configuration |
-| Public ResultHandle/MatchSet API | Deferred | current all-or-refine contract does not require a public API |
+| Public ResultHandle/MatchSet API | Planned (intentionally deferred) | current all-or-refine contract does not require a public API |
 | Full regression + Native/TraceCite benchmark validation | Pending validation | run after implementation completion; not an architecture implementation gap |
 
 ## 16. Documentation / governance
