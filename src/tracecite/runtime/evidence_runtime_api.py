@@ -12,7 +12,7 @@ import shlex
 from pathlib import Path
 from typing import Any, Mapping
 
-from .agent_api import EvidenceRequest, QueryTarget, RetrievalResult
+from .agent_api import EvidenceRequest, QueryTarget, RangeTarget, RetrievalResult
 from .evidence_fidelity import enrich_search_leaf_context
 from .evidence_progress import EvidenceGap, EvidenceProgressTracker
 from .evidence_routing import EvidenceRoutingPolicy
@@ -25,7 +25,6 @@ from . import evidence_api as _legacy
 AggregateOperation = _legacy.AggregateOperation
 AggregateRequest = _legacy.AggregateRequest
 aggregate = _legacy.aggregate
-materialize = _legacy.materialize
 replay = _legacy.replay
 verify = _legacy.verify
 
@@ -72,13 +71,67 @@ def _search_program(target: QueryTarget) -> str:
     return f"{command} {shlex.quote(target.query)}"
 
 
-def _fidelity(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _logicalize_fidelity(payload: dict[str, Any], source: Path) -> dict[str, Any]:
+    """Keep immutable snapshot paths internal while labels show the logical source name."""
+
+    logical_name = source.name
+    evidence = payload.get("evidence")
+    if isinstance(evidence, list):
+        rewritten: list[Any] = []
+        for raw in evidence:
+            if not isinstance(raw, Mapping):
+                rewritten.append(raw)
+                continue
+            item = dict(raw)
+            snapshot_name = Path(str(item.get("source_path") or "")).name
+            label = str(item.get("label") or "")
+            if snapshot_name and snapshot_name != logical_name and label:
+                item["label"] = label.replace(f"{snapshot_name}:", f"{logical_name}:")
+            rewritten.append(item)
+        payload["evidence"] = rewritten
+
+    missing = payload.get("missing_evidence")
+    if isinstance(missing, list):
+        rewritten_missing: list[Any] = []
+        for raw in missing:
+            if not isinstance(raw, Mapping):
+                rewritten_missing.append(raw)
+                continue
+            item = dict(raw)
+            if item.get("source"):
+                item["source"] = logical_name
+            rewritten_missing.append(item)
+        payload["missing_evidence"] = rewritten_missing
+
+    data = payload.get("data")
+    if isinstance(data, Mapping):
+        data_copy = dict(data)
+        integrity = data_copy.get("evidence_integrity")
+        if isinstance(integrity, Mapping):
+            integrity_copy = dict(integrity)
+            scoped = integrity_copy.get("scoped_identity")
+            if isinstance(scoped, list):
+                scoped_copy: list[Any] = []
+                for raw in scoped:
+                    if isinstance(raw, Mapping):
+                        item = dict(raw)
+                        item["source"] = logical_name
+                        scoped_copy.append(item)
+                    else:
+                        scoped_copy.append(raw)
+                integrity_copy["scoped_identity"] = scoped_copy
+            data_copy["evidence_integrity"] = integrity_copy
+        payload["data"] = data_copy
+    return payload
+
+
+def _fidelity(payload: Mapping[str, Any], *, source: Path) -> dict[str, Any]:
     candidate = dict(payload)
     original_operation = str(candidate.get("operation") or "evidence_shell")
     candidate["operation"] = "search"
     enriched = enrich_search_leaf_context(candidate)
     enriched["operation"] = original_operation
-    return enriched
+    return _logicalize_fidelity(enriched, source)
 
 
 def _audit_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -122,10 +175,7 @@ def _progress_gaps(payload: Mapping[str, Any]) -> list[EvidenceGap]:
     for index, item in enumerate(payload.get("missing_evidence") or []):
         if not isinstance(item, Mapping):
             continue
-        if item.get("actionable") is False:
-            actionable = False
-        else:
-            actionable = True
+        actionable = item.get("actionable") is not False
         identifier = str(item.get("identifier_value") or "").strip()
         kind = str(item.get("kind") or "evidence_gap").strip()
         gap_id = f"{kind}:{identifier or index}"[:128]
@@ -137,6 +187,23 @@ def _progress_gaps(payload: Mapping[str, Any]) -> list[EvidenceGap]:
             )
         )
     return gaps
+
+
+def _attach_novelty_basis(payload: dict[str, Any]) -> dict[str, Any]:
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        return payload
+    novelty = data.get("novelty")
+    if not isinstance(novelty, Mapping):
+        return payload
+    if str(novelty.get("state") or "") != "no_new_evidence":
+        return payload
+    data_copy = dict(data)
+    novelty_copy = dict(novelty)
+    novelty_copy.setdefault("basis", ["all_returned_evidence_already_seen"])
+    data_copy["novelty"] = novelty_copy
+    payload["data"] = data_copy
+    return payload
 
 
 def _query_via_shell(
@@ -162,7 +229,8 @@ def _query_via_shell(
         policy=EvidenceShellPolicy(),
         session=effective_session,
     )
-    payload = _fidelity(payload)
+    payload = _fidelity(payload, source=Path(target.source).expanduser().resolve())
+    payload = _attach_novelty_basis(payload)
     _record_query_execution(request, payload)
 
     rows = _rows(payload)
@@ -188,6 +256,41 @@ def _query_via_shell(
         progress=progress,
         new_evidence=tuple(rows),
         repeated_evidence=max(0, repeated),
+    )
+
+
+def materialize(
+    target: RangeTarget,
+    *,
+    session: RetrievalSessionStore | None = None,
+    routing_policy: EvidenceRoutingPolicy | None = None,
+) -> RetrievalResult:
+    """Return explicitly requested raw context even when its Evidence ID was seen before.
+
+    Retrieval novelty still reports zero new Evidence, but a caller that asks to
+    materialize an exact immutable range has performed useful I/O and receives
+    that raw context with status ``ok`` instead of having the read disguised as
+    ``no_new_evidence``.
+    """
+
+    result = _legacy.materialize(
+        target,
+        session=session,
+        routing_policy=routing_policy,
+    )
+    if result.status != "no_new_evidence":
+        return result
+    data = result.canonical_result.get("data") or {}
+    if not isinstance(data, Mapping) or "text" not in data:
+        return result
+    return RetrievalResult(
+        operation=result.operation,
+        status="ok",
+        canonical_result=result.canonical_result,
+        progress=result.progress,
+        new_evidence=result.new_evidence,
+        repeated_evidence=result.repeated_evidence,
+        acquisition_end_reason=result.acquisition_end_reason,
     )
 
 
