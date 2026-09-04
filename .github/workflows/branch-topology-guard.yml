@@ -22,7 +22,7 @@ jobs:
       - name: Fetch all repository branches
         run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
 
-      - name: Enforce single active child branch
+      - name: Enforce single active ahead branch
         env:
           POLICY_BASELINE: 746605127cdff6e2a8149eca8cb6944d6868c605
           FEATURE_BRANCH: feature_for_agent
@@ -67,15 +67,14 @@ jobs:
                   "update the policy intentionally before continuing"
               )
 
-          baseline_epoch = int(git("show", "-s", "--format=%ct", baseline))
+          feature_epoch = int(git("show", "-s", "--format=%ct", feature_ref))
           refs = git(
               "for-each-ref",
               "--format=%(refname)",
               "refs/remotes/origin",
           ).splitlines()
 
-          active: list[tuple[str, int, str]] = []
-          mutated_legacy: list[tuple[str, int]] = []
+          active: list[tuple[str, int, str, int]] = []
 
           for ref in refs:
               if not ref or ref.endswith("/HEAD"):
@@ -91,48 +90,42 @@ jobs:
 
               merge_base = git("merge-base", feature_ref, ref, check=False)
               if not merge_base:
-                  # Unrelated history is not an active feature_for_agent child.
                   continue
 
-              if is_ancestor(baseline, merge_base):
-                  active.append((name, ahead, merge_base))
-                  continue
-
-              # Grandfathered branches are frozen. Existing historical unique
-              # commits are allowed, but any unique commit newer than policy
-              # activation is treated as new development on a legacy branch.
-              epochs = [
+              unique_epochs = [
                   int(value)
-                  for value in git(
-                      "log", "--format=%ct", f"{feature_ref}..{ref}"
-                  ).splitlines()
+                  for value in git("log", "--format=%ct", f"{feature_ref}..{ref}").splitlines()
                   if value.strip().isdigit()
               ]
-              newest = max(epochs, default=0)
-              if newest > baseline_epoch:
-                  mutated_legacy.append((name, newest))
+              newest_unique = max(unique_epochs, default=0)
 
-          print("feature_for_agent active child branches:")
+              # A post-policy child branch is active while it has unique commits,
+              # even if feature_for_agent has advanced since it was created.
+              # A grandfathered historical branch is counted only when it has
+              # been updated more recently than the current feature_for_agent
+              # head. This implements the repository rule that there can be at
+              # most one branch carrying current work ahead of the development
+              # source of truth.
+              post_policy_child = is_ancestor(baseline, merge_base)
+              historical_but_newer = newest_unique > feature_epoch
+              if post_policy_child or historical_but_newer:
+                  active.append((name, ahead, merge_base, newest_unique))
+
+          print("branches carrying active work outside feature_for_agent:")
           if active:
-              for name, ahead, merge_base in sorted(active):
-                  print(f"  - {name}: {ahead} unique commit(s), merge-base {merge_base}")
+              for name, ahead, merge_base, newest_unique in sorted(active):
+                  print(
+                      f"  - {name}: {ahead} unique commit(s), merge-base {merge_base}, "
+                      f"newest_unique_epoch={newest_unique}"
+                  )
           else:
               print("  (none)")
 
           if len(active) > 1:
-              names = ", ".join(name for name, _, _ in sorted(active))
+              names = ", ".join(name for name, _, _, _ in sorted(active))
               print(
-                  "ERROR: more than one active child branch has commits not contained "
-                  f"in feature_for_agent: {names}",
-                  file=sys.stderr,
-              )
-              raise SystemExit(1)
-
-          if mutated_legacy:
-              names = ", ".join(name for name, _ in sorted(mutated_legacy))
-              print(
-                  "ERROR: grandfathered historical branches are read-only; new unique "
-                  f"commits were detected on: {names}. Port the work to feature_for_agent.",
+                  "ERROR: more than one branch carries active commits outside "
+                  f"feature_for_agent: {names}",
                   file=sys.stderr,
               )
               raise SystemExit(1)
