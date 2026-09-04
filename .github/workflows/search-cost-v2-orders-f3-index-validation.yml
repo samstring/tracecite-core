@@ -1,0 +1,187 @@
+name: RCAEval Orders F3 Evidence Index Validation
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence-search-cost-v2
+    paths:
+      - .github/workflows/search-cost-v2-orders-f3-index-validation.yml
+
+permissions:
+  contents: read
+
+env:
+  GMI_BASE_URL: https://api.gmi-serving.com/v1
+  PI_SKIP_VERSION_CHECK: "1"
+  PI_TELEMETRY: "0"
+  CASE_ID: re3ss_orders_f3_3
+  ARM: tracecite
+  BENCH_MODEL: ${{ vars.GMI2_MODEL }}
+  BENCH_API_KEY: ${{ secrets.GMI2_API_KEY }}
+  PI_CODING_AGENT_DIR: /tmp/pi-agent-orders-f3-index
+  EVIDENCE_ROOT: /tmp/rcaeval/re3ss_orders_f3_3/tracecite/evidence
+  RESULT_ROOT: /tmp/rcaeval/re3ss_orders_f3_3/tracecite/results
+  TRACECITE_MAX_RETRIEVALS: "100"
+
+jobs:
+  tracecite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies and configure Pi
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BENCH_MODEL"
+          test -n "$BENCH_API_KEY"
+          python -m pip install -e '.[dev,diversity]'
+          python -m pip install --quiet huggingface_hub pandas pyarrow
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          mkdir -p "$PI_CODING_AGENT_DIR" "$RESULT_ROOT" "$EVIDENCE_ROOT"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['BENCH_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model, 'name': model, 'reasoning': False, 'input': ['text'],
+                  'cost': {'input':0,'output':0,'cacheRead':0,'cacheWrite':0},
+                  'contextWindow': 1_000_000, 'maxTokens': 4096,
+                  'compat': {'supportsDeveloperRole':False,'supportsReasoningEffort':False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR'])/'models.json').write_text(json.dumps(payload, indent=2)+'\n')
+          PY
+
+      - name: Prepare neutral RCAEval evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import snapshot_download
+
+          case = os.environ['CASE_ID']
+          src_root = Path('/tmp/rcaeval-source')
+          out = Path(os.environ['EVIDENCE_ROOT'])
+          snapshot_download(repo_id='phamquiluan/RCAEval', repo_type='dataset', allow_patterns=[f'{case}/*'], local_dir=src_root)
+          src = src_root / case
+          metrics = pd.read_parquet(src/'metrics.parquet')
+          logs = pd.read_parquet(src/'logs.parquet')
+          traces_path = src/'traces.parquet'
+          traces = pd.read_parquet(traces_path) if traces_path.is_file() else None
+          onset = int((src/'inject_time.txt').read_text().strip())
+          metrics.to_csv(out/'metrics.csv', index=False)
+          logs.to_json(out/'logs.jsonl', orient='records', lines=True, force_ascii=False)
+          if traces is not None:
+              traces.to_json(out/'traces.jsonl', orient='records', lines=True, force_ascii=False)
+          (out/'incident.txt').write_text(
+              f'System: Sock Shop microservices\nKnown incident onset (Unix seconds): {onset}\nTelemetry covers the normal and faulty window around this onset.\n',
+              encoding='utf-8')
+          files = sorted(p.name for p in out.iterdir() if p.is_file())
+          manifest = {
+              'case_id': case,
+              'system': 'Sock Shop',
+              'files': {f:(out/f).stat().st_size for f in files},
+              'total_bytes': sum((out/f).stat().st_size for f in files),
+              'rows': {'metrics':len(metrics),'logs':len(logs),'traces':len(traces) if traces is not None else 0},
+          }
+          (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+          print(json.dumps(manifest,indent=2))
+          PY
+          if grep -R -n -F "$CASE_ID" "$EVIDENCE_ROOT" --exclude=manifest.json; then
+            echo 'ground truth case id leaked into visible evidence' >&2
+            exit 3
+          fi
+
+      - name: Run TraceCite Pi arm
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULT_ROOT/session"
+          cd "$EVIDENCE_ROOT"
+          export TRACECITE_EVIDENCE_ROOT="$EVIDENCE_ROOT"
+          export TRACECITE_EVIDENCE_FILES="$(find "$EVIDENCE_ROOT" -maxdepth 1 -type f ! -name manifest.json -printf '%f\n' | paste -sd, -)"
+          export TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT_ROOT/tracecite-runtime-evidence-access.jsonl"
+          export TRACECITE_BLOCKED_NATIVE_EVIDENCE_ACTIVITY="$RESULT_ROOT/tracecite-blocked-native-evidence-attempts.jsonl"
+          COMMON_PROMPT="A production incident occurred in a Sock Shop microservice deployment. The supplied telemetry covers the incident window and incident.txt gives the known onset time. Determine the root-cause service and the concrete failure mechanism. Explain the causal chain from root cause to downstream symptoms. Use only supplied evidence and cite exact evidence lines for material claims. Stop when sufficiently supported instead of doing confirmatory searches."
+          start_ns=$(date +%s%N)
+          set +e
+          pi --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" \
+            --thinking off --mode text --print \
+            --session-dir "$RESULT_ROOT/session" \
+            --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" \
+            --tools tracecite_retrieve,tracecite_materialize,tracecite_aggregate \
+            --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" \
+            --no-prompt-templates --no-context-files \
+            --system-prompt "$COMMON_PROMPT All telemetry content must be obtained through TraceCite tools only. Do not use native file access." \
+            "用 TraceCite 调查这个 incident，找出根因服务、具体故障机制和因果链。" \
+            > "$RESULT_ROOT/answer.md" 2> "$RESULT_ROOT/stderr.log"
+          code=$?
+          set -e
+          end_ns=$(date +%s%N)
+          echo "$code" > "$RESULT_ROOT/exit.txt"
+          python - <<PY > "$RESULT_ROOT/wall-seconds.txt"
+          print((${end_ns}-${start_ns})/1e9)
+          PY
+          cat "$RESULT_ROOT/answer.md" || true
+          echo "PI_EXIT=$code"
+
+      - name: Convert session and summarize
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          SESSION="$(find "$RESULT_ROOT/session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          if [[ -n "$SESSION" && -f "$RESULT_ROOT/answer.md" ]]; then
+            python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_session_to_transcript.py" \
+              "$SESSION" "$RESULT_ROOT/answer.md" "$RESULT_ROOT/transcript.jsonl" \
+              --mode pi-tracecite --model "$BENCH_MODEL" || true
+          fi
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['RESULT_ROOT']); transcript=root/'transcript.jsonl'
+          usage={'input_tokens':0,'output_tokens':0,'cache_read_tokens':0,'model_calls':0,'tool_calls':0}
+          if transcript.is_file():
+              for line in transcript.read_text(errors='replace').splitlines():
+                  try:e=json.loads(line)
+                  except:continue
+                  if e.get('type')=='model':
+                      u=e.get('usage') or {}
+                      usage['input_tokens']+=int(u.get('input_tokens') or 0)
+                      usage['output_tokens']+=int(u.get('output_tokens') or 0)
+                      usage['cache_read_tokens']+=int(u.get('cache_read_input_tokens') or u.get('cached_input_tokens') or 0)
+                      usage['model_calls']+=1
+                  elif e.get('type')=='tool': usage['tool_calls']+=1
+          payload={
+              'case_id':os.environ['CASE_ID'],'arm':'tracecite','model':os.environ['BENCH_MODEL'],
+              'exit':(root/'exit.txt').read_text().strip() if (root/'exit.txt').is_file() else None,
+              'wall_seconds':(root/'wall-seconds.txt').read_text().strip() if (root/'wall-seconds.txt').is_file() else None,
+              'usage':usage,
+          }
+          (root/'summary.json').write_text(json.dumps(payload,indent=2,ensure_ascii=False)+'\n')
+          print(json.dumps(payload,indent=2,ensure_ascii=False))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: orders-f3-evidence-index-tracecite
+          path: ${{ env.RESULT_ROOT }}
+          retention-days: 14
