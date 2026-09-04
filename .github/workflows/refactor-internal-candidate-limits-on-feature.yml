@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   migrate:
-    # One-shot migration; this trigger commit is removed with the workflow after validation.
+    # One-shot migration; retry after all public caller sites were removed.
     if: "${{ github.event.head_commit.message == 'chore: run internal candidate limit migration' }}"
     runs-on: ubuntu-latest
     steps:
