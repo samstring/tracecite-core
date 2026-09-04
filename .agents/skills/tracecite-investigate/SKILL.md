@@ -31,7 +31,7 @@ Think of `tracecite_run` as a controlled evidence shell, not arbitrary host bash
 ```text
 Agent program
     ↓
-fixed QuestionSourceView / SourceVersion
+fixed SessionSourceView / SourceVersion
     ↓
 raw search hit
     ↓
@@ -201,19 +201,21 @@ There is no hidden candidate-count truncation in ordinary Evidence Shell search.
 - the complete final matched Record set fits the configured budget; or
 - `too_broad` and the Agent must refine.
 
-## SourceVersion / QuestionSourceView
+## SourceVersion / SessionSourceView
 
-All mechanical search operations belonging to one user question use one fixed immutable `QuestionSourceView`.
+A RetrievalSession is the source-stability boundary. The first time the current RetrievalSession accesses a logical source, TraceCite binds one fixed immutable `SessionSourceView` / SourceVersion.
 
-The Agent must not request a source refresh in the middle of the same question merely to obtain newer live bytes.
+For the rest of that RetrievalSession, the Agent must treat the bound SourceVersion as fixed. If the original mutable/live path changes, TraceCite does not silently refresh, resnapshot, rehash, or recut it. A conversation that uses one RetrievalSession therefore keeps one stable evidence world.
 
 Source behavior is Host/User policy:
 
 - static source: SHA/metadata are established once and reused while the fingerprint is unchanged;
-- mutable file: TraceCite creates an immutable snapshot when needed and reuses the previous snapshot + SHA when the source fingerprint is unchanged;
-- live source: TraceCite prefers cooperative LiveCut and immutable segments; without writer cooperation it may capture only newly appended complete bytes after the first snapshot.
+- mutable file: TraceCite creates an immutable snapshot when a new version is needed;
+- live source: the session's first access freezes the current live view, preferring cooperative LiveCut and immutable segments; without writer cooperation TraceCite may use verified append-only capture mechanics.
 
-A later user question may bind a newer SourceVersion if the source changed. If the source fingerprint did not change, the previous immutable snapshot/version and SHA may be reused without another full copy/hash.
+When a new RetrievalSession first accesses the same source, TraceCite checks the current fingerprint. If it is unchanged, the already verified snapshot/version + SHA are reused without another full copy/hash. If the source changed, the new session may bind a newer SourceVersion.
+
+Do not ask TraceCite to refresh a source in the middle of the same RetrievalSession merely to obtain newer live bytes. A newer version requires a new RetrievalSession, or a future explicitly exposed refresh-source operation. Silent refresh is forbidden.
 
 The Agent does not control `source_mode`, live-cut behavior, snapshot refresh, or SHA policy unless the host explicitly exposes such a user setting outside Agent tool arguments.
 
@@ -237,7 +239,8 @@ RetrievalSession is mechanical memory only. It may record:
 - operation history;
 - new vs repeated Evidence;
 - replay facts;
-- no-match facts.
+- no-match facts;
+- the stable source-version binding used by the session.
 
 If a later query matches already exposed Evidence, TraceCite may suppress duplicate Evidence bodies and return lightweight repeated-Evidence identities instead.
 
