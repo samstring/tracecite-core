@@ -33,6 +33,7 @@ PROVIDER_PATTERNS = (
 
 TRACECITE_TOOL_NAMES = frozenset(
     {
+        "tracecite_run",
         "tracecite_retrieve",
         "tracecite_materialize",
         "tracecite_replay",
@@ -45,6 +46,7 @@ TRACECITE_TOOL_NAMES = frozenset(
 )
 TRACECITE_NOVELTY_TOOL_NAMES = frozenset(
     {
+        "tracecite_run",
         "tracecite_retrieve",
         "tracecite_materialize",
         "tracecite_replay",
@@ -70,8 +72,12 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _events(path: Path | None) -> list[dict[str, Any]]:
     if path is None or not path.is_file():
         return []
+    return _parse_jsonl_events(path.read_text(encoding="utf-8", errors="replace"))
+
+
+def _parse_jsonl_events(text: str) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in text.splitlines():
         if not line.strip():
             continue
         try:
@@ -90,51 +96,95 @@ def classify_provider_contamination(text: str) -> str | None:
     return None
 
 
+def _assistant_error_payload(event: Mapping[str, Any]) -> tuple[Mapping[str, Any], str] | None:
+    if str(event.get("type") or "").lower() != "message":
+        return None
+    message = event.get("message")
+    if not isinstance(message, Mapping) or str(message.get("role") or "") != "assistant":
+        return None
+    error_fields: dict[str, Any] = {}
+    for key in ("error", "errorMessage", "error_message"):
+        value = message.get(key)
+        if value not in (None, "", [], {}):
+            error_fields[key] = value
+    stop_reason = str(message.get("stopReason") or "")
+    raw_stop_reason = str(message.get("rawStopReason") or "")
+    error_stop = "error" in stop_reason.lower() or "error" in raw_stop_reason.lower()
+    if not error_fields and not error_stop:
+        return None
+    payload: dict[str, Any] = dict(error_fields)
+    if stop_reason:
+        payload["stopReason"] = stop_reason
+    if raw_stop_reason:
+        payload["rawStopReason"] = raw_stop_reason
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return message, text
+
+
+def _successful_assistant_child(event: Mapping[str, Any], parent_id: str) -> bool:
+    if str(event.get("type") or "").lower() != "message":
+        return False
+    if str(event.get("parentId") or "") != parent_id:
+        return False
+    message = event.get("message")
+    if not isinstance(message, Mapping) or str(message.get("role") or "") != "assistant":
+        return False
+    stop_reason = str(message.get("stopReason") or "").lower()
+    raw_stop_reason = str(message.get("rawStopReason") or "").lower()
+    if "error" in stop_reason or "error" in raw_stop_reason:
+        return False
+    if any(message.get(key) not in (None, "", [], {}) for key in ("error", "errorMessage", "error_message")):
+        return False
+    return message.get("content") not in (None, "", [], {})
+
+
+def _provider_session_incidents(session_text: str) -> list[dict[str, Any]]:
+    """Return structured provider failures and whether Pi recovered from each one.
+
+    Pi records a retry recovery as a later successful assistant message whose
+    ``parentId`` points at the assistant error event. A transient, recovered
+    provider failure is still important observability, but it should not make a
+    completed run invalid merely because the retry is preserved in session
+    history.
+    """
+
+    events = _parse_jsonl_events(session_text)
+    incidents: list[dict[str, Any]] = []
+    for index, event in enumerate(events):
+        parsed = _assistant_error_payload(event)
+        if parsed is None:
+            continue
+        _message, diagnostic = parsed
+        kind = classify_provider_contamination(diagnostic)
+        if kind is None:
+            continue
+        event_id = str(event.get("id") or "")
+        recovered = bool(event_id) and any(
+            _successful_assistant_child(candidate, event_id)
+            for candidate in events[index + 1 :]
+        )
+        incidents.append(
+            {
+                "kind": kind,
+                "recovered": recovered,
+                "event_id": event_id or None,
+            }
+        )
+    return incidents
+
+
 def _session_error_diagnostics(session_text: str) -> str:
-    """Extract provider/host diagnostics without scanning Evidence or answer text."""
+    """Extract non-Evidence host diagnostics from session history."""
 
     diagnostics: list[str] = []
-    for raw_line in session_text.splitlines():
-        if not raw_line.strip():
-            continue
-        try:
-            event = json.loads(raw_line)
-        except Exception:
-            continue
-        if not isinstance(event, Mapping):
-            continue
-
+    for event in _parse_jsonl_events(session_text):
         event_type = str(event.get("type") or "").lower()
         if "error" in event_type:
             diagnostics.append(json.dumps(event, ensure_ascii=False, sort_keys=True))
             continue
-        if event_type != "message":
-            continue
-
-        message = event.get("message")
-        if not isinstance(message, Mapping) or str(message.get("role") or "") != "assistant":
-            continue
-
-        error_fields: dict[str, Any] = {}
-        for key in ("error", "errorMessage", "error_message"):
-            value = message.get(key)
-            if value not in (None, "", [], {}):
-                error_fields[key] = value
-
-        stop_reason = str(message.get("stopReason") or "")
-        raw_stop_reason = str(message.get("rawStopReason") or "")
-        error_stop = "error" in stop_reason.lower() or "error" in raw_stop_reason.lower()
-        if not error_fields and not error_stop:
-            continue
-
-        payload: dict[str, Any] = dict(error_fields)
-        if stop_reason:
-            payload["stopReason"] = stop_reason
-        if raw_stop_reason:
-            payload["rawStopReason"] = raw_stop_reason
-        if error_stop and message.get("content") not in (None, "", [], {}):
-            payload["content"] = message.get("content")
-        diagnostics.append(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str))
+        parsed = _assistant_error_payload(event)
+        if parsed is not None:
+            diagnostics.append(parsed[1])
     return "\n".join(diagnostics)
 
 
@@ -154,8 +204,6 @@ def _tracecite_shape(event: Mapping[str, Any]) -> tuple[bool, bool, bool]:
 
     status = str(payload.get("status") or "")
     if name not in TRACECITE_NOVELTY_TOOL_NAMES:
-        # aggregate/traverse/verify are TraceCite Evidence operations but do not
-        # participate in RetrievalSession novelty accounting.
         return True, status in {"ok", "partial", "empty"}, False
 
     coverage = payload.get("coverage") if isinstance(payload.get("coverage"), Mapping) else {}
@@ -235,8 +283,6 @@ def _metric(mapping: Mapping[str, Any], key: str) -> int | None:
 
 
 def token_usage(score: Mapping[str, Any]) -> dict[str, Any]:
-    """Expose the token numbers used for the Native vs TraceCite headline."""
-
     context = score.get("context_cost") or {}
     if not isinstance(context, Mapping):
         context = {}
@@ -263,13 +309,17 @@ def build_run_result(
     transcript_text: str = "",
     transcript_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    # Transcript/final-answer text may legitimately contain HTTP-like numbers,
-    # timeout words, or Evidence line numbers such as 429. Validity must be
-    # derived only from host/provider diagnostics, never from task content.
     _ = transcript_text
-    diagnostics = "\n".join((stderr, _session_error_diagnostics(session_text)))
-    provider_contamination = classify_provider_contamination(diagnostics)
-    timed_out = exit_code == 124 or re.search(r"\b(?:timed out|timeout)\b", diagnostics, re.I) is not None
+    incidents = _provider_session_incidents(session_text)
+    unresolved_incidents = [item for item in incidents if not item["recovered"]]
+    stderr_provider = classify_provider_contamination(stderr)
+    provider_contamination = stderr_provider or (
+        str(unresolved_incidents[0]["kind"]) if unresolved_incidents else None
+    )
+
+    # Agent runner timeouts surface via exit=124/stderr. Do not interpret a
+    # recovered provider 504 preserved in session history as an Agent timeout.
+    timed_out = exit_code == 124 or re.search(r"\b(?:timed out|timeout)\b", stderr, re.I) is not None
     if provider_contamination is not None:
         validity_reason = provider_contamination
     elif timed_out:
@@ -280,6 +330,8 @@ def build_run_result(
         validity_reason = "clean"
     valid = exit_code == 0 and provider_contamination is None and not timed_out
     events = transcript_events or []
+    incident_counts = Counter(str(item["kind"]) for item in incidents)
+    recovered_counts = Counter(str(item["kind"]) for item in incidents if item["recovered"])
     return {
         "schema_version": 2,
         "task_result": {
@@ -297,6 +349,8 @@ def build_run_result(
             "reason": validity_reason,
             "exit_code": exit_code,
             "provider_contamination": provider_contamination,
+            "provider_incidents": dict(sorted(incident_counts.items())),
+            "provider_recovered_incidents": dict(sorted(recovered_counts.items())),
             "timeout": timed_out,
         },
         "trajectory": trajectory_summary(events),
