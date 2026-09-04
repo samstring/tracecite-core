@@ -4,16 +4,38 @@ from tracecite.runtime.schema import AgentResult
 
 
 def test_retrieval_operations_cannot_claim_semantic_support() -> None:
-    for operation in ("probe", "search", "survey", "probe_format", "sample", "expand"):
+    for operation in (
+        "probe",
+        "search",
+        "survey",
+        "probe_format",
+        "sample",
+        "expand",
+        "evidence_shell",
+    ):
         result = AgentResult(operation=operation, status="ok", outcome="supported")
         assert result.outcome == "not_assessed"
         assert result.to_dict()["outcome"] == "not_assessed"
 
 
 def test_retrieval_operations_cannot_claim_semantic_contradiction() -> None:
-    for operation in ("search", "expand"):
+    for operation in ("search", "expand", "evidence_shell"):
         result = AgentResult(operation=operation, status="ok", outcome="contradicted")
         assert result.outcome == "not_assessed"
+
+
+def test_evidence_shell_too_broad_is_a_valid_transport_status() -> None:
+    result = AgentResult(
+        operation="evidence_shell",
+        status="too_broad",
+        outcome="unknown",
+        evidence=[],
+        data={"reason": "MATCHED_EVIDENCE_BUDGET_EXCEEDED"},
+    )
+
+    assert result.status == "too_broad"
+    assert result.outcome == "unknown"
+    assert result.to_dict()["status"] == "too_broad"
 
 
 def test_assertion_bearing_scenario_may_keep_decisive_outcome() -> None:
