@@ -18,6 +18,10 @@ from .evidence_routing import (
     EvidenceRoute, EvidenceRoutingPolicy, RoutingDecision, decide_route,
     estimate_line_addressable_chars, refine_route_after_result,
 )
+from .evidence_shell import (
+    DEFAULT_MAX_EVIDENCE_BYTES, DEFAULT_MAX_EVIDENCE_TOKENS,
+    EvidenceShellPolicy, EvidenceShellRequest, run_evidence_shell,
+)
 from .retrieval_session import (
     RetrievalOperation, RetrievalSessionState, RetrievalSessionStore,
 )
@@ -41,16 +45,17 @@ from . import finding_validation as _finding_validation
 __all__ = [
     "AcquisitionEndKind", "AcquisitionEndReason", "AggregateOperation", "AggregateRequest",
     "CanonicalTraversalResult", "CapabilityError", "CapabilitySpec", "CoverageStatus",
+    "DEFAULT_MAX_EVIDENCE_BYTES", "DEFAULT_MAX_EVIDENCE_TOKENS",
     "EvidenceDelta", "EvidenceGap", "EvidenceIdentity", "EvidenceProgress",
     "EvidenceProgressTracker", "EvidenceRequest", "EvidenceRoute", "EvidenceRoutingPolicy",
-    "EvidenceTraversal", "ProviderTarget", "QueryTarget", "RangeTarget", "RetrievalOperation",
-    "RetrievalResult", "RetrievalSessionState", "RetrievalSessionStore", "RetrieveTarget",
-    "RoutingDecision", "SourceTarget", "SourceVersion", "SourceVersionKind", "TraversalFrontier",
-    "TraversalItem", "TraversalLimits", "TraversalStats", "TraversalStep", "aggregate",
-    "decide_route", "estimate_line_addressable_chars", "execute_capability", "file_source_version",
-    "get_capability", "list_capabilities", "BudgetExhausted", "BudgetPolicy", "InvestigationError",
-    "InvestigationState", "InvestigationStore", "create_investigation", "load_investigation",
-    "materialize", "pointer_source_key",
-    "refine_route_after_result", "register_capability", "replay", "retrieve", "traverse",
-    "traverse_evidence", "verify",
+    "EvidenceShellPolicy", "EvidenceShellRequest", "EvidenceTraversal", "ProviderTarget",
+    "QueryTarget", "RangeTarget", "RetrievalOperation", "RetrievalResult", "RetrievalSessionState",
+    "RetrievalSessionStore", "RetrieveTarget", "RoutingDecision", "SourceTarget", "SourceVersion",
+    "SourceVersionKind", "TraversalFrontier", "TraversalItem", "TraversalLimits", "TraversalStats",
+    "TraversalStep", "aggregate", "decide_route", "estimate_line_addressable_chars",
+    "execute_capability", "file_source_version", "get_capability", "list_capabilities",
+    "BudgetExhausted", "BudgetPolicy", "InvestigationError", "InvestigationState",
+    "InvestigationStore", "create_investigation", "load_investigation", "materialize",
+    "pointer_source_key", "refine_route_after_result", "register_capability", "replay", "retrieve",
+    "run_evidence_shell", "traverse", "traverse_evidence", "verify",
 ]
