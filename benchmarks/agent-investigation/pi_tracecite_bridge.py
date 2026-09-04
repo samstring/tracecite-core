@@ -184,7 +184,6 @@ def _retrieve(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[
             args.query,
             regex=bool(args.regex),
             snapshot=True,
-            max_evidence=args.max_evidence,
         )
     else:
         target = SourceTarget(
@@ -362,7 +361,6 @@ def build_parser() -> argparse.ArgumentParser:
     retrieve_parser.add_argument("file")
     retrieve_parser.add_argument("--query", default="")
     retrieve_parser.add_argument("--regex", action="store_true")
-    retrieve_parser.add_argument("--max-evidence", type=int, default=20)
     retrieve_parser.add_argument("--glob", default="*")
     retrieve_parser.add_argument("--recursive", action="store_true")
 

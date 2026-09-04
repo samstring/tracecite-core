@@ -43,7 +43,7 @@ class EvidenceRoutingPolicy:
     a conservative aggregate evidence-output budget, not a source-size product
     limit.
 
-    Investigation transport is deliberately tighter than ordinary bounded
+    Investigation transport is deliberately tighter than ordinary progressive
     search because deep/high-cardinality exploration repeats every visible
     result in subsequent model turns. Canonical evidence remains recoverable;
     only the Agent projection is narrowed.
@@ -54,13 +54,13 @@ class EvidenceRoutingPolicy:
     direct_context_fraction: float = 0.12
     fallback_direct_chars: int = 32_768
     max_direct_chars: int = 96_000
-    bounded_max_evidence: int = 30
-    bounded_max_line_chars: int = 1_024
-    focused_max_evidence: int = 20
-    focused_max_line_chars: int = 768
-    bounded_match_records: int = 64
-    focused_match_records: int = 256
-    focused_after_executions: int = 4
+    progressive_max_candidates: int = 30
+    progressive_max_line_chars: int = 1_024
+    deep_progressive_max_candidates: int = 20
+    deep_progressive_max_line_chars: int = 768
+    progressive_match_records: int = 64
+    deep_progressive_match_records: int = 256
+    deep_progressive_after_executions: int = 4
     repeated_evidence_ratio: float = 0.50
     survey_max_templates: int = 16
     survey_samples_per_template: int = 1
@@ -83,13 +83,13 @@ class EvidenceRoutingPolicy:
         for name in (
             "fallback_direct_chars",
             "max_direct_chars",
-            "bounded_max_evidence",
-            "bounded_max_line_chars",
-            "focused_max_evidence",
-            "focused_max_line_chars",
-            "bounded_match_records",
-            "focused_match_records",
-            "focused_after_executions",
+            "progressive_max_candidates",
+            "progressive_max_line_chars",
+            "deep_progressive_max_candidates",
+            "deep_progressive_max_line_chars",
+            "progressive_match_records",
+            "deep_progressive_match_records",
+            "deep_progressive_after_executions",
             "survey_max_templates",
             "survey_samples_per_template",
         ):
@@ -98,12 +98,12 @@ class EvidenceRoutingPolicy:
                 raise ValueError(f"{name} must be a positive integer")
         if self.max_direct_chars < self.fallback_direct_chars:
             raise ValueError("max_direct_chars must be >= fallback_direct_chars")
-        if self.focused_max_evidence > self.bounded_max_evidence:
-            raise ValueError("focused_max_evidence must be <= bounded_max_evidence")
-        if self.focused_max_line_chars > self.bounded_max_line_chars:
-            raise ValueError("focused_max_line_chars must be <= bounded_max_line_chars")
-        if self.focused_match_records < self.bounded_match_records:
-            raise ValueError("focused_match_records must be >= bounded_match_records")
+        if self.deep_progressive_max_candidates > self.progressive_max_candidates:
+            raise ValueError("deep_progressive_max_candidates must be <= progressive_max_candidates")
+        if self.deep_progressive_max_line_chars > self.progressive_max_line_chars:
+            raise ValueError("deep_progressive_max_line_chars must be <= progressive_max_line_chars")
+        if self.deep_progressive_match_records < self.progressive_match_records:
+            raise ValueError("deep_progressive_match_records must be >= progressive_match_records")
         if not (0.0 <= float(self.repeated_evidence_ratio) <= 1.0):
             raise ValueError("repeated_evidence_ratio must be in [0, 1]")
 
@@ -368,9 +368,9 @@ def decide_route(
     escalation: list[str] = []
     if hist.source_count > 1:
         escalation.append("multiple_sources")
-    if hist.max_match_records >= policy.focused_match_records:
+    if hist.max_match_records >= policy.deep_progressive_match_records:
         escalation.append("high_match_cardinality")
-    if hist.executions >= policy.focused_after_executions:
+    if hist.executions >= policy.deep_progressive_after_executions:
         escalation.append("exploration_depth")
     if (
         hist.executions >= 2
@@ -378,8 +378,8 @@ def decide_route(
     ):
         escalation.append("repeated_evidence")
     reasons: list[str] = list(escalation)
-    if hist.max_match_records >= policy.bounded_match_records:
-        reasons.append("match_cardinality_requires_bounds")
+    if hist.max_match_records >= policy.progressive_match_records:
+        reasons.append("match_cardinality_requires_progressive")
     if source_seen:
         reasons.append("source_already_seen")
     if hist.executions:
@@ -391,7 +391,7 @@ def decide_route(
     elif direct_chars is None or direct_chars > direct_budget:
         reasons.append("direct_output_exceeds_budget")
     if not reasons:
-        reasons.append("bounded_default")
+        reasons.append("progressive_default")
     return RoutingDecision(
         route=EvidenceRoute.PROGRESSIVE,
         reasons=tuple(reasons),
@@ -423,7 +423,7 @@ def refine_route_after_result(
     truncated = bool(coverage.get("evidence_truncated"))
     next_route: EvidenceRoute | None = None
     if decision.route == EvidenceRoute.DIRECT and (
-        truncated or match_records >= policy.bounded_match_records
+        truncated or match_records >= policy.progressive_match_records
     ):
         next_route = EvidenceRoute.PROGRESSIVE
     if next_route is None or next_route == decision.route:

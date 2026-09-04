@@ -48,8 +48,8 @@ from .investigation import InvestigationStore
 
 
 _TRANSPORT_ONLY_OPERATIONS = frozenset({"probe", "sample", "search", "expand", "survey", "retrieve"})
-_BOUNDED_SOURCE_SAMPLE_RECORDS = 64
-_BOUNDED_SOURCE_SAMPLE_CHARS = 12_000
+_PROGRESSIVE_SOURCE_SAMPLE_RECORDS = 64
+_PROGRESSIVE_SOURCE_SAMPLE_CHARS = 12_000
 
 
 def _history(request: EvidenceRequest) -> tuple[Mapping[str, object], ...]:
@@ -285,7 +285,7 @@ def _progressive_source(
     request: EvidenceRequest,
     decision: RoutingDecision,
 ) -> RetrievalResult:
-    """Return deterministic representative context for a bounded source inspection.
+    """Return deterministic representative context for a progressive source inspection.
 
     A metadata-only probe leaves the Agent blind on sources just above the
     direct-context budget. Uniform bounded sampling exposes source structure and
@@ -304,8 +304,8 @@ def _progressive_source(
     result = _acquisition.sample(
         path,
         strategy="uniform",
-        count=_BOUNDED_SOURCE_SAMPLE_RECORDS,
-        max_chars=_BOUNDED_SOURCE_SAMPLE_CHARS,
+        count=_PROGRESSIVE_SOURCE_SAMPLE_RECORDS,
+        max_chars=_PROGRESSIVE_SOURCE_SAMPLE_CHARS,
         snapshot=False,
         segmenter=target.segmenter,
         investigation_path=request.investigation_path,
@@ -366,46 +366,25 @@ def _investigate_source(
     return _with_routing(resolved, decision)
 
 
-def _progressive_query(
+def _progressive_query_limits(
     request: EvidenceRequest,
     policy: EvidenceRoutingPolicy,
     *,
     decision: RoutingDecision,
-) -> EvidenceRequest:
+) -> tuple[int, int]:
+    """Return private candidate/body limits for one PROGRESSIVE query."""
+
     assert isinstance(request.target, QueryTarget)
-    target = request.target
     deep_progressive = any(
         reason in {"high_match_cardinality", "exploration_depth", "repeated_evidence", "multiple_sources"}
         for reason in decision.reasons
     )
     if deep_progressive:
-        evidence_cap = policy.focused_max_evidence
-        line_cap = policy.focused_max_line_chars
-    else:
-        evidence_cap = policy.bounded_max_evidence
-        line_cap = policy.bounded_max_line_chars
-    max_evidence = evidence_cap if target.max_evidence is None else min(target.max_evidence, evidence_cap)
-    max_line_chars = line_cap if target.max_line_chars is None else min(target.max_line_chars, line_cap)
-    return EvidenceRequest(
-        QueryTarget(
-            target.source,
-            target.query,
-            regex=target.regex,
-            snapshot=target.snapshot,
-            segmenter=target.segmenter,
-            last=target.last,
-            since=target.since,
-            until=target.until,
-            fold=target.fold,
-            max_evidence=max_evidence,
-            max_line_chars=max_line_chars,
-        ),
-        investigation_path=request.investigation_path,
-        hypothesis_id=request.hypothesis_id,
-        test_id=request.test_id,
-        cache=request.cache,
-        providers=request.providers,
-    )
+        return (
+            policy.deep_progressive_max_candidates,
+            policy.deep_progressive_max_line_chars,
+        )
+    return (policy.progressive_max_candidates, policy.progressive_max_line_chars)
 
 
 def _attach_search_fidelity(
@@ -613,9 +592,17 @@ def retrieve(
         return _direct_query(request, decision, policy)
 
     routed_request = request
+    query_limits: tuple[int, int] | None = None
     if isinstance(request.target, QueryTarget):
-        routed_request = _progressive_query(request, policy, decision=decision)
-    result = _correct_range_novelty(_retrieve(routed_request), routed_request)
+        query_limits = _progressive_query_limits(request, policy, decision=decision)
+    result = _correct_range_novelty(
+        _retrieve(
+            routed_request,
+            _max_candidates=query_limits[0] if query_limits is not None else None,
+            _max_line_chars=query_limits[1] if query_limits is not None else None,
+        ),
+        routed_request,
+    )
     result = _attach_search_fidelity(result, routed_request)
     result = _attach_identity_verification(result, routed_request)
     decision = refine_route_after_result(decision, result.canonical_result, policy=policy)

@@ -681,8 +681,6 @@ class CanonicalRuntime(base.BenchmarkToolRuntime):
                     query,
                     regex=bool(args.get("regex")),
                     snapshot=False,
-                    max_evidence=None,
-                    max_line_chars=None,
                 ),
                 investigation_path=self._investigation_path,
                 cache=True,

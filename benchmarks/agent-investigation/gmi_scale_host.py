@@ -509,8 +509,6 @@ class ScaleRuntime(base.BenchmarkToolRuntime):
             regex=bool(args.get("regex")),
             snapshot=False,
             segmenter="auto",
-            max_evidence=None,
-            max_line_chars=None,
             cache=True,
         )
         if not isinstance(payload, Mapping):

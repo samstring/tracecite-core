@@ -252,8 +252,8 @@ def test_scale_search_has_no_benchmark_specific_caps(tmp_path: Path) -> None:
         assert captured["path"] == evidence
         assert captured["query"] == "one"
         assert captured["snapshot"] is False
-        assert captured["max_evidence"] is None
-        assert captured["max_line_chars"] is None
+        assert "max_evidence" not in captured
+        assert "max_line_chars" not in captured
         assert captured["cache"] is True
     finally:
         _restore_scale_host_globals(module)

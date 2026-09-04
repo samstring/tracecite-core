@@ -148,7 +148,7 @@ def test_search_bounds_inline_evidence_but_preserves_full_artifact(tmp_path: Pat
         source,
         "target",
         output_path=tmp_path / "evidence.log",
-        max_evidence=1_000,
+        max_candidates=1_000,
     )
 
     assert result["coverage"]["match_records"] == 105

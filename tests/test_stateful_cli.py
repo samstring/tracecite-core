@@ -40,7 +40,7 @@ def _search_payload(count: int = 1, *, label_suffix: str = "") -> dict[str, obje
         "verification": {},
         "warnings": [],
         "next_queries": [],
-        "data": {"query": "target", "routing": {"route": "bounded"}},
+        "data": {"query": "target", "routing": {"route": "progressive"}},
     }
 
 
@@ -68,7 +68,7 @@ def _expand_payload() -> dict[str, object]:
         "verification": {},
         "warnings": [],
         "next_queries": [],
-        "data": {"routing": {"route": "bounded"}},
+        "data": {"routing": {"route": "progressive"}},
     }
 
 
@@ -109,10 +109,6 @@ def test_public_search_routes_through_typed_retrieve(monkeypatch, capsys) -> Non
             "--segmenter",
             "rawtext",
             "--fold",
-            "--max-evidence",
-            "7",
-            "--max-line-chars",
-            "99",
             "--no-cache",
         ]
     ) == 0
@@ -127,12 +123,12 @@ def test_public_search_routes_through_typed_retrieve(monkeypatch, capsys) -> Non
     assert request.target.snapshot is False
     assert request.target.segmenter == "rawtext"
     assert request.target.fold is True
-    assert request.target.max_evidence == 7
-    assert request.target.max_line_chars == 99
+    assert "max_evidence" not in request.target.__dataclass_fields__
+    assert "max_line_chars" not in request.target.__dataclass_fields__
     assert request.cache is False
     payload = json.loads(capsys.readouterr().out)
     assert payload["outcome"] == "not_assessed"
-    assert payload["data"]["routing"]["route"] == "bounded"
+    assert payload["data"]["routing"]["route"] == "progressive"
 
 
 def test_public_expand_routes_through_typed_retrieve(monkeypatch, capsys) -> None:

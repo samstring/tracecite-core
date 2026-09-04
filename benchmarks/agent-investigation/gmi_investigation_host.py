@@ -209,8 +209,6 @@ class InvestigationRuntime(canonical.CanonicalRuntime):
             regex=bool(args.get("regex")),
             snapshot=True,
             segmenter="auto",
-            max_evidence=None,
-            max_line_chars=None,
             cache=True,
             **self._links(args),
         )

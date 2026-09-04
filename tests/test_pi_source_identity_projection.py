@@ -63,8 +63,6 @@ def test_query_result_preserves_original_file_for_follow_up_calls(tmp_path: Path
         str(source),
         "--query",
         "goroutine",
-        "--max-evidence",
-        "3",
     )
     rows = payload.get("evidence") or []
     row = next(

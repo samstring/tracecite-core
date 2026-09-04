@@ -198,31 +198,23 @@ def test_search_compact_budget_trims_structurally_and_keeps_recovery(
     ]
 
 
-def test_search_agent_limits_are_configurable(monkeypatch, capsys) -> None:
-    calls: dict[str, object] = {}
-
-    def fake_search(*args, **kwargs):
-        calls.update(kwargs)
-        return _search_payload()
-
-    monkeypatch.setattr(cli, "search", fake_search)
-
-    assert cli.main(
-        [
-            "search",
-            "events.log",
-            "matching",
-            "--max-evidence",
-            "45",
-            "--max-line-chars",
-            "2048",
-        ]
-    ) == 0
-    assert calls["max_evidence"] == 45
-    assert calls["max_line_chars"] == 2048
+def test_search_does_not_expose_candidate_or_line_budget_flags() -> None:
+    parser = cli.build_parser(prog="tracecite")
+    search_parser = next(
+        action.choices["search"]
+        for action in parser._actions
+        if getattr(action, "choices", None) and "search" in action.choices
+    )
+    option_strings = {
+        option
+        for action in search_parser._actions
+        for option in action.option_strings
+    }
+    assert "--max-evidence" not in option_strings
+    assert "--max-line-chars" not in option_strings
 
 
-def test_search_agent_limits_use_updated_defaults(monkeypatch, capsys) -> None:
+def test_search_default_call_does_not_forward_candidate_or_line_budget(monkeypatch, capsys) -> None:
     calls: dict[str, object] = {}
 
     def fake_search(*args, **kwargs):
@@ -232,8 +224,8 @@ def test_search_agent_limits_use_updated_defaults(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "search", fake_search)
 
     assert cli.main(["search", "events.log", "matching"]) == 0
-    assert calls["max_evidence"] == cli.DEFAULT_AGENT_MAX_EVIDENCE
-    assert calls["max_line_chars"] == cli.DEFAULT_FILTER_MAX_LINE_CHARS
+    assert "max_evidence" not in calls
+    assert "max_line_chars" not in calls
 
 
 def test_search_compact_keeps_full_identity_when_sources_are_not_shared() -> None:

@@ -119,12 +119,11 @@ export default function traceciteTools(pi: ExtensionAPI) {
       file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }),
       query: Type.Optional(Type.String()),
       regex: Type.Optional(Type.Boolean()),
-      max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
       glob: Type.Optional(Type.String()),
       recursive: Type.Optional(Type.Boolean()),
     }),
     async execute(_id, p, signal, _update, ctx) {
-      const args = ["retrieve", p.file, "--max-evidence", String(p.max_evidence ?? 20)];
+      const args = ["retrieve", p.file];
       if (p.query) args.push("--query", p.query);
       if (p.regex) args.push("--regex");
       if (p.glob) args.push("--glob", p.glob);
@@ -235,10 +234,9 @@ export default function traceciteTools(pi: ExtensionAPI) {
       file: Type.String(),
       query: Type.String(),
       regex: Type.Optional(Type.Boolean()),
-      max_evidence: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
     }),
     async execute(_id, p, signal, _update, ctx) {
-      const args = ["retrieve", p.file, "--query", p.query, "--max-evidence", String(p.max_evidence ?? 20)];
+      const args = ["retrieve", p.file, "--query", p.query];
       if (p.regex) args.push("--regex");
       return output(await bridge(args, ctx.cwd, signal), { operation: "retrieve", compatibility_alias: "tracecite_search" });
     },

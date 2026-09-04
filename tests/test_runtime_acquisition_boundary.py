@@ -30,3 +30,4 @@ def test_acquisition_module_owns_search_implementation() -> None:
     assert "def search(" in text
     assert "def probe(" in text
     assert "def expand(" in text
+

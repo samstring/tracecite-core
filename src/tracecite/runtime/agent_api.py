@@ -58,8 +58,6 @@ class QueryTarget:
     since: str | None = None
     until: str | None = None
     fold: bool = False
-    max_evidence: int | None = None
-    max_line_chars: int | None = None
 
     def __post_init__(self) -> None:
         if not str(self.query or ""):
@@ -439,8 +437,17 @@ def _retrieve_provider(request: EvidenceRequest, tracker: EvidenceProgressTracke
     )
 
 
-def retrieve(request: EvidenceRequest) -> RetrievalResult:
-    """Execute one canonical evidence acquisition request."""
+def retrieve(
+    request: EvidenceRequest,
+    *,
+    _max_candidates: int | None = None,
+    _max_line_chars: int | None = None,
+) -> RetrievalResult:
+    """Execute one canonical evidence acquisition request.
+
+    Underscored limits are Runtime transport details used only by the adaptive
+    PROGRESSIVE contract. They are deliberately absent from ``QueryTarget``.
+    """
 
     if not isinstance(request, EvidenceRequest):
         raise TypeError("retrieve requires EvidenceRequest")
@@ -483,8 +490,8 @@ def retrieve(request: EvidenceRequest) -> RetrievalResult:
             since=target.since,
             until=target.until,
             fold=target.fold,
-            max_evidence=target.max_evidence,
-            max_line_chars=target.max_line_chars,
+            max_candidates=_max_candidates,
+            max_line_chars=_max_line_chars,
             investigation_path=request.investigation_path,
             hypothesis_id=request.hypothesis_id,
             test_id=request.test_id,

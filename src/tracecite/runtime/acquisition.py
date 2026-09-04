@@ -513,7 +513,7 @@ def search(
     since: Optional[str] = None,
     until: Optional[str] = None,
     fold: bool = False,
-    max_evidence: Optional[int] = None,
+    max_candidates: Optional[int] = None,
     max_line_chars: Optional[int] = None,
     investigation_path: Optional[Union[str, Path]] = None,
     hypothesis_id: Optional[str] = None,
@@ -532,13 +532,13 @@ def search(
         "since": since,
         "until": until,
         "fold": fold,
-        "max_evidence": max_evidence,
+        "max_candidates": max_candidates,
         "max_line_chars": max_line_chars,
     }
-    evidence_limit = (
+    candidate_limit = (
         MAX_RESULT_EVIDENCE
-        if max_evidence is None
-        else min(MAX_RESULT_EVIDENCE, max(1, int(max_evidence)))
+        if max_candidates is None
+        else min(MAX_RESULT_EVIDENCE, max(1, int(max_candidates)))
     )
     try:
         source = Path(input_path).expanduser().resolve()
@@ -553,7 +553,7 @@ def search(
                 # Search may return any number of pointers up to the public
                 # result bound. Reserve that bound before scanning so a hard
                 # pointer policy can never be exceeded after finalization.
-                "recorded_evidence_pointers": evidence_limit,
+                "recorded_evidence_pointers": candidate_limit,
             },
             cache_enabled=cache,
             cache_safe=cache_safe,
@@ -633,7 +633,7 @@ def search(
         if result.records_path and result.records_path.is_file():
             with result.records_path.open("r", encoding="utf-8") as handle:
                 for line in handle:
-                    if len(evidence) >= evidence_limit:
+                    if len(evidence) >= candidate_limit:
                         break
                     row = json.loads(line)
                     meta = row.get("metadata") or {}

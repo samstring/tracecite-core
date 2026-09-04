@@ -54,6 +54,11 @@ def test_identity_keeps_record_event_and_group_layers_distinct() -> None:
     assert identity.record_key != identity.event_key
 
 
+def test_query_target_contains_query_semantics_not_result_budget_knobs() -> None:
+    assert "max_evidence" not in QueryTarget.__dataclass_fields__
+    assert "max_line_chars" not in QueryTarget.__dataclass_fields__
+
+
 def test_mutable_source_version_is_not_immutable() -> None:
     version = SourceVersion(
         namespace="file",

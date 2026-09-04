@@ -8,7 +8,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from tracecite.runtime import EvidenceRequest, QueryTarget, RangeTarget
+from tracecite.runtime import EvidenceRequest, EvidenceRoutingPolicy, QueryTarget, RangeTarget
 from tracecite.runtime.retrieval_session import RetrievalSessionStore
 from tracecite.runtime.session_retrieval import retrieve_with_session
 
@@ -53,10 +53,15 @@ def test_truncated_search_does_not_resend_visible_repeated_rows(tmp_path: Path) 
         encoding="utf-8",
     )
     store = _store(tmp_path)
-    request = EvidenceRequest(QueryTarget(source, "timeout", max_evidence=3))
+    request = EvidenceRequest(QueryTarget(source, "timeout"))
+    policy = EvidenceRoutingPolicy(
+        mode="progressive",
+        progressive_max_candidates=3,
+        deep_progressive_max_candidates=3,
+    )
 
-    first = retrieve_with_session(request, store).to_dict()
-    repeated = retrieve_with_session(request, store).to_dict()
+    first = retrieve_with_session(request, store, routing_policy=policy).to_dict()
+    repeated = retrieve_with_session(request, store, routing_policy=policy).to_dict()
 
     assert first["coverage"]["evidence_truncated"] is True
     assert len(first["evidence"]) == 3
@@ -79,11 +84,11 @@ def test_new_query_keeps_identity_of_old_evidence_match_without_resending_body(t
     store = _store(tmp_path)
 
     first = retrieve_with_session(
-        EvidenceRequest(QueryTarget(source, "alpha", max_evidence=3)),
+        EvidenceRequest(QueryTarget(source, "alpha")),
         store,
     ).to_dict()
     second = retrieve_with_session(
-        EvidenceRequest(QueryTarget(source, "beta", max_evidence=3)),
+        EvidenceRequest(QueryTarget(source, "beta")),
         store,
     ).to_dict()
 
@@ -192,13 +197,13 @@ def test_session_operation_history_is_atomic_and_has_no_sidecar(tmp_path: Path) 
     source.write_text("alpha beta same-line\nunrelated\n", encoding="utf-8")
     store = _store(tmp_path)
 
-    retrieve_with_session(EvidenceRequest(QueryTarget(source, "alpha", max_evidence=3)), store)
+    retrieve_with_session(EvidenceRequest(QueryTarget(source, "alpha")), store)
     repeated = retrieve_with_session(
-        EvidenceRequest(QueryTarget(source, "beta", max_evidence=3)), store
+        EvidenceRequest(QueryTarget(source, "beta")), store
     ).to_dict()
-    retrieve_with_session(EvidenceRequest(QueryTarget(source, "missing", max_evidence=3)), store)
+    retrieve_with_session(EvidenceRequest(QueryTarget(source, "missing")), store)
     duplicate = retrieve_with_session(
-        EvidenceRequest(QueryTarget(source, "missing", max_evidence=3)), store
+        EvidenceRequest(QueryTarget(source, "missing")), store
     ).to_dict()
 
     state = store.load()
@@ -229,11 +234,17 @@ def test_parallel_retrievals_merge_session_state_without_lost_updates(tmp_path: 
         encoding="utf-8",
     )
     store = _store(tmp_path)
+    policy = EvidenceRoutingPolicy(
+        mode="progressive",
+        progressive_max_candidates=1,
+        deep_progressive_max_candidates=1,
+    )
 
     def search(index: int) -> None:
         result = retrieve_with_session(
-            EvidenceRequest(QueryTarget(source, f"marker-{index}", max_evidence=1)),
+            EvidenceRequest(QueryTarget(source, f"marker-{index}")),
             store,
+            routing_policy=policy,
         )
         assert result.new_evidence
 

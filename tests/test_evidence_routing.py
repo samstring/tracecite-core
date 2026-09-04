@@ -24,16 +24,16 @@ def test_routing_policy_uses_remaining_context_fraction_not_magic_file_size() ->
     assert policy.direct_char_budget == 4_000
 
 
-def test_investigate_transport_must_not_be_wider_than_bounded_transport() -> None:
-    with pytest.raises(ValueError, match="focused_max_evidence"):
+def test_deep_progressive_transport_must_not_be_wider_than_progressive_transport() -> None:
+    with pytest.raises(ValueError, match="deep_progressive_max_candidates"):
         EvidenceRoutingPolicy(
-            bounded_max_evidence=5,
-            focused_max_evidence=6,
+            progressive_max_candidates=5,
+            deep_progressive_max_candidates=6,
         )
-    with pytest.raises(ValueError, match="focused_max_line_chars"):
+    with pytest.raises(ValueError, match="deep_progressive_max_line_chars"):
         EvidenceRoutingPolicy(
-            bounded_max_line_chars=400,
-            focused_max_line_chars=401,
+            progressive_max_line_chars=400,
+            deep_progressive_max_line_chars=401,
         )
 
 
@@ -104,7 +104,7 @@ def test_multiple_unseen_tiny_sources_stay_direct_while_aggregate_fits_budget(tm
     policy = EvidenceRoutingPolicy(
         fallback_direct_chars=8_000,
         max_direct_chars=8_000,
-        focused_after_executions=2,
+        deep_progressive_after_executions=2,
     )
 
     modes = []
@@ -130,7 +130,7 @@ def test_repeated_query_same_source_does_not_repeat_raw_direct_dump(tmp_path) ->
     policy = EvidenceRoutingPolicy(
         fallback_direct_chars=8_000,
         max_direct_chars=8_000,
-        focused_after_executions=10,
+        deep_progressive_after_executions=10,
     )
 
     first = retrieve(
@@ -166,10 +166,10 @@ def test_after_direct_read_query_becomes_progressive(tmp_path) -> None:
     policy = EvidenceRoutingPolicy(
         fallback_direct_chars=8_000,
         max_direct_chars=8_000,
-        bounded_max_evidence=5,
-        focused_max_evidence=2,
-        bounded_match_records=4,
-        focused_match_records=100,
+        progressive_max_candidates=5,
+        deep_progressive_max_candidates=2,
+        progressive_match_records=4,
+        deep_progressive_match_records=100,
     )
 
     first = retrieve(
@@ -204,12 +204,12 @@ def test_deep_query_uses_tighter_internal_progressive_cap(tmp_path) -> None:
     policy = EvidenceRoutingPolicy(
         fallback_direct_chars=1,
         max_direct_chars=1,
-        bounded_max_evidence=5,
-        focused_max_evidence=2,
-        bounded_max_line_chars=128,
-        focused_max_line_chars=64,
-        focused_after_executions=2,
-        focused_match_records=100,
+        progressive_max_candidates=5,
+        deep_progressive_max_candidates=2,
+        progressive_max_line_chars=128,
+        deep_progressive_max_line_chars=64,
+        deep_progressive_after_executions=2,
+        deep_progressive_match_records=100,
     )
 
     for query in ("item=0", "item=1"):
@@ -278,7 +278,7 @@ def test_deep_history_keeps_progressive_mode_with_internal_survey(tmp_path) -> N
     policy = EvidenceRoutingPolicy(
         fallback_direct_chars=8_000,
         max_direct_chars=8_000,
-        focused_after_executions=4,
+        deep_progressive_after_executions=4,
     )
 
     for query in ("alpha", "beta", "gamma", "delta"):

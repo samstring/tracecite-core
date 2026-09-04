@@ -186,26 +186,6 @@ def build_parser(*, prog: str = "tracecite") -> argparse.ArgumentParser:
         ),
     )
     search_parser.add_argument(
-        "--max-evidence",
-        type=int,
-        default=None,
-        metavar="N",
-        help=(
-            f"maximum evidence rows in the agent view "
-            f"(default {DEFAULT_AGENT_MAX_EVIDENCE} for agent profiles)"
-        ),
-    )
-    search_parser.add_argument(
-        "--max-line-chars",
-        type=int,
-        default=None,
-        metavar="N",
-        help=(
-            f"truncate matched evidence lines to N characters "
-            f"(default {DEFAULT_FILTER_MAX_LINE_CHARS} for agent profiles)"
-        ),
-    )
-    search_parser.add_argument(
         "--ledger-dir",
         metavar="DIR",
         help=(
@@ -654,20 +634,6 @@ def _invoke(args: argparse.Namespace) -> Mapping[str, Any]:
             "stateful-index",
             "frame",
         }
-        max_evidence = (
-            args.max_evidence
-            if args.max_evidence is not None
-            else (DEFAULT_AGENT_MAX_EVIDENCE if agent_transport else None)
-        )
-        max_line_chars = (
-            args.max_line_chars
-            if args.max_line_chars is not None
-            else (DEFAULT_FILTER_MAX_LINE_CHARS if agent_transport else None)
-        )
-        if max_evidence is not None and max_evidence < 1:
-            raise ValueError("max-evidence must be at least 1")
-        if max_line_chars is not None and max_line_chars < 1:
-            raise ValueError("max-line-chars must be at least 1")
         return search(
             Path(args.input),
             args.query,
@@ -679,8 +645,6 @@ def _invoke(args: argparse.Namespace) -> Mapping[str, Any]:
             since=args.since,
             until=args.until,
             fold=args.fold,
-            max_evidence=max_evidence,
-            max_line_chars=max_line_chars,
             cache=args.cache,
             **_link_kwargs(args),
         )
