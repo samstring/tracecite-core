@@ -35,6 +35,21 @@ const starts = new Map<string, number>();
 const events: Activity[] = [];
 let activityWrite: Promise<void> = Promise.resolve();
 
+function positiveEnvInt(name: string, fallback: number): number {
+  const raw = String(process.env[name] || "").trim();
+  if (!raw) return fallback;
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function evidenceMaxChars(): number {
+  // Runtime uses the same dependency-free approximation as tracecite_core.records:
+  // about 3 chars/token, with a byte hard cap. Host/user policy owns both values.
+  const tokens = positiveEnvInt("TRACECITE_MAX_EVIDENCE_TOKENS", 12_000);
+  const bytes = positiveEnvInt("TRACECITE_MAX_EVIDENCE_BYTES", 64 * 1024);
+  return Math.max(1, Math.min(bytes, tokens * 3));
+}
+
 function category(tool: string): Category {
   if (TRACE_TOOLS.has(tool)) return "tracecite_evidence";
   if (tool === "grep" || tool === "find") return "native_search";
@@ -85,7 +100,15 @@ function output(text: string, details: Record<string, unknown>) {
 }
 
 function rangeArgs(command: string, params: any): string[] {
-  const args = [command, params.file, String(params.line), "--radius", String(params.radius ?? 8), "--max-chars", "12000"];
+  const args = [
+    command,
+    params.file,
+    String(params.line),
+    "--radius",
+    String(params.radius ?? 8),
+    "--max-chars",
+    String(evidenceMaxChars()),
+  ];
   if (params.sha256) args.push("--sha256", params.sha256);
   return args;
 }
@@ -115,7 +138,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
   pi.registerTool({
     name: "tracecite_run",
     label: "TraceCite Evidence Shell",
-    description: "Run a complete mechanical evidence-search pipeline inside TraceCite. Intermediate matches stay outside model context. The evidence token/byte budget is user/host policy and is not an Agent parameter. If status is too_broad, refine the query or scope; do not ask to increase the budget." + AUTHORIZED_EVIDENCE_HINT,
+    description: "Run a complete mechanical evidence-search pipeline inside TraceCite. Intermediate matches stay outside model context. Evidence token/byte limits and source-version policy are user/host settings and are not Agent parameters. If status is too_broad, refine the query or scope; do not ask to increase the budget." + AUTHORIZED_EVIDENCE_HINT,
     parameters: Type.Object({
       file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }),
       program: Type.String({ description: "Evidence Shell pipeline, e.g. search 'ERROR' | search 'route-service' or search 'status' | where statusCode == 500 | count." }),
@@ -123,7 +146,6 @@ export default function traceciteTools(pi: ExtensionAPI) {
       last: Type.Optional(Type.String()),
       since: Type.Optional(Type.String()),
       until: Type.Optional(Type.String()),
-      fold: Type.Optional(Type.Boolean()),
     }),
     async execute(_id, p, signal, _update, ctx) {
       const args = ["run", p.file, p.program];
@@ -131,7 +153,6 @@ export default function traceciteTools(pi: ExtensionAPI) {
       if (p.last) args.push("--last", p.last);
       if (p.since) args.push("--since", p.since);
       if (p.until) args.push("--until", p.until);
-      if (p.fold) args.push("--fold");
       return output(await bridge(args, ctx.cwd, signal), { operation: "evidence_shell", canonical_operation: true });
     },
   });
@@ -139,7 +160,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
   pi.registerTool({
     name: "tracecite_retrieve",
     label: "TraceCite Retrieve",
-    description: "Canonical TraceCite retrieve for caller-selected local evidence." + AUTHORIZED_EVIDENCE_HINT,
+    description: "Canonical TraceCite retrieve. Text queries reduce to the same SourceVersion-bound Evidence Shell contract." + AUTHORIZED_EVIDENCE_HINT,
     parameters: Type.Object({
       file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }),
       query: Type.Optional(Type.String()),
@@ -160,9 +181,9 @@ export default function traceciteTools(pi: ExtensionAPI) {
   pi.registerTool({
     name: "tracecite_materialize",
     label: "TraceCite Materialize",
-    description: "Canonical TraceCite materialize of exact bounded caller-selected source context. Radius is 0..30.",
+    description: "Materialize exact bounded context from an immutable TraceCite EvidencePointer. Output size is capped by user/host Evidence policy. Radius is 0..30.",
     parameters: Type.Object({
-      file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }),
+      file: Type.String({ description: "Use the immutable source_path returned by TraceCite." + AUTHORIZED_EVIDENCE_HINT }),
       line: Type.Integer({ minimum: 1 }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })),
       sha256: Type.Optional(Type.String()),
@@ -175,9 +196,9 @@ export default function traceciteTools(pi: ExtensionAPI) {
   pi.registerTool({
     name: "tracecite_replay",
     label: "TraceCite Replay",
-    description: "Canonical TraceCite replay of previously materialized immutable context. Radius is 0..30.",
+    description: "Replay previously materialized immutable context. Output size is capped by user/host Evidence policy. Radius is 0..30.",
     parameters: Type.Object({
-      file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }),
+      file: Type.String({ description: "Use the immutable source_path returned by TraceCite." + AUTHORIZED_EVIDENCE_HINT }),
       line: Type.Integer({ minimum: 1 }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })),
       sha256: Type.String(),
@@ -189,8 +210,8 @@ export default function traceciteTools(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "tracecite_aggregate",
-    label: "TraceCite Aggregate",
-    description: "Canonical TraceCite deterministic count/distinct/group over caller-selected local text matches.",
+    label: "TraceCite Aggregate (legacy)",
+    description: "Legacy standalone deterministic count/distinct/group helper. Prefer tracecite_run for Agent text investigation so SourceVersion and intermediate-result semantics stay unified.",
     parameters: Type.Object({
       file: Type.String(),
       query: Type.String(),
@@ -203,7 +224,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
       const args = ["aggregate", p.file, p.query, "--operation", p.operation ?? "count", "--max-groups", String(p.max_groups ?? 100)];
       if (p.regex) args.push("--regex");
       if (p.group_regex) args.push("--group-regex", p.group_regex);
-      return output(await bridge(args, ctx.cwd, signal), { operation: "aggregate", canonical_operation: true });
+      return output(await bridge(args, ctx.cwd, signal), { operation: "aggregate", canonical_operation: true, legacy_search_surface: true });
     },
   });
 
@@ -250,11 +271,12 @@ export default function traceciteTools(pi: ExtensionAPI) {
     },
   });
 
-  // Compatibility aliases. They use the same transparent TraceCite transport.
+  // Compatibility aliases. Text search still reduces to the same Evidence Shell
+  // contract in Runtime; aliases never own a separate EvidenceIndex path.
   pi.registerTool({
     name: "tracecite_search",
     label: "TraceCite Search (compat)",
-    description: "Compatibility alias for tracecite_retrieve.",
+    description: "Compatibility alias for TraceCite query retrieval. Prefer tracecite_run for multi-stage searches.",
     parameters: Type.Object({
       file: Type.String(),
       query: Type.String(),
@@ -272,7 +294,7 @@ export default function traceciteTools(pi: ExtensionAPI) {
     label: "TraceCite Expand (compat)",
     description: "Compatibility alias for tracecite_materialize/replay.",
     parameters: Type.Object({
-      file: Type.String({ description: "Evidence source path." + AUTHORIZED_EVIDENCE_HINT }),
+      file: Type.String({ description: "Use the immutable source_path returned by TraceCite." + AUTHORIZED_EVIDENCE_HINT }),
       line: Type.Integer({ minimum: 1 }),
       radius: Type.Optional(Type.Integer({ minimum: 0, maximum: 30 })),
       sha256: Type.Optional(Type.String()),
