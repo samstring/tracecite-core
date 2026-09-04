@@ -99,6 +99,18 @@ def test_skill_forces_sync_first_orientation_and_reciprocal_queries() -> None:
     assert "complementary acquisition primitive" not in runtime
 
 
+def test_skill_anchors_reciprocal_search_on_outer_component_verbatim() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "privately name the ordered component pair `B -> A`" in skill
+    assert "next reciprocal search must anchor on the outer component `B`" in skill
+    assert "Copy a distinctive literal substring verbatim" in skill
+    assert "preserving Go punctuation" in skill
+    assert "do not normalize `(*Type).Method` into `Type.Method`" in skill
+    assert "do not spend a call on an unrelated synchronization branch" in skill
+    assert "ordered component pair" not in runtime
+
+
 def test_smoke_prefers_structural_diversity_before_lock_spelling() -> None:
     smoke = SMOKE.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
