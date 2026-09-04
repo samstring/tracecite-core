@@ -185,9 +185,12 @@ def test_query_candidate_caps_in_routing_policy_do_not_truncate_shell_results(tm
         deep_progressive_after_executions=2,
     )
 
-    for query in ("item=0", "item=1"):
+    for index in (0, 1):
         retrieve(
-            EvidenceRequest(QueryTarget(source, query, snapshot=False), investigation_path=state_path),
+            EvidenceRequest(
+                QueryTarget(source, rf"item={index}$", regex=True, snapshot=False),
+                investigation_path=state_path,
+            ),
             routing_policy=policy,
         )
 
@@ -198,7 +201,7 @@ def test_query_candidate_caps_in_routing_policy_do_not_truncate_shell_results(tm
 
     assert payload["status"] == "ok"
     assert payload["coverage"]["match_records"] == 20
-    assert len(payload["evidence"]) == 18  # two records were already exposed by earlier queries
+    assert len(payload["evidence"]) == 18  # exactly two records were already exposed
     assert payload["coverage"]["repeated_evidence"] == 2
     assert "evidence_index" not in payload["data"]
 
