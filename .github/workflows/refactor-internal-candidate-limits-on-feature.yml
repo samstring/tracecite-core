@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   migrate:
-    # One-shot migration; retry after all public caller sites were removed.
+    # One-shot migration; retry after preserving the single-candidate concurrency test.
     if: "${{ github.event.head_commit.message == 'chore: run internal candidate limit migration' }}"
     runs-on: ubuntu-latest
     steps:
@@ -31,6 +31,7 @@ jobs:
         run: |
           python scripts/refactor_internal_candidate_limits_once.py
           python scripts/fix_internal_candidate_limits_once.py
+          python scripts/fix_candidate_parallel_test_once.py
 
       - name: Run focused regressions
         run: |
@@ -45,6 +46,7 @@ jobs:
           rm .github/workflows/refactor-internal-candidate-limits-on-feature.yml
           rm scripts/refactor_internal_candidate_limits_once.py
           rm scripts/fix_internal_candidate_limits_once.py
+          rm scripts/fix_candidate_parallel_test_once.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
