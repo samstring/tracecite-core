@@ -14,7 +14,7 @@ from typing import Any, Mapping
 
 from .agent_api import EvidenceRequest, QueryTarget, RetrievalResult
 from .evidence_fidelity import enrich_search_leaf_context
-from .evidence_progress import EvidenceProgressTracker
+from .evidence_progress import EvidenceGap, EvidenceProgressTracker
 from .evidence_routing import EvidenceRoutingPolicy
 from .evidence_shell_public import EvidenceShellPolicy, EvidenceShellRequest, run_evidence_shell
 from .investigation import InvestigationStore
@@ -73,9 +73,6 @@ def _search_program(target: QueryTarget) -> str:
 
 
 def _fidelity(payload: Mapping[str, Any]) -> dict[str, Any]:
-    # The fidelity helper is intentionally canonical-search specific. Adapt the
-    # operation name only during enrichment, then restore Evidence Shell as the
-    # actual transport operation.
     candidate = dict(payload)
     original_operation = str(candidate.get("operation") or "evidence_shell")
     candidate["operation"] = "search"
@@ -91,9 +88,6 @@ def _audit_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     data = result.get("data") or {}
     repeated = data.get("matched_existing_evidence") if isinstance(data, Mapping) else None
     if isinstance(repeated, list):
-        # Repeated Evidence is not re-admitted to model context, but an
-        # explicitly linked Test execution must retain the lightweight pointer
-        # so assessment can mechanically prove which immutable range matched.
         result["evidence"] = [
             dict(item) for item in repeated if isinstance(item, Mapping)
         ]
@@ -121,6 +115,28 @@ def _record_query_execution(request: EvidenceRequest, payload: Mapping[str, Any]
             "shell_program": _search_program(target),
         },
     )
+
+
+def _progress_gaps(payload: Mapping[str, Any]) -> list[EvidenceGap]:
+    gaps: list[EvidenceGap] = []
+    for index, item in enumerate(payload.get("missing_evidence") or []):
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("actionable") is False:
+            actionable = False
+        else:
+            actionable = True
+        identifier = str(item.get("identifier_value") or "").strip()
+        kind = str(item.get("kind") or "evidence_gap").strip()
+        gap_id = f"{kind}:{identifier or index}"[:128]
+        gaps.append(
+            EvidenceGap(
+                id=gap_id,
+                detail=str(item.get("detail") or ""),
+                actionable=actionable,
+            )
+        )
+    return gaps
 
 
 def _query_via_shell(
@@ -151,6 +167,7 @@ def _query_via_shell(
 
     rows = _rows(payload)
     tracker = _tracker(before)
+    tracker.set_gaps(_progress_gaps(payload))
     progress = tracker.observe(evidence_ids=_pointer_ids(rows))
     coverage = payload.get("coverage") or {}
     repeated = int(coverage.get("repeated_evidence") or 0) if isinstance(coverage, Mapping) else 0
