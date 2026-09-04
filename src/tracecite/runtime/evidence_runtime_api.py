@@ -206,6 +206,33 @@ def _attach_novelty_basis(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _canonical_reference_payload(
+    request: EvidenceRequest,
+    payload: dict[str, Any],
+    projected_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Keep repeated exact refs canonical for explicit formal Test linkage.
+
+    ``RetrievalResult.to_dict`` still projects only ``new_evidence``, so these
+    repeated pointers do not re-enter ordinary Agent context as Evidence bodies.
+    Formal benchmark/host adapters may deliberately inspect canonical refs to
+    emit an ``@EVIDENCE_REF`` token for the Test that just matched them.
+    """
+
+    if request.test_id is None or projected_rows:
+        return payload
+    data = payload.get("data")
+    repeated = data.get("matched_existing_evidence") if isinstance(data, Mapping) else None
+    if not isinstance(repeated, list):
+        return payload
+    refs = [dict(item) for item in repeated if isinstance(item, Mapping)]
+    if not refs:
+        return payload
+    canonical = dict(payload)
+    canonical["evidence"] = refs
+    return canonical
+
+
 def _query_via_shell(
     request: EvidenceRequest,
     *,
@@ -248,11 +275,12 @@ def _query_via_shell(
         if canonical_status == "ok" and novelty_state == "no_new_evidence"
         else canonical_status
     )
+    canonical_payload = _canonical_reference_payload(request, payload, rows)
 
     return RetrievalResult(
         operation="search",
         status=status,
-        canonical_result=payload,
+        canonical_result=canonical_payload,
         progress=progress,
         new_evidence=tuple(rows),
         repeated_evidence=max(0, repeated),
