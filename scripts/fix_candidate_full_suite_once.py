@@ -50,10 +50,11 @@ runtime_cli_path.write_text(runtime_cli, encoding="utf-8")
 
 
 # Stateful CLI still proves typed canonical routing, but page-size knobs must no
-# longer appear in argv or QueryTarget.
+# longer appear in argv or QueryTarget. Old disclosure names are not kept even
+# inside test fixtures.
 stateful_path = Path("tests/test_stateful_cli.py")
 stateful = stateful_path.read_text(encoding="utf-8")
-stateful = stateful.replace('"data": {"routing": {"route": "bounded"}}', '"data": {"routing": {"route": "progressive"}}')
+stateful = stateful.replace('"route": "bounded"', '"route": "progressive"')
 stateful = replace_once(
     stateful,
     '''            "--fold",\n            "--max-evidence",\n            "7",\n            "--max-line-chars",\n            "99",\n            "--no-cache",''',
