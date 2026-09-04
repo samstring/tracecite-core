@@ -36,3 +36,14 @@ def test_skill_anchors_reciprocal_pair_to_nearest_application_component() -> Non
     assert "Direct impact must stop at the highest materialized blocked caller" in skill
     assert "Pair-selection rule" not in runtime
     assert "nearest non-library application receiver/type immediately above `A`" not in runtime
+
+
+def test_skill_has_hard_reciprocal_handoff_after_complementary_expand() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Hard reciprocal handoff" in skill
+    assert "the next TraceCite invocation is fixed" in skill
+    assert "Do not expand the original representative block, the complementary block, or any already-materialized range first" in skill
+    assert "This handoff overrides the rest of the investigation heuristics below" in skill
+    assert "Hard reciprocal handoff" not in runtime
+    assert "the next TraceCite invocation is fixed" not in runtime
