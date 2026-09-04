@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
-from .agent_api import EvidenceRequest, RangeTarget, RetrievalResult
+from .agent_api import EvidenceRequest, QueryTarget, RangeTarget, RetrievalResult
+from .evidence_index import project_search_canonical
 from .evidence_routing import EvidenceRoutingPolicy
 from .provider_identity import namespace_provider_request
 from .relationship_frontier import attach_relationship_frontier
@@ -63,6 +64,31 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _project_search_result(result: RetrievalResult, request: EvidenceRequest) -> RetrievalResult:
+    """Apply the public small-result/body vs large-result/index contract."""
+
+    target = request.target
+    if not isinstance(target, QueryTarget):
+        return result
+    canonical = project_search_canonical(
+        result.canonical_result,
+        query=target.query,
+        regex=target.regex,
+        source=str(target.source),
+    )
+    coverage = canonical.get("coverage") or {}
+    indexed = bool(coverage.get("evidence_indexed")) if isinstance(coverage, Mapping) else False
+    return RetrievalResult(
+        operation=result.operation,
+        status=result.status,
+        canonical_result=canonical,
+        progress=result.progress,
+        new_evidence=() if indexed else result.new_evidence,
+        repeated_evidence=result.repeated_evidence,
+        acquisition_end_reason=result.acquisition_end_reason,
+    )
+
+
 def retrieve(
     request: EvidenceRequest,
     *,
@@ -77,13 +103,15 @@ def retrieve(
     """
 
     if session is not None:
-        return retrieve_with_session(request, session, routing_policy=routing_policy)
+        result = retrieve_with_session(request, session, routing_policy=routing_policy)
+        return _project_search_result(result, request)
     normalized = namespace_provider_request(request)
-    return attach_relationship_frontier(
+    result = attach_relationship_frontier(
         prioritize_actionable_retrieval(
             _retrieve_contract(normalized, routing_policy=routing_policy)
         )
     )
+    return _project_search_result(result, normalized)
 
 
 def materialize(
