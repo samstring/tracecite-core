@@ -96,8 +96,8 @@ stateful = stateful.replace(
 stateful_path.write_text(stateful, encoding="utf-8")
 
 
-# GMI hosts exercise the canonical contract; None-valued legacy knobs were only
-# vestigial and must not survive on QueryTarget.
+# GMI hosts exercise either the canonical request or raw acquisition surface;
+# None-valued legacy knobs are vestigial and must disappear.
 for host_name in (
     "benchmarks/agent-investigation/gmi_canonical_host.py",
     "benchmarks/agent-investigation/gmi_evidence_contract_host.py",
@@ -110,9 +110,26 @@ for host_name in (
     )
     host_path.write_text(host, encoding="utf-8")
 
+investigation_host_path = Path("benchmarks/agent-investigation/gmi_investigation_host.py")
+investigation_host = investigation_host_path.read_text(encoding="utf-8")
+investigation_host = investigation_host.replace(
+    '            segmenter="auto",\n            max_evidence=None,\n            max_line_chars=None,\n            cache=True,',
+    '            segmenter="auto",\n            cache=True,',
+    1,
+)
+investigation_host_path.write_text(investigation_host, encoding="utf-8")
+
+
+# Acquisition boundary tests may use the private max_candidates knob explicitly;
+# the retired max_evidence spelling must not survive.
+schema_tools_path = Path("tests/test_runtime_schema_tools.py")
+schema_tools = schema_tools_path.read_text(encoding="utf-8")
+schema_tools = schema_tools.replace('        max_evidence=1_000,', '        max_candidates=1_000,', 1)
+schema_tools_path.write_text(schema_tools, encoding="utf-8")
+
 
 # Enforce the migration contract over all Python sources/tests so no hidden
-# canonical QueryTarget or search call silently keeps the retired knobs.
+# canonical QueryTarget or public search call silently keeps the retired knobs.
 offenders: list[str] = []
 for root in (Path("src"), Path("tests"), Path("benchmarks")):
     for path in root.rglob("*.py"):
@@ -128,8 +145,17 @@ for root in (Path("src"), Path("tests"), Path("benchmarks")):
             retired = [kw.arg for kw in node.keywords if kw.arg in {"max_evidence", "max_line_chars"}]
             if not retired:
                 continue
-            if name in {"QueryTarget", "search"}:
-                offenders.append(f"{path}:{node.lineno}: {name}({','.join(retired)})")
+            if name == "QueryTarget":
+                offenders.append(f"{path}:{node.lineno}: QueryTarget({','.join(retired)})")
+                continue
+            if name == "search":
+                internal_acquisition = (
+                    isinstance(func, ast.Attribute)
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "_acquisition"
+                )
+                if not internal_acquisition:
+                    offenders.append(f"{path}:{node.lineno}: search({','.join(retired)})")
 if offenders:
     raise RuntimeError("retired public candidate/body limit fields remain:\n" + "\n".join(offenders))
 
