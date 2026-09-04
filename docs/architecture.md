@@ -6,7 +6,7 @@ Status: **Normative / Current** for the `feature_for_agent_refacotr_shell` refac
 
 > **The Agent thinks and decides; TraceCite owns evidence.**
 
-This is the top-level living architecture contract. Long-lived decisions and transitions are recorded in ADRs/migrations. The Evidence Shell / SourceVersion refactor is defined by `docs/adr/0002-agent-evidence-shell-source-version.zh-CN.md`.
+This is the top-level living architecture contract. Long-lived decisions and transitions are recorded in ADRs/migrations. The Evidence Shell / SourceVersion refactor is defined by `docs/adr/0002-agent-evidence-shell-source-version.md`.
 
 ## 1. Product boundary
 
@@ -294,19 +294,19 @@ No domain package may become a required dependency of Core or Runtime.
 | Existing SourceVersion identity (`sha256/cursor/generation/mutable`) | Implemented | `evidence_identity.py` |
 | RetrievalSession seen/repeated/range/replay | Implemented | existing Runtime |
 | Candidate-first literal scanner/local recovery | Implemented | existing Runtime internal |
-| `EvidenceShellPolicy` user/host-owned budget | First version implemented | Agent request has no budget override |
-| `tracecite_run` Evidence Shell | First version implemented | literal/regex/filter/where/count/group/distinct/explicit selection; expanding toward all existing search capabilities |
-| `too_broad` canonical transport status | First version implemented | over-budget result exposes no Evidence body/locator dump |
-| Pi `tracecite_run` adapter | First version implemented | budget comes from Host environment/product configuration |
-| Agent skill for shell/refinement | Updated | `.agents/skills/tracecite-investigate/SKILL.md` |
-| Remove `matched_records.jsonl` / legacy artifacts from Agent search hot path | In progress | shell first stage temporarily reuses `search_text` for semantic compatibility |
-| Remove high-cardinality EvidenceIndex from Agent query path | In progress | new shell does not build EvidenceIndex; legacy retrieve compatibility remains to migrate |
+| `EvidenceShellPolicy` user/host-owned budget | Implemented | first version; Agent request has no budget override |
+| `tracecite_run` Evidence Shell | Partially implemented | literal/regex/filter/where/count/group/distinct/explicit selection implemented; remaining existing search/navigation semantics still migrating |
+| `too_broad` canonical transport status | Implemented | over-budget result exposes no Evidence body/locator dump |
+| Pi `tracecite_run` adapter | Implemented | budget comes from Host environment/product configuration |
+| Agent skill for shell/refinement | Implemented | `.agents/skills/tracecite-investigate/SKILL.md` |
+| Remove `matched_records.jsonl` / legacy artifacts from Agent search hot path | Partially implemented | shell first stage temporarily reuses `search_text` for semantic compatibility |
+| Remove high-cardinality EvidenceIndex from Agent query path | Partially implemented | new shell does not build EvidenceIndex; legacy retrieve compatibility remains to migrate |
 | Question-level SourceVersion cache / fingerprint reuse | Planned | architecture/ADR fixed; implementation pending |
-| LiveCut + immutable-segment SourceVersion | Planned for Agent Runtime | Core already contains `live_cut.py` / `segment_store.py` foundations |
+| LiveCut + immutable-segment SourceVersion | Planned | Core already contains `live_cut.py` / `segment_store.py` foundations |
 | SHA/count full-file pass consolidation/caching | Planned | bridge now prefers `data.source_sha256`; full SourceVersion cache pending |
 
 ## 16. Documentation / governance
 
 Architecture-boundary changes must update both `architecture.md` and `architecture.zh-CN.md`. Incompatible architectural changes require an ADR; public schema/API changes require a migration note and tests.
 
-Current design ADR: [ADR-0002](adr/0002-agent-evidence-shell-source-version.zh-CN.md).
+Current design ADR: [ADR-0002](adr/0002-agent-evidence-shell-source-version.md).
