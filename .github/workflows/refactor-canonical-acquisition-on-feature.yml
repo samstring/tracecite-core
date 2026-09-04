@@ -27,7 +27,23 @@ jobs:
         run: python -m pip install -e '.[dev]'
 
       - name: Apply acquisition ownership refactor
-        run: python scripts/refactor_canonical_acquisition_once.py
+        run: |
+          python scripts/refactor_canonical_acquisition_once.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/test_budget_cache.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'monkeypatch.setattr(\n        tools,\n        "verify_manifest",',
+              'monkeypatch.setattr(\n        acquisition,\n        "verify_manifest",',
+          )
+          text = text.replace(
+              'monkeypatch.setattr(tools, "run_scenario", should_not_run)',
+              'monkeypatch.setattr(acquisition, "run_scenario", should_not_run)',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
 
       - name: Run focused regressions
         run: |
