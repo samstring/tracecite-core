@@ -1,14 +1,14 @@
-trigger: 2026-09-05 reciprocal-completion checkpoint diagnostic after clean semantic/convergence failure
+trigger: 2026-09-05 nearest-component reciprocal-pair diagnostic after clean semantic/convergence failure
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-literal-sync-query-firewall-plus-component-family-reciprocal
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: explicit-tracecite-activation-before-diagnosis-plus-stack-only-six-call-hard-stop-plus-all-invocations-count-plus-authoritative-host-count-plus-mandatory-sync-first-orientation-plus-structural-diversity-hint-first-reciprocal-plus-cross-component-reciprocal-closure-plus-reciprocal-search-precedence-after-pair-naming-plus-no-same-block-expand-after-pair-naming-plus-reserved-final-outer-component-family-slot-plus-four-endpoint-membership-plus-exact-four-paragraph-final
+adaptive_stopping_skill: explicit-tracecite-activation-before-diagnosis-plus-stack-only-six-call-hard-stop-plus-all-invocations-count-plus-authoritative-host-count-plus-mandatory-sync-first-orientation-plus-structural-diversity-hint-first-reciprocal-plus-cross-component-reciprocal-closure-plus-nearest-application-component-pair-selection-plus-reciprocal-search-precedence-after-pair-naming-plus-no-same-block-expand-after-pair-naming-plus-reserved-final-outer-component-family-slot-plus-four-endpoint-membership-plus-exact-four-paragraph-final
 skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-6
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: once a complementary synchronization path already exposes and names ordered application components B -> A, treat any further expand of that same materialized block or either already-materialized representative block as non-progressing; the next evidence call must be the exact outer-B receiver/type-family reciprocal search for a structurally distinct A -> B path, otherwise finalize unclosed; claims marked unestablished in Boundary must not be asserted earlier; preserve the six-call ceiling and exact four-paragraph terminal serializer; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
+diagnostic_focus: after materializing a complementary synchronization path, define A as the application receiver/type containing the acquisition and B as the nearest non-library application receiver/type immediately above A; skip more distant framework/orchestration callers and search B's receiver/type family for a structurally distinct A -> B reciprocal path; direct impact must stop at the highest materialized blocked caller, with no downstream lifecycle/recovery inference; preserve the six-call ceiling and exact four-paragraph terminal serializer; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
 agent_timeout_seconds: 900
