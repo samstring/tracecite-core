@@ -15,10 +15,6 @@ RESULT_STATUSES = frozenset(
     {"ok", "no_match", "partial", "error", "budget_exhausted", "too_broad"}
 )
 RESULT_OUTCOMES = frozenset({"supported", "contradicted", "unknown", "not_assessed"})
-# These operations only acquire/materialize evidence. A successful match or
-# expansion is not itself an assessment of any hypothesis. Keep this invariant
-# at the shared Result boundary so CLI, Python, MCP and host integrations cannot
-# accidentally reinterpret retrieval success as semantic support.
 NON_ASSESSING_OPERATIONS = frozenset(
     {"probe", "search", "survey", "probe_format", "sample", "expand", "evidence_shell"}
 )
@@ -31,6 +27,40 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _valid_sha256(value: object) -> str:
+    digest = str(value or "").strip().lower()
+    if len(digest) == 64 and all(ch in "0123456789abcdef" for ch in digest):
+        return digest
+    return ""
+
+
+def _compact_agent_data(value: Mapping[str, Any]) -> Dict[str, Any]:
+    """Prevent internal SourceVersion manifests from becoming Agent payloads.
+
+    SourceVersionStore persists the full immutable segment list. Agent transport
+    needs only the stable view identity and aggregate metadata; exact per-segment
+    provenance is already carried by each EvidencePointer. For a one-segment
+    view expose its SHA separately so adapters never need to re-hash the source.
+    """
+
+    data = dict(value)
+    raw_view = data.get("source_view")
+    if not isinstance(raw_view, Mapping):
+        return data
+
+    view = dict(raw_view)
+    raw_segments = view.pop("segments", None)
+    segments = raw_segments if isinstance(raw_segments, list) else []
+    view["segment_count"] = len(segments)
+    data["source_view"] = view
+
+    if len(segments) == 1 and isinstance(segments[0], Mapping):
+        digest = _valid_sha256(segments[0].get("sha256"))
+        if digest:
+            data.setdefault("source_sha256", digest)
+    return data
 
 
 @dataclass(frozen=True)
@@ -81,7 +111,7 @@ class AgentResult:
     """Canonical result envelope for every Agent-facing operation.
 
     ``status`` describes tool execution. ``outcome`` describes the epistemic
-    result.  Keeping those axes separate prevents a successful command from
+    result. Keeping those axes separate prevents a successful command from
     being mistaken for a proven conclusion.
     """
 
@@ -128,7 +158,7 @@ class AgentResult:
             "missing_evidence": list(self.missing_evidence),
             "verification": dict(self.verification),
             "warnings": list(self.warnings),
-            "data": dict(self.data),
+            "data": _compact_agent_data(self.data),
         }
         if self.run_id:
             payload["run_id"] = self.run_id
