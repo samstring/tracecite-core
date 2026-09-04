@@ -1,13 +1,14 @@
-trigger: 2026-09-04 verbatim outer-component reciprocal diagnostic after clean convergence failure
+trigger: 2026-09-04 component-family reciprocal diagnostic after clean convergence failure
 tracecite_only_tools: true
 runtime_agent_steering: false
-pi_agent_system_steering: full-tracecite-skill-contract-plus-literal-sync-query-firewall-plus-verbatim-outer-component-reciprocal\correctness_gate: semantic_primary_scorer_auxiliary
+pi_agent_system_steering: full-tracecite-skill-contract-plus-literal-sync-query-firewall-plus-component-family-reciprocal
+correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-six-call-hard-stop-plus-mandatory-sync-first-orientation-plus-cross-component-reciprocal-closure-plus-verbatim-outer-component-anchor-plus-exact-four-paragraph-final
+adaptive_stopping_skill: stack-only-six-call-hard-stop-plus-mandatory-sync-first-orientation-plus-cross-component-reciprocal-closure-plus-component-family-anchor-plus-exact-four-paragraph-final
 skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-6
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: after a materialized synchronization path exposes two application components, privately name their ordered pair and make the next reciprocal search anchor on the outer component using a distinctive literal substring copied verbatim from its frame with Go punctuation preserved; do not normalize method syntax or spend calls on unrelated synchronization branches; structural inversion still requires two directly observed reversed cross-component paths; whole answer starts Observed and contains exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
+diagnostic_focus: after a complementary synchronization candidate exposes an outer component B calling inner component A, reserve the next evidence call for a receiver/type-family search on B that can match sibling methods rather than the exact observed method; prefer a structurally different candidate where A calls back into another B method; do not re-expand the original representative path merely to extend task-impact context; structural inversion still requires two directly observed reversed cross-component paths; whole answer starts Observed and contains exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
 agent_timeout_seconds: 900
