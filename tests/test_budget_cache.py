@@ -14,6 +14,7 @@ from tracecite.runtime import (
 )
 from tracecite.runtime.investigation import InvestigationCacheStore
 from tracecite.runtime import investigation as investigation_module
+from tracecite.runtime import acquisition
 from tracecite.runtime import tools
 from tracecite.runtime.tools import expand, probe, sample, search, survey, verify
 
@@ -125,7 +126,7 @@ def test_search_does_not_cache_a_snapshot_from_a_different_source_digest(
         tmp_path,
         BudgetPolicy(max_executions=3, max_searches=3, max_queries=3),
     )
-    original_search = tools.search_text
+    original_search = acquisition.search_text
     changed = False
 
     def mutate_before_snapshot(input_path, *args, **kwargs):
@@ -135,13 +136,13 @@ def test_search_does_not_cache_a_snapshot_from_a_different_source_digest(
             changed = True
         return original_search(input_path, *args, **kwargs)
 
-    monkeypatch.setattr(tools, "search_text", mutate_before_snapshot)
+    monkeypatch.setattr(acquisition, "search_text", mutate_before_snapshot)
     first = search(source, "TARGET", investigation_path=state_path)
     assert first["status"] == "ok"
     assert first["data"]["cache"]["status"] == "bypass"
     assert first["data"]["cache"]["reason"] == "source_changed_during_snapshot"
 
-    monkeypatch.setattr(tools, "search_text", original_search)
+    monkeypatch.setattr(acquisition, "search_text", original_search)
     source.write_text("old only\n", encoding="utf-8")
     second = search(source, "TARGET", investigation_path=state_path)
 
@@ -169,7 +170,7 @@ def test_search_pointer_budget_refuses_before_scan_when_cap_is_below_result_boun
         called["scan"] = True
         raise AssertionError("search must reserve its bounded pointer capacity first")
 
-    monkeypatch.setattr(tools, "search_text", should_not_scan)
+    monkeypatch.setattr(acquisition, "search_text", should_not_scan)
     refused = search(source, "target", investigation_path=state_path)
     assert refused["status"] == "error"
     assert refused["error"]["type"] == "BudgetExhausted"
@@ -240,7 +241,7 @@ def test_verify_and_run_consume_execution_budget_before_work(
 ) -> None:
     state_path, store = _state(tmp_path, BudgetPolicy(max_executions=1))
     monkeypatch.setattr(
-        tools,
+        acquisition,
         "verify_manifest",
         lambda _path: {"run_id": "r1", "verdict": "ok", "checked_files": 1},
     )
@@ -253,7 +254,7 @@ def test_verify_and_run_consume_execution_budget_before_work(
         called["run"] = True
         raise AssertionError("scenario must be refused before execution")
 
-    monkeypatch.setattr(tools, "run_scenario", should_not_run)
+    monkeypatch.setattr(acquisition, "run_scenario", should_not_run)
     refused = tools.run({"version": 1}, investigation_path=state_path)
     assert refused["status"] == "error"
     assert refused["error"]["type"] == "BudgetExhausted"
@@ -273,7 +274,7 @@ def test_run_reserves_worst_case_evidence_cap_before_extension(
         called["run"] = True
         raise AssertionError("scenario extension must be refused before execution")
 
-    monkeypatch.setattr(tools, "run_scenario", should_not_run)
+    monkeypatch.setattr(acquisition, "run_scenario", should_not_run)
     refused = tools.run({"version": 1}, investigation_path=state_path)
     assert refused["status"] == "error"
     assert refused["error"]["type"] == "BudgetExhausted"

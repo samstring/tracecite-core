@@ -90,6 +90,8 @@ Agent owns: hypothesis -> causal reasoning -> sufficiency -> answer -> stop
 
 负责 canonical Evidence mechanics，包括 RetrievalSession、bounded routing/selection、novelty/repetition/Coverage/acquisition-end facts、identity/correlation safety、deterministic aggregate/traverse，以及可选 InvestigationState coordination。
 
+本地 canonical acquisition 的唯一实现位于 `tracecite.runtime.acquisition`。`tracecite.runtime.tools` 仅保留为旧调用方/Integration 的兼容 facade，Runtime 内部不得再依赖它。
+
 Runtime 可以报告：
 
 ```text
@@ -228,6 +230,7 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 | RetrievalSession seen/repeated/range/replay memory | 已实现 | CA258 baseline |
 | Bounded evidence selection、Coverage、identity/correlation safety | 已实现 | CA258 baseline |
 | Candidate-first literal search fast path | 已实现 | parity 已证明的单行 literal 子集；Runtime search dispatch 使用确定性 legacy fallback，multiline local recovery 仍保持 internal |
+| Canonical acquisition 实现归属 | 已实现 | `tracecite.runtime.acquisition` 负责确定性 acquisition；`runtime.tools` 仅为 compatibility surface |
 | Evidence Ledger + Context Engine / cross-turn delta | 已实现 | `tracecite.integrations` |
 | Pi bounded investigation integration | 已实现 | 已验证 A/B adapter + `.pi` skill |
 | Codex/OpenAI-compatible repository skill integration | 已实现 | `AGENTS.md` + `.agents/skills` |

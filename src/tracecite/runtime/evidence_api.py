@@ -24,7 +24,7 @@ from .retrieval_guidance import prioritize_actionable_retrieval
 from .retrieval_session import RetrievalOperation, RetrievalSessionStore
 from .retrieve_contract import retrieve as _retrieve_contract
 from .session_retrieval import retrieve_with_session
-from .tools import verify
+from .acquisition import verify
 
 
 AggregateOperation = Literal["count", "distinct", "group"]

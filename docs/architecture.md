@@ -90,6 +90,8 @@ Owns domain-neutral source descriptors, immutable source/version identity, segme
 
 Owns canonical evidence mechanics, including RetrievalSession, bounded routing/selection, novelty/repetition/Coverage/acquisition-end facts, identity/correlation safety, deterministic aggregation/traversal, and optional InvestigationState coordination.
 
+Canonical local acquisition is implemented in `tracecite.runtime.acquisition`. `tracecite.runtime.tools` is a compatibility facade for legacy callers/integrations and is not an internal Runtime dependency.
+
 Runtime may report mechanical facts such as:
 
 ```text
@@ -228,6 +230,7 @@ No domain package may become a required dependency of Core or Runtime.
 | RetrievalSession seen/repeated/range/replay memory | Implemented | CA258 baseline |
 | Bounded evidence selection, Coverage, identity/correlation safety | Implemented | CA258 baseline |
 | Candidate-first literal search fast path | Implemented | Parity-proven single-line literal subset; Runtime search dispatch uses deterministic legacy fallback and multiline local recovery remains internal |
+| Canonical acquisition implementation ownership | Implemented | `tracecite.runtime.acquisition` owns deterministic acquisition; `runtime.tools` is compatibility-only |
 | Evidence Ledger + Context Engine / cross-turn delta | Implemented | `tracecite.integrations` |
 | Pi bounded investigation integration | Implemented | Validated A/B adapter + `.pi` skill |
 | Codex/OpenAI-compatible repository skill integration | Implemented | `AGENTS.md` + `.agents/skills` |

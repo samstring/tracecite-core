@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from tracecite.runtime import search_engine, tools
+from tracecite.runtime import acquisition, search_engine, tools
 from tracecite.runtime.candidate_filter import CandidateFilterUnsupported
 from tracecite_core.segmenter import RawTextSegmenter
 
@@ -73,10 +73,10 @@ def test_unsupported_fast_path_falls_back_to_legacy(tmp_path: Path, monkeypatch)
     assert result.match_records == 1
 
 
-def test_runtime_tools_search_routes_through_search_engine(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_acquisition_search_routes_through_search_engine(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "plain.log"
     source.write_text("alpha\nneedle\n", encoding="utf-8")
-    original = tools.search_text
+    original = acquisition.search_text
     calls = 0
 
     def wrapped(*args, **kwargs):
@@ -84,9 +84,13 @@ def test_runtime_tools_search_routes_through_search_engine(tmp_path: Path, monke
         calls += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(tools, "search_text", wrapped)
-    result = tools.search(source, "needle", snapshot=False, cache=False)
+    monkeypatch.setattr(acquisition, "search_text", wrapped)
+    result = acquisition.search(source, "needle", snapshot=False, cache=False)
 
     assert calls == 1
     assert result["status"] == "ok"
     assert result["coverage"]["match_records"] == 1
+
+
+def test_tools_search_is_compatibility_alias() -> None:
+    assert tools.search is acquisition.search

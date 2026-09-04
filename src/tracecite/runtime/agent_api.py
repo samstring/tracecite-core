@@ -20,7 +20,7 @@ from tracecite.extension.retrieval import (
     RetrieveResult as ProviderRetrieveResult,
 )
 
-from . import tools as _tools
+from . import acquisition as _acquisition
 from .correlation import EvidenceNode
 from .evidence_identity import file_source_version, pointer_source_key
 from .evidence_progress import AcquisitionEndReason, EvidenceProgress, EvidenceProgressTracker
@@ -448,7 +448,7 @@ def retrieve(request: EvidenceRequest) -> RetrievalResult:
     target = request.target
 
     if isinstance(target, SourceTarget):
-        result = _tools.probe(
+        result = _acquisition.probe(
             target.source,
             glob=target.glob,
             recursive=target.recursive,
@@ -473,7 +473,7 @@ def retrieve(request: EvidenceRequest) -> RetrievalResult:
         )
 
     if isinstance(target, QueryTarget):
-        result = _tools.search(
+        result = _acquisition.search(
             target.source,
             target.query,
             regex=target.regex,
@@ -532,7 +532,7 @@ def retrieve(request: EvidenceRequest) -> RetrievalResult:
                     source_key=expected_source_key,
                     basis=("immutable_source_identity", "requested_context_already_covered"),
                 )
-        result = _tools.expand(
+        result = _acquisition.expand(
             path,
             target.start_line,
             end_line=target.end_line,

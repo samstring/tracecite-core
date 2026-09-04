@@ -21,7 +21,7 @@ from typing import Any, Mapping
 
 from tracecite_core.run import RunIntegrityError
 
-from . import tools as _tools
+from . import acquisition as _acquisition
 from .agent_api import (
     EvidenceRequest,
     ProviderTarget,
@@ -186,7 +186,7 @@ def _direct_source(
     lines = _line_count(path)
     if lines < 1:
         return _with_routing(_retrieve(request), decision)
-    result = _tools.expand(
+    result = _acquisition.expand(
         path,
         1,
         end_line=lines,
@@ -251,7 +251,7 @@ def _direct_query(
     if lines < 1:
         return _with_routing(result, decision)
     try:
-        digest, rows, last_seen = _tools._read_hashed_context(
+        digest, rows, last_seen = _acquisition._read_hashed_context(
             path,
             context_start=1,
             context_end=lines,
@@ -301,7 +301,7 @@ def _bounded_source(
         return _with_routing(_retrieve(request), decision)
 
     tracker = _restore_progress(request.investigation_path)
-    result = _tools.sample(
+    result = _acquisition.sample(
         path,
         strategy="uniform",
         count=_BOUNDED_SOURCE_SAMPLE_RECORDS,
@@ -343,7 +343,7 @@ def _investigate_source(
     assert isinstance(request.target, SourceTarget)
     target = request.target
     tracker = _restore_progress(request.investigation_path)
-    result = _tools.survey(
+    result = _acquisition.survey(
         target.source,
         snapshot=True,
         segmenter=target.segmenter,
