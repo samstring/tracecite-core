@@ -1,8 +1,9 @@
 """Artifact-free logical Record search.
 
-This is the low-level mechanical search seam used by Evidence Shell. It yields
-complete Segmenter records directly and never writes filtered logs,
-matched-record JSONL, hit JSONL, unmatched summaries, or filter history.
+Evidence Shell uses this seam so the common path is candidate-first: raw text is
+searched before the Segmenter is invoked. Only hit lines are parsed for
+single-line record formats. Multiline/time-scoped cases fall back to full
+logical-record iteration to preserve semantics.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from typing import Iterator, Optional
 
 from .matcher import Matcher
 from .records import Record
-from .segmenter import RawTextSegmenter, Segmenter
+from .segmenter import FormatSegmenter, JsonLineSegmenter, RawTextSegmenter, Segmenter
 from .text_filter import (
     FilterError,
     parse_last_duration,
@@ -104,6 +105,49 @@ def _in_time_window(
     return True
 
 
+def _single_line_candidate_safe(segmenter: Segmenter) -> bool:
+    return isinstance(segmenter, JsonLineSegmenter) or (
+        isinstance(segmenter, RawTextSegmenter) and segmenter.mode == "line"
+    ) or (isinstance(segmenter, FormatSegmenter) and not segmenter.multiline)
+
+
+def _iter_candidate_first_single_line(
+    source: Path,
+    *,
+    query: str,
+    regex: bool,
+    segmenter: Segmenter,
+    encoding: str,
+) -> Iterator[Record]:
+    """Search raw physical lines first; segment only matching lines."""
+
+    if "\n" in query or "\r" in query:
+        return
+    needle = query.encode(encoding) if not regex else b""
+    matcher = Matcher(query) if regex else None
+    with source.open("rb") as handle:
+        for line_number, raw in enumerate(handle, start=1):
+            if regex:
+                text = raw.decode(encoding, errors="replace")
+                matched = matcher.match(text)[0] if matcher is not None else False
+            else:
+                matched = needle in raw
+                if not matched:
+                    continue
+                text = raw.decode(encoding, errors="replace")
+            if not matched:
+                continue
+            records = list(segmenter.segment_lines(iter([(line_number, text)])))
+            if len(records) != 1:
+                # Preserve correctness over speed if a nominally single-line
+                # segmenter cannot locally reconstruct exactly one Record.
+                raise RuntimeError(
+                    f"candidate recovery produced {len(records)} records for "
+                    f"{type(segmenter).__name__}"
+                )
+            yield records[0]
+
+
 def iter_matching_records(
     input_path: Path,
     *,
@@ -121,8 +165,9 @@ def iter_matching_records(
 ) -> Iterator[Record]:
     """Yield complete logical records matching one source/scope.
 
-    ``query=None`` means scan all records. Otherwise ``regex=False`` is a true
-    literal contract and ``regex=True`` uses TraceCite's safe Matcher.
+    ``query=None`` scans all logical records. A normal unscoped literal/regex
+    query over a single-line format searches raw lines first and invokes the
+    Segmenter only for candidate hits. There is no hidden candidate-count cap.
     """
 
     source = Path(input_path).expanduser().resolve()
@@ -142,6 +187,26 @@ def iter_matching_records(
         raise ValueError("line_from must not exceed line_to")
 
     selected = segmenter or RawTextSegmenter(mode="line")
+    no_scope = all(
+        value is None
+        for value in (last, since, until, tail_lines, line_from, line_to, pid)
+    )
+    if (
+        query is not None
+        and no_scope
+        and _single_line_candidate_safe(selected)
+        and "\n" not in query
+        and "\r" not in query
+    ):
+        yield from _iter_candidate_first_single_line(
+            source,
+            query=query,
+            regex=regex,
+            segmenter=selected,
+            encoding=encoding,
+        )
+        return
+
     matcher = Matcher(query) if query is not None and regex else None
     reference, time_from, time_to = _time_window(
         source,
