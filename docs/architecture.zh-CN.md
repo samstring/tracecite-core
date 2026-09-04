@@ -6,7 +6,7 @@
 
 > **Agent 负责想和决定；TraceCite 负责证据。**
 
-本文是最高级 Living Architecture Contract。ADR / migrations 记录长期决策和迁移语义；本次 Evidence Shell / SourceVersion 重构详见 `docs/adr/0002-agent-evidence-shell-source-version.zh-CN.md`。
+本文是最高级 Living Architecture Contract。ADR / migrations 记录长期决策和迁移语义；本次 Evidence Shell / SourceVersion 重构详见 `docs/adr/0002-agent-evidence-shell-source-version.md`。
 
 ## 1. 产品边界
 
@@ -307,19 +307,19 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 | Existing SourceVersion identity (`sha256/cursor/generation/mutable`) | 已实现 | `evidence_identity.py` |
 | RetrievalSession seen/repeated/range/replay | 已实现 | 既有 Runtime |
 | Candidate-first literal scanner/local recovery | 已实现 | 既有 Runtime internal |
-| `EvidenceShellPolicy` user/host-owned budget | 已实现第一版 | Agent request 无 budget override |
-| `tracecite_run` Evidence Shell | 已实现第一版 | literal/regex/filter/where/count/group/distinct/explicit selection；继续扩展到全部现有搜索能力 |
-| `too_broad` canonical transport status | 已实现第一版 | 超预算不返回 Evidence body/locator dump |
-| Pi `tracecite_run` adapter | 已实现第一版 | budget 从 Host 环境/产品配置读取 |
-| Agent skill for shell/refinement | 已更新 | `.agents/skills/tracecite-investigate/SKILL.md` |
-| Search hot path 去除 `matched_records.jsonl` / legacy artifacts | 进行中 | 当前 shell 第一阶段仍暂用 `search_text` 保持语义兼容 |
-| Agent query path 去除 high-cardinality EvidenceIndex | 进行中 | 新 shell 不生成 EvidenceIndex；旧 retrieve compatibility 尚待迁移 |
+| `EvidenceShellPolicy` user/host-owned budget | 已实现 | 第一版；Agent request 无 budget override |
+| `tracecite_run` Evidence Shell | 部分实现 | literal/regex/filter/where/count/group/distinct/explicit selection 已有；其余现有搜索/导航语义仍在迁移 |
+| `too_broad` canonical transport status | 已实现 | 超预算不返回 Evidence body/locator dump |
+| Pi `tracecite_run` adapter | 已实现 | budget 从 Host 环境/产品配置读取 |
+| Agent skill for shell/refinement | 已实现 | `.agents/skills/tracecite-investigate/SKILL.md` |
+| Search hot path 去除 `matched_records.jsonl` / legacy artifacts | 部分实现 | 当前 shell 第一阶段仍暂用 `search_text` 保持语义兼容 |
+| Agent query path 去除 high-cardinality EvidenceIndex | 部分实现 | 新 shell 不生成 EvidenceIndex；旧 retrieve compatibility 尚待迁移 |
 | Question-level SourceVersion cache / fingerprint reuse | 待实现 | 设计已在 ADR 固化 |
-| LiveCut + immutable segment SourceVersion | 待接入 Agent Runtime | Core 已有 `live_cut.py` / `segment_store.py` 基础 |
+| LiveCut + immutable segment SourceVersion | 待实现 | Core 已有 `live_cut.py` / `segment_store.py` 基础 |
 | SHA/count full-file pass 合并与缓存 | 待实现 | bridge 已优先读取 `data.source_sha256`，完整 SourceVersion cache 尚未接入 |
 
 ## 16. 文档 / Governance
 
 架构边界变化必须同步更新 `architecture.md` 和 `architecture.zh-CN.md`。不兼容架构变化需要 ADR；公开 schema/API 变化需要 migration note + tests。
 
-当前设计 ADR：[ADR-0002](adr/0002-agent-evidence-shell-source-version.zh-CN.md)。
+当前设计 ADR：[ADR-0002](adr/0002-agent-evidence-shell-source-version.md)。
