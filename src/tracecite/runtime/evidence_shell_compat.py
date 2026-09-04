@@ -44,7 +44,7 @@ def _pipeline_tokens(program: str) -> list[list[str]]:
 
 
 def _bre_to_python(pattern: str) -> str:
-    """Translate the common GNU-BRE subset Agents naturally type to Python RE.
+    r"""Translate the common GNU-BRE subset Agents naturally type to Python RE.
 
     The important compatibility case is escaped alternation (``foo\|bar``).
     BRE operators that require a backslash become ordinary Python operators;
@@ -93,7 +93,6 @@ def _parse_short_option(
         elif char == "c":
             state["count"] = True
         elif char == "n":
-            # Line numbers already travel with EvidencePointer metadata.
             pass
         elif char in {"e", "m"}:
             attached = chars[index + 1 :]
@@ -200,8 +199,6 @@ def _normalize_grep(tokens: list[str]) -> tuple[list[list[str]], bool]:
     options = _parse_grep(tokens)
     stages: list[list[str]] = []
     if options.fixed:
-        # Preserve case-folding/inversion through the existing controlled grep
-        # predicate; all flags are emitted separately for the Core parser.
         flags: list[str] = []
         if options.ignore_case:
             flags.append("-i")
@@ -211,8 +208,6 @@ def _normalize_grep(tokens: list[str]) -> tuple[list[list[str]], bool]:
         if len(options.patterns) == 1:
             stages.append(["grep", *flags, options.patterns[0]])
         else:
-            # Multiple -e fixed strings are OR in grep. Encode the OR safely as
-            # an escaped regex rather than exposing multiple intermediate rows.
             import re
 
             pattern = "|".join(f"(?:{re.escape(item)})" for item in options.patterns)
