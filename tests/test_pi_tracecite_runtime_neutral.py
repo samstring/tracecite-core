@@ -56,6 +56,8 @@ def test_skill_requires_two_observed_reciprocal_component_paths() -> None:
     assert "across distinct synchronization domains" in skill
     assert "`A1 -> B1` and `B2 -> A2`" in skill
     assert "Structural inversion never establishes current holders or a current deadlock cycle" in skill
+    assert "A complementary waiter is only an orientation clue, not a reciprocal causal endpoint" in skill
+    assert "The discriminator closes only with reversed component nesting across distinct synchronization domains" in skill
     assert "reversed component nesting" not in runtime
 
 
@@ -92,6 +94,7 @@ def test_skill_forces_sync_first_orientation_and_reciprocal_queries() -> None:
     assert "process/lifecycle/symptom tokens such as `runc`, `shim`, `process`, `RPC`, `FIFO`, generic `goroutine`" in skill
     assert "the **first reciprocal search must target the complementary acquisition primitive**" in skill
     assert "`RLock` after an observed writer `Lock`" in skill
+    assert "immediately search an exact caller/component symbol from that path to find the opposite cross-component nesting" in skill
     assert "Never use process/lifecycle/symptom nouns as reciprocal queries" in skill
     assert "complementary acquisition primitive" not in runtime
 
@@ -113,6 +116,7 @@ def test_skill_forces_fixed_stack_only_terminal_shape() -> None:
     runtime = IMPL.read_text(encoding="utf-8")
     assert "The entire user-visible answer then begins with `Observed:`" in skill
     assert "There is no preamble, scratch reasoning, evidence summary, heading, bullet list, stopping narration, or text before `Observed:`" in skill
+    assert "Treat `Observed:` as the literal first bytes of the final response" in skill
     assert "The entire answer is exactly four short paragraphs" in skill
     assert "`Observed:` representative directly observed blocked path(s)" in skill
     assert "`Mechanism:` either" in skill
