@@ -25,9 +25,9 @@ TraceCite already contained useful foundations that should be reused rather than
 
 Adopt a SourceVersion-bound, budget-gated Evidence Shell for Agent text investigation.
 
-1. One user-question retrieval context resolves one stable `QuestionSourceView` / SourceVersion. Repeated Agent search operations in that question reuse the same immutable view.
-2. At a later question, a cheap file fingerprint may reuse an already verified snapshot/version, SHA, and line metadata when the source has not changed.
-3. Live sources prefer cooperative `live_cut` plus immutable segments. If writer cooperation is unavailable, the fallback captures only newly appended complete bytes after the first capture when append-only continuity is mechanically verified.
+1. One RetrievalSession/context binds one stable `SessionSourceView` / SourceVersion per logical source. Repeated Agent operations in that session reuse the same immutable view even if the original mutable/live path changes.
+2. A new RetrievalSession checks the current source fingerprint on first access. If the source did not change, the already verified snapshot/version, SHA, and line metadata are reused across sessions.
+3. Live sources freeze on the session's first access, preferring cooperative `live_cut` plus immutable segments. The same session does not cut again merely because newer live bytes arrive. A later session may capture the newer bytes.
 4. `tracecite_run` / Evidence Shell is the primary Agent text-search surface. Mechanical search/filter/aggregate/navigation stages execute inside Runtime in one tool call.
 5. Existing public `QueryTarget` search reduces to the same Evidence Shell contract rather than the old EvidenceIndex projection.
 6. Raw search occurs before logical Record materialization whenever local recovery is safe. The selected Segmenter restores the complete logical Record for each candidate hit. Scoped or semantically unsafe cases may fall back to full Record iteration.
@@ -39,17 +39,19 @@ Adopt a SourceVersion-bound, budget-gated Evidence Shell for Agent text investig
 12. The shell supports literal search, safe regex search, grep-style fixed/regex/invert/case-insensitive predicates, structured `where`, field existence/missing predicates, line scopes, sort/reverse, selection/navigation, and count/group/distinct operations.
 13. Once TraceCite establishes SHA for an immutable snapshot/segment, downstream shell EvidencePointer creation, managed materialize, and replay reuse the cached SHA. External mutable paths not owned by SourceVersionStore still require integrity verification.
 14. Snapshot creation computes SHA and line count in the same copy/read pass. Agent search no longer performs separate `count snapshot + count original` passes.
-15. SourceVersionStore persists both latest source state and question-bound historical views, so old immutable segment SHA metadata remains replayable after a newer source version exists.
+15. SourceVersionStore persists both latest source state and session-bound historical views, so old immutable segment SHA metadata remains replayable after a newer source version exists.
 16. Existing provenance, RetrievalSession novelty/repeated-evidence suppression/coverage, materialization, and citation semantics remain the canonical Evidence integrity layer downstream of search.
-17. The Agent skill explicitly teaches Evidence Shell syntax, user-owned budget behavior, `too_broad` refinement, SourceVersion stability, and exact materialization from the returned immutable pointer path/SHA.
+17. The Agent skill explicitly teaches Evidence Shell syntax, user-owned budget behavior, `too_broad` refinement, session-scoped SourceVersion stability, and exact materialization from the returned immutable pointer path/SHA.
+
+`SessionSourceView` / `SessionSourceVersionStore` are the canonical public names. The internal historical `QuestionSourceView` / `question_id` names may remain as compatibility aliases/fields until persisted state is migrated; they do not define the semantic boundary.
 
 ## Source modes
 
 ### Mutable file (default Agent local-source mode)
 
-At the first access for a question, TraceCite creates an immutable snapshot while simultaneously calculating SHA and line count. The question then remains bound to that snapshot regardless of later changes to the original path.
+At the first access from a RetrievalSession, TraceCite creates or reuses an immutable snapshot and binds that session to it. Later changes to the original path do not change the session's bound SourceVersion.
 
-At a later question, TraceCite first compares a cheap source fingerprint (`device`, `inode`, `size`, `mtime_ns`, `ctime_ns`). If unchanged and the cached snapshot still exists, the previous snapshot and SHA are reused with no copy, full hash, or line recount.
+When a new RetrievalSession first accesses the source, TraceCite compares a cheap source fingerprint (`device`, `inode`, `size`, `mtime_ns`, `ctime_ns`). If unchanged and the cached snapshot still exists, the previous snapshot and SHA are reused with no copy, full hash, or line recount. If changed, a new SourceVersion is established.
 
 ### Static source
 
@@ -57,18 +59,18 @@ A host may explicitly declare a source static/immutable. TraceCite can use the o
 
 ### Live source
 
-A live source is logically represented by ordered immutable segments. TraceCite first offers a cooperative LiveCut request to the writer. A cooperating writer can rotate the current file to a stable segment in O(1) filesystem metadata work, then continue writing a new live file.
+A live source is logically represented by ordered immutable segments. On a RetrievalSession's first access, TraceCite offers a cooperative LiveCut request to the writer. A cooperating writer can rotate the current file to a stable segment in O(1) filesystem metadata work, then continue writing a new live file.
 
-Without writer cooperation, TraceCite uses an append-only fallback: it verifies continuity at the previous captured boundary and copies only newly appended complete bytes into a new immutable segment. Historical segments are reused and each segment is hashed once.
+The current RetrievalSession remains bound to the frozen live view and does not cut again. A new RetrievalSession may capture additional live bytes. Without writer cooperation, TraceCite uses an append-only fallback: it verifies continuity at the previous captured boundary and copies only newly appended complete bytes into a new immutable segment. Historical segments are reused and each segment is hashed once.
 
-A QuestionSourceView identity is a digest of the ordered immutable segment manifest; individual EvidencePointer provenance remains bound to the exact segment SHA and segment-local line range.
+A SessionSourceView identity is a digest of the ordered immutable segment manifest; individual EvidencePointer provenance remains bound to the exact segment SHA and segment-local line range.
 
 ## Evidence Shell execution model
 
 ```text
 Agent program
     ↓
-QuestionSourceView
+SessionSourceView
     ↓
 raw literal / raw regex candidate search
     ↓
@@ -111,7 +113,11 @@ Rejected because an Agent could respond to an oversized result by increasing the
 
 Deferred. Internal result sets/handles may still be useful later, but the current all-or-refine shell contract does not require a public MatchSet abstraction.
 
-### Copy every live source on every user question
+### Refresh the source at every user message
+
+Rejected. A conversation commonly performs multiple dependent questions and follow-ups against the same evidence. Rotating the SourceVersion at every message would make the evidence world drift during one RetrievalSession. The stability boundary is RetrievalSession/context, not user-message/turn.
+
+### Copy every live source on every session
 
 Rejected for large append-heavy sources. LiveCut/immutable segments or verified incremental append capture avoid repeatedly copying and hashing all historical bytes.
 
@@ -124,7 +130,8 @@ Positive:
 - multi-step mechanical search executes in one Runtime invocation;
 - common literal/regex searches locate raw candidates before JSON/record parsing;
 - complete logical Records remain the Evidence admission unit;
-- unchanged sources reuse prior snapshot + SHA;
+- one conversation/session sees a stable source version;
+- unchanged sources reuse prior snapshot + SHA across sessions;
 - live sources reuse historical immutable segments;
 - managed materialize/replay avoid rehashing already verified snapshots;
 - the Agent hot path no longer requires matched-record/filter artifacts.
@@ -134,7 +141,7 @@ Costs and risks:
 - `AgentResult.status` includes additive `too_broad`;
 - Evidence Shell is a public execution surface and requires continued safety/parity validation;
 - time-scoped or locally unrecoverable multiline formats can still require full Record scans to preserve semantics;
-- host integration must define the user-question retrieval-context boundary when a long-lived host session spans multiple user turns;
+- Host integration must keep the same RetrievalSession/context identity for the desired conversation stability boundary and create a new session when a new evidence world is intended;
 - live-cut performance is best with writer cooperation; the fallback assumes mechanically verified append continuity;
 - deterministic token estimation is model-agnostic, so the exact byte cap remains a second hard transport guard.
 
@@ -148,16 +155,18 @@ Implemented on `feature_for_agent_refacotr_shell`:
 4. Artifact-free logical Record search.
 5. Raw-hit candidate-first parsing for locally recoverable formats.
 6. Public QueryTarget search routed through Evidence Shell; Agent query path no longer uses EvidenceIndex projection.
-7. SourceVersion fingerprint cache and question-bound immutable views.
+7. SourceVersion fingerprint cache and RetrievalSession-bound immutable views.
 8. LiveCut + immutable segment/incremental append fallback.
 9. SHA/line-count fusion during snapshot creation and SHA reuse during managed materialize/replay.
 10. RetrievalSession novelty/repeated Evidence behavior retained after shell admission.
+11. Canonical public aliases `SessionSourceView` and `SessionSourceVersionStore`, plus session-stability regression tests.
 
 Still intentionally deferred until validation phase:
 
 - running the full existing regression suite;
 - Native-vs-TraceCite RCA benchmark reruns and performance measurements;
-- any public ResultHandle/MatchSet API.
+- any public ResultHandle/MatchSet API;
+- an explicit refresh-source operation (only if a future Host needs in-session source rotation).
 
 Validation remains correctness/support/provenance/recoverability first, then token/I/O/wall-time efficiency. `too_broad` must not mutate `seen_evidence`/Coverage because no Evidence was admitted.
 
