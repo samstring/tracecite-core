@@ -197,6 +197,21 @@ def test_runtime_tools_search_routes_through_search_engine(tmp_path: Path, monke
         encoding="utf-8",
     )
 
+    budget = ROOT / "tests/test_budget_cache.py"
+    budget_text = budget.read_text(encoding="utf-8")
+    replacements = (
+        ("original_filter = tools.filter_text", "original_search = tools.search_text"),
+        ("return original_filter(input_path, *args, **kwargs)", "return original_search(input_path, *args, **kwargs)"),
+        ('monkeypatch.setattr(tools, "filter_text", mutate_before_snapshot)', 'monkeypatch.setattr(tools, "search_text", mutate_before_snapshot)'),
+        ('monkeypatch.setattr(tools, "filter_text", original_filter)', 'monkeypatch.setattr(tools, "search_text", original_search)'),
+        ('monkeypatch.setattr(tools, "filter_text", should_not_scan)', 'monkeypatch.setattr(tools, "search_text", should_not_scan)'),
+    )
+    for old, new in replacements:
+        if old not in budget_text:
+            raise SystemExit(f"expected budget-cache test hook not found: {old!r}")
+        budget_text = budget_text.replace(old, new, 1)
+    budget.write_text(budget_text, encoding="utf-8")
+
     en = ROOT / "docs/architecture.md"
     en_marker = "| Evidence Ledger + Context Engine / cross-turn delta | Implemented | `tracecite.integrations` |\n"
     en_row = "| Candidate-first literal search fast path | Implemented | Parity-proven single-line literal subset; Runtime search dispatch uses deterministic legacy fallback and multiline local recovery remains internal |\n"
