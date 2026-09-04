@@ -1,9 +1,9 @@
 """Artifact-free logical Record search.
 
-Evidence Shell uses this seam so the common path is candidate-first: raw text is
-searched before the Segmenter is invoked. Only hit lines are parsed for
-single-line record formats. Multiline/time-scoped cases fall back to full
-logical-record iteration to preserve semantics.
+Evidence Shell uses this seam so the normal path is candidate-first: raw text is
+searched before the Segmenter is invoked. Only candidate locations are restored
+to complete logical Records. Full Record iteration is reserved for scopes or
+formats where local recovery cannot preserve semantics.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 
+from .candidate_recovery import CandidateHit, recover_record, supports_local_recovery
 from .matcher import Matcher
 from .records import Record
 from .segmenter import FormatSegmenter, JsonLineSegmenter, RawTextSegmenter, Segmenter
@@ -105,13 +106,21 @@ def _in_time_window(
     return True
 
 
-def _single_line_candidate_safe(segmenter: Segmenter) -> bool:
+def _single_line(segmenter: Segmenter) -> bool:
     return isinstance(segmenter, JsonLineSegmenter) or (
         isinstance(segmenter, RawTextSegmenter) and segmenter.mode == "line"
     ) or (isinstance(segmenter, FormatSegmenter) and not segmenter.multiline)
 
 
-def _iter_candidate_first_single_line(
+def _candidate_first_safe(segmenter: Segmenter, *, regex: bool) -> bool:
+    if not supports_local_recovery(segmenter):
+        return False
+    # Multiline regex may intentionally depend on Record text spanning physical
+    # lines. Raw-line preselection cannot prove parity for that case.
+    return not regex or _single_line(segmenter)
+
+
+def _iter_candidate_first(
     source: Path,
     *,
     query: str,
@@ -119,33 +128,33 @@ def _iter_candidate_first_single_line(
     segmenter: Segmenter,
     encoding: str,
 ) -> Iterator[Record]:
-    """Search raw physical lines first; segment only matching lines."""
+    """Search raw lines first and locally recover unique logical Records."""
 
-    if "\n" in query or "\r" in query:
-        return
     needle = query.encode(encoding) if not regex else b""
     matcher = Matcher(query) if regex else None
+    seen_ranges: set[tuple[int, int]] = set()
+    offset = 0
     with source.open("rb") as handle:
         for line_number, raw in enumerate(handle, start=1):
+            end = offset + len(raw)
             if regex:
                 text = raw.decode(encoding, errors="replace")
                 matched = matcher.match(text)[0] if matcher is not None else False
             else:
                 matched = needle in raw
-                if not matched:
-                    continue
-                text = raw.decode(encoding, errors="replace")
-            if not matched:
-                continue
-            records = list(segmenter.segment_lines(iter([(line_number, text)])))
-            if len(records) != 1:
-                # Preserve correctness over speed if a nominally single-line
-                # segmenter cannot locally reconstruct exactly one Record.
-                raise RuntimeError(
-                    f"candidate recovery produced {len(records)} records for "
-                    f"{type(segmenter).__name__}"
+            if matched:
+                hit = CandidateHit(line_number, offset, end)
+                record = recover_record(
+                    source,
+                    hit,
+                    segmenter,
+                    encoding=encoding,
                 )
-            yield records[0]
+                key = (record.start_line, record.end_line)
+                if key not in seen_ranges:
+                    seen_ranges.add(key)
+                    yield record
+            offset = end
 
 
 def iter_matching_records(
@@ -165,9 +174,9 @@ def iter_matching_records(
 ) -> Iterator[Record]:
     """Yield complete logical records matching one source/scope.
 
-    ``query=None`` scans all logical records. A normal unscoped literal/regex
-    query over a single-line format searches raw lines first and invokes the
-    Segmenter only for candidate hits. There is no hidden candidate-count cap.
+    ``query=None`` scans all logical records. An unscoped search uses raw-hit
+    candidate scanning whenever local recovery is semantically safe; there is
+    no hidden candidate-count cap.
     """
 
     source = Path(input_path).expanduser().resolve()
@@ -194,11 +203,11 @@ def iter_matching_records(
     if (
         query is not None
         and no_scope
-        and _single_line_candidate_safe(selected)
         and "\n" not in query
         and "\r" not in query
+        and _candidate_first_safe(selected, regex=regex)
     ):
-        yield from _iter_candidate_first_single_line(
+        yield from _iter_candidate_first(
             source,
             query=query,
             regex=regex,
