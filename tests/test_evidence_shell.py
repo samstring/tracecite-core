@@ -55,6 +55,24 @@ def test_under_budget_search_returns_all_matched_evidence_without_index(tmp_path
     assert result["artifacts"] == []
 
 
+def test_literal_search_preserves_regex_metacharacters_as_literal_text(tmp_path) -> None:
+    source = _write_jsonl(
+        tmp_path,
+        [
+            {"message": "worker[3].ready"},
+            {"message": "worker333ready"},
+        ],
+    )
+
+    result = run_evidence_shell(
+        EvidenceShellRequest(source=source, program="search 'worker[3].ready'"),
+        policy=EvidenceShellPolicy(max_evidence_tokens=1_000, max_evidence_bytes=16_000),
+    )
+
+    assert result["status"] == "ok"
+    assert len(result["evidence"]) == 1
+
+
 def test_over_budget_search_returns_too_broad_and_no_partial_evidence(tmp_path) -> None:
     source = _write_jsonl(
         tmp_path,
@@ -138,6 +156,7 @@ def test_aggregate_can_process_broad_match_without_exposing_record_bodies(tmp_pa
     assert result["status"] == "ok"
     assert result["evidence"] == []
     assert result["data"]["aggregate"]["count"] == 250
+    assert result["coverage"]["match_records"] == 250
 
 
 def test_explicit_take_is_marked_as_selection_not_complete_search(tmp_path) -> None:
@@ -174,8 +193,9 @@ def test_retrieval_session_suppresses_repeated_shell_evidence(tmp_path) -> None:
 
     assert first["status"] == "ok"
     assert len(first["evidence"]) == 2
-    assert second["status"] == "no_new_evidence"
+    assert second["status"] == "ok"
     assert second["evidence"] == []
+    assert second["data"]["novelty"]["state"] == "no_new_evidence"
     assert second["coverage"]["repeated_evidence"] == 2
     assert len(second["data"]["matched_existing_evidence"]) == 2
 
