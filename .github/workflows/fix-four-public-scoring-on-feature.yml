@@ -1,0 +1,49 @@
+name: Four public scoring fix
+
+on:
+  push:
+    branches:
+      - feature_for_agent
+    paths:
+      - .github/workflows/fix-four-public-scoring-on-feature.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: "${{ github.event.head_commit.message == 'chore: run four public scoring fix' }}"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install development dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Apply schema-aware scoring fix
+        run: python scripts/fix_four_public_scoring_once.py
+      - name: Run focused regressions
+        run: |
+          python -m pytest -q \
+            tests/test_pi_four_public_scoring.py \
+            tests/test_pi_four_public_strict_boundary.py \
+            tests/test_pi_ab_runtime.py \
+            tests/test_agent_benchmark_evidence_modes.py
+          python scripts/check_architecture.py
+          python scripts/check_schema_compat.py --root .
+      - name: Run full Core test suite
+        run: python -m pytest -W error::DeprecationWarning
+      - name: Commit validated scoring fix
+        run: |
+          rm .github/workflows/fix-four-public-scoring-on-feature.yml
+          rm scripts/fix_four_public_scoring_once.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: score four public cases by gold schema'
+          git push origin HEAD:feature_for_agent
