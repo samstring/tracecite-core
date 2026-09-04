@@ -99,16 +99,18 @@ def test_skill_forces_sync_first_orientation_and_reciprocal_queries() -> None:
     assert "complementary acquisition primitive" not in runtime
 
 
-def test_skill_anchors_reciprocal_search_on_outer_component_verbatim() -> None:
+def test_skill_anchors_reciprocal_search_on_outer_component_family() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "privately name the ordered component pair `B -> A`" in skill
-    assert "next reciprocal search must anchor on the outer component `B`" in skill
-    assert "Copy a distinctive literal substring verbatim" in skill
-    assert "preserving Go punctuation" in skill
-    assert "do not normalize `(*Type).Method` into `Type.Method`" in skill
-    assert "do not spend a call on an unrelated synchronization branch" in skill
+    assert "component identity of outer component `B` at receiver/type-family level" in skill
+    assert "not on the exact method already observed" in skill
+    assert "match sibling methods of `B`" in skill
+    assert "intentionally omit the method name" in skill
+    assert "do not re-expand the original representative path merely to extend caller/impact context" in skill
+    assert "reserve the next call for this component-family reciprocal search" in skill
     assert "ordered component pair" not in runtime
+    assert "component-family reciprocal" not in runtime
 
 
 def test_smoke_prefers_structural_diversity_before_lock_spelling() -> None:
