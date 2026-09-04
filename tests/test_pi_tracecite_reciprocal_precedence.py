@@ -25,3 +25,14 @@ def test_skill_forbids_same_block_expand_after_component_pair_is_materialized() 
     assert "A claim that the `Boundary:` paragraph marks as unestablished must not be asserted as fact" in skill
     assert "Reciprocal-completion checkpoint" not in runtime
     assert "outer-`B` receiver/type-family search" not in runtime
+
+
+def test_skill_anchors_reciprocal_pair_to_nearest_application_component() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Pair-selection rule" in skill
+    assert "nearest non-library application receiver/type immediately above `A`" in skill
+    assert "do not choose an arbitrary outermost caller" in skill
+    assert "Direct impact must stop at the highest materialized blocked caller" in skill
+    assert "Pair-selection rule" not in runtime
+    assert "nearest non-library application receiver/type immediately above `A`" not in runtime
