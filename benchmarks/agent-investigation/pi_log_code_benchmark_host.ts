@@ -12,6 +12,7 @@ const ACTIVITY_PATH = process.env.TRACECITE_HOST_ACTIVITY || "";
 const BENCHMARK_MODE = String(process.env.TRACECITE_BENCHMARK_MODE || "").trim();
 
 const TRACE_TOOLS = new Set([
+  "tracecite_run",
   "tracecite_retrieve",
   "tracecite_materialize",
   "tracecite_replay",
@@ -108,6 +109,8 @@ async function appendJsonl(path: string, payload: unknown) {
 function traceSourceCandidates(event: any): unknown[] {
   const input = event?.input && typeof event.input === "object" ? event.input : {};
   switch (String(event?.toolName || "")) {
+    case "tracecite_run":
+      return [(input as any)?.source];
     case "tracecite_retrieve":
       return [(input as any)?.target?.source];
     case "tracecite_materialize":
