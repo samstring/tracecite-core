@@ -8,6 +8,8 @@ compatibility: Requires the TraceCite Pi extension and tracecite_search/tracecit
 
 Build the smallest supported causal proof. Runtime remains diagnosis-neutral; Agent investigation and stopping policy live here.
 
+**Activation invariant:** when the user explicitly requests TraceCite analysis of supplied evidence, the first investigation action must be a TraceCite evidence call before any factual diagnosis or terminal answer. Do not answer from prompt text, model memory, prior runs, or embedded examples. For a stack-only synchronization investigation, that first call must follow the synchronization-orientation rule below. This activation requirement is Agent/Skill policy; Runtime remains diagnosis-neutral.
+
 ## Highest-priority stack-only stop contract
 
 For a stack dump without independent ownership/event chronology, treat the artifact as `stack_only` and apply these rules before any other reasoning:
