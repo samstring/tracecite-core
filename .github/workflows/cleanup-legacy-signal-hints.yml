@@ -1,0 +1,72 @@
+name: Remove legacy signal hints
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence-search-cost-v2
+    paths:
+      - .github/workflows/cleanup-legacy-signal-hints.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Remove legacy signal hint mechanism
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/tracecite/runtime/retrieve_contract.py')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('5. bounded high-signal navigation for truncated searches.\n', '')
+          s = s.replace('from .evidence_selection import select_signal_hints\n', '')
+
+          start = s.find('\ndef _matched_records_path(')
+          end = s.find('\ndef _attach_search_fidelity(', start)
+          if start == -1 or end == -1:
+              raise SystemExit('matched-record helper block not found')
+          s = s[:start] + s[end:]
+
+          start = s.find('\ndef _attach_signal_hints(')
+          end = s.find('\ndef _correct_range_novelty(', start)
+          if start == -1 or end == -1:
+              raise SystemExit('signal hint block not found')
+          s = s[:start] + s[end:]
+          s = s.replace('    result = _attach_signal_hints(result, routed_request, policy)\n', '')
+          p.write_text(s, encoding='utf-8')
+
+          selection = Path('src/tracecite/runtime/evidence_selection.py')
+          if selection.exists():
+              selection.unlink()
+
+          for test in Path('tests').glob('test_*.py'):
+              text = test.read_text(encoding='utf-8')
+              if 'signal_hint_limit' in text or 'select_signal_hints' in text:
+                  raise SystemExit(f'stale signal hint test/reference remains in {test}')
+          PY
+          python -m pip install -e '.[dev]'
+          pytest -q
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name sam
+          git config user.email woshidengshangfu@163.com
+          git add -A src/tracecite/runtime
+          if git diff --cached --quiet; then
+            echo 'no cleanup changes'
+            exit 0
+          fi
+          git commit -m 'refactor(runtime): remove legacy signal hints'
+          git push origin HEAD:experiment/evidence-intelligence-search-cost-v2
