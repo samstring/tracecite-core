@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   migrate:
-    # One-shot migration; retry after full-suite compatibility cleanup.
+    # One-shot migration; final retry after fixture vocabulary cleanup.
     if: "${{ github.event.head_commit.message == 'chore: run internal candidate limit migration' }}"
     runs-on: ubuntu-latest
     steps:
