@@ -73,6 +73,86 @@ def test_literal_search_preserves_regex_metacharacters_as_literal_text(tmp_path)
     assert len(result["evidence"]) == 1
 
 
+def test_unix_grep_ignore_case_and_bre_alternation(tmp_path) -> None:
+    source = _write_jsonl(
+        tmp_path,
+        [
+            {"message": "runc failure"},
+            {"message": "SECCOMP rejected"},
+            {"message": "ordinary"},
+        ],
+    )
+
+    result = run_evidence_shell(
+        EvidenceShellRequest(source=source, program=r"grep -i 'runc\|seccomp'"),
+        policy=EvidenceShellPolicy(max_evidence_tokens=1_000, max_evidence_bytes=16_000),
+    )
+
+    assert result["status"] == "ok"
+    assert len(result["evidence"]) == 2
+
+
+def test_unix_grep_extended_regex_and_head_dash_count(tmp_path) -> None:
+    source = _write_jsonl(
+        tmp_path,
+        [
+            {"message": "RunPodSandbox failed", "n": 1},
+            {"message": "level=error", "n": 2},
+            {"message": "failed again", "n": 3},
+        ],
+    )
+
+    result = run_evidence_shell(
+        EvidenceShellRequest(
+            source=source,
+            program="grep -E 'RunPodSandbox|level=error|failed' | head -2",
+        ),
+        policy=EvidenceShellPolicy(max_evidence_tokens=1_000, max_evidence_bytes=16_000),
+    )
+
+    assert result["status"] == "ok"
+    assert len(result["evidence"]) == 2
+    assert result["coverage"]["selection_explicit"] is True
+
+
+def test_unix_grep_count_is_runtime_aggregate(tmp_path) -> None:
+    source = _write_jsonl(
+        tmp_path,
+        [
+            {"message": "ERROR one"},
+            {"message": "ok"},
+            {"message": "error two"},
+        ],
+    )
+
+    result = run_evidence_shell(
+        EvidenceShellRequest(source=source, program="grep -ic error"),
+        policy=EvidenceShellPolicy(max_evidence_tokens=1, max_evidence_bytes=64),
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["aggregate"]["count"] == 2
+    assert result["evidence"] == []
+
+
+def test_grep_fixed_strings_preserves_regex_metacharacters(tmp_path) -> None:
+    source = _write_jsonl(
+        tmp_path,
+        [
+            {"message": "worker[3].ready"},
+            {"message": "worker333ready"},
+        ],
+    )
+
+    result = run_evidence_shell(
+        EvidenceShellRequest(source=source, program="grep -F 'worker[3].ready'"),
+        policy=EvidenceShellPolicy(max_evidence_tokens=1_000, max_evidence_bytes=16_000),
+    )
+
+    assert result["status"] == "ok"
+    assert len(result["evidence"]) == 1
+
+
 def test_over_budget_search_returns_too_broad_and_no_partial_evidence(tmp_path) -> None:
     source = _write_jsonl(
         tmp_path,
