@@ -1,0 +1,108 @@
+name: Search Cost V2 Real Pi Source-Aware Validation
+
+on:
+  push:
+    branches:
+      - experiment/evidence-intelligence-search-cost-v2
+    paths:
+      - .github/workflows/search-cost-v2-real-pi-source-aware.yml
+
+permissions:
+  contents: read
+
+jobs:
+  real-pi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      BENCH_MODEL: ${{ vars.GMI2_MODEL }}
+      BENCH_API_KEY: ${{ secrets.GMI2_API_KEY }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-real-source-aware
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      EVIDENCE_ROOT: /tmp/real-source-aware/evidence
+      RESULT_ROOT: /tmp/real-source-aware/results
+      TRACECITE_MAX_RETRIEVALS: "100"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - name: Install
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BENCH_MODEL"; test -n "$BENCH_API_KEY"
+          python -m pip install -e '.[dev]'
+          python -m pip install --quiet huggingface_hub pandas pyarrow
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          mkdir -p "$PI_CODING_AGENT_DIR" "$RESULT_ROOT" "$EVIDENCE_ROOT"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          m=os.environ['BENCH_MODEL']; p={'providers':{'gmi':{'name':'GMI','baseUrl':os.environ['GMI_BASE_URL'],'api':'openai-completions','models':[{'id':m,'name':m,'reasoning':False,'input':['text'],'cost':{'input':0,'output':0,'cacheRead':0,'cacheWrite':0},'contextWindow':1_000_000,'maxTokens':4096,'compat':{'supportsDeveloperRole':False,'supportsReasoningEffort':False}}]}}}
+          (Path(os.environ['PI_CODING_AGENT_DIR'])/'models.json').write_text(json.dumps(p,indent=2)+'\n')
+          PY
+      - name: Prepare identical neutral RCAEval evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import snapshot_download
+          case='re3tt_ts-route-service_f3_6'; root=Path('/tmp/rcaeval-source'); out=Path(os.environ['EVIDENCE_ROOT']); out.mkdir(parents=True,exist_ok=True)
+          snapshot_download(repo_id='phamquiluan/RCAEval',repo_type='dataset',allow_patterns=[f'{case}/*'],local_dir=root)
+          src=root/case; metrics=pd.read_parquet(src/'metrics.parquet'); logs=pd.read_parquet(src/'logs.parquet'); traces=pd.read_parquet(src/'traces.parquet'); onset=int((src/'inject_time.txt').read_text())
+          metrics.to_csv(out/'metrics.csv',index=False); logs.to_json(out/'logs.jsonl',orient='records',lines=True,force_ascii=False); traces.to_json(out/'traces.jsonl',orient='records',lines=True,force_ascii=False)
+          (out/'incident.txt').write_text(f'System: Train Ticket microservices\nKnown incident onset (Unix seconds): {onset}\nTelemetry covers the normal and faulty window around this onset.\n')
+          print({p.name:p.stat().st_size for p in out.iterdir()})
+          PY
+          if grep -R -n -E 're3tt_ts-route-service_f3_6|root_cause_service|code-level fault F3' "$EVIDENCE_ROOT"; then exit 3; fi
+      - name: Run real Pi source-aware canonical arm
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULT_ROOT/session"
+          export TRACECITE_EVIDENCE_ROOT="$EVIDENCE_ROOT"
+          export TRACECITE_EVIDENCE_FILES="metrics.csv,logs.jsonl,traces.jsonl,incident.txt"
+          export TRACECITE_PI_ACTIVITY="$RESULT_ROOT/pi-activity.json"
+          cd "$EVIDENCE_ROOT"
+          PROMPT="A production incident occurred in Train Ticket. Determine the root-cause service and concrete failure mechanism, and explain the causal chain. Use only TraceCite canonical evidence tools. The tool schema exposes the Host-authorized evidence files: use those exact source names instead of guessing. Read incident metadata once, then search logs/traces for concrete error/service/correlation keys and pivot to bounded correlation-local evidence. Do not sample arbitrary metrics rows merely for confirmation once the causal chain is supported. Cite exact source line ranges. Stop at the evidence boundary."
+          start=$(date +%s%N); set +e
+          pi --provider gmi --model "$BENCH_MODEL" --api-key "$BENCH_API_KEY" --thinking off --mode text --print --session-dir "$RESULT_ROOT/session" --extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_tracecite_extension.ts" --tools tracecite_retrieve,tracecite_materialize,tracecite_replay,tracecite_aggregate,tracecite_traverse,tracecite_verify --no-skills --skill "$GITHUB_WORKSPACE/.pi/skills/tracecite/SKILL.md" --no-prompt-templates --no-context-files --system-prompt "$PROMPT" "用 TraceCite 调查 incident，报告根因服务、具体故障机制和因果链。" > "$RESULT_ROOT/answer.md" 2> "$RESULT_ROOT/stderr.log"
+          code=$?; set -e; end=$(date +%s%N); echo "$code" > "$RESULT_ROOT/exit.txt"; python - <<PY > "$RESULT_ROOT/wall.txt"
+          print((${end}-${start})/1e9)
+          PY
+          cat "$RESULT_ROOT/answer.md"; exit "$code"
+      - name: Summarize
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          S="$(find "$RESULT_ROOT/session" -name '*.jsonl' -type f -print -quit 2>/dev/null || true)"
+          if [[ -n "$S" ]]; then python "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_session_to_transcript.py" "$S" "$RESULT_ROOT/answer.md" "$RESULT_ROOT/transcript.jsonl" --mode pi-tracecite --model "$BENCH_MODEL" || true; fi
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          r=Path(os.environ['RESULT_ROOT']); p=r/'transcript.jsonl'; calls=[]; models=0; inp=out=cache=0
+          if p.is_file():
+            for line in p.read_text(errors='replace').splitlines():
+              try:e=json.loads(line)
+              except:continue
+              if e.get('type')=='tool': calls.append({'name':e.get('name'),'duration_ms':e.get('duration_ms')})
+              elif e.get('type')=='model':
+                models+=1; u=e.get('usage') or {}; inp+=int(u.get('input_tokens') or 0); out+=int(u.get('output_tokens') or 0); cache+=int(u.get('cache_read_input_tokens') or u.get('cached_input_tokens') or 0)
+          ans=(r/'answer.md').read_text(errors='replace') if (r/'answer.md').is_file() else ''
+          q={'wall_seconds':(r/'wall.txt').read_text().strip() if (r/'wall.txt').is_file() else None,'model_calls':models,'tool_calls':len(calls),'tool_duration_total_ms':sum(int(c.get('duration_ms') or 0) for c in calls),'tool_duration_max_ms':max([int(c.get('duration_ms') or 0) for c in calls] or [0]),'input_tokens':inp,'output_tokens':out,'cache_read_tokens':cache,'mentions_route':'ts-route-service' in ans.lower(),'mentions_missing_function_call':'missing function call' in ans.lower() or 'missing function' in ans.lower(),'calls':calls}
+          (r/'summary.json').write_text(json.dumps(q,indent=2)+'\n'); print(json.dumps(q,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: search-cost-v2-real-pi-source-aware
+          path: /tmp/real-source-aware/results
+          retention-days: 7
