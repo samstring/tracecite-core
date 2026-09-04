@@ -1,0 +1,390 @@
+name: Pi RCAEval Four Scale Dual GMI A/B
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature_for_agent
+    paths:
+      - .github/workflows/pi-rcaeval-four-scale-dual-gmi-ab.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-rcaeval-four-scale-dual-gmi-ab
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: prepare / ${{ matrix.case_id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        case_id:
+          - re3tt_ts-auth-service_f1_4
+          - re3tt_ts-auth-service_f1_1
+          - re3tt_ts-route-service_f1_1
+          - re3tt_ts-route-service_f3_6
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dataset dependencies
+        run: python -m pip install -q pandas pyarrow huggingface_hub
+
+      - name: Download official RCAEval traces and convert to deterministic JSONL
+        env:
+          CASE_ID: ${{ matrix.case_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/rcaeval-prepared
+          mkdir -p /tmp/rcaeval-prepared/evidence /tmp/rcaeval-hf
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import snapshot_download
+
+          case = os.environ['CASE_ID']
+          root = Path('/tmp/rcaeval-hf')
+          snapshot_download(
+              repo_id='phamquiluan/RCAEval',
+              repo_type='dataset',
+              allow_patterns=[f'{case}/traces.parquet'],
+              local_dir=root,
+          )
+          source = root / case / 'traces.parquet'
+          if not source.is_file():
+              raise SystemExit(f'missing official traces.parquet for {case}')
+          frame = pd.read_parquet(source)
+          out = Path('/tmp/rcaeval-prepared/evidence/traces.jsonl')
+          frame.to_json(out, orient='records', lines=True, force_ascii=False)
+          data = out.read_bytes()
+          meta = {
+              'rows': int(len(frame)),
+              'bytes': len(data),
+              'sha256': hashlib.sha256(data).hexdigest(),
+          }
+          Path('/tmp/rcaeval-prepared/prepared.json').write_text(json.dumps(meta, indent=2) + '\n')
+          print(json.dumps(meta, indent=2))
+          PY
+
+      - name: Upload prepared evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: rcaeval-prepared-${{ matrix.case_id }}
+          path: /tmp/rcaeval-prepared
+          if-no-files-found: error
+          retention-days: 7
+
+  arm:
+    name: ${{ matrix.arm }} / ${{ matrix.case_id }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - case_id: re3tt_ts-auth-service_f1_4
+            expected_service: ts-auth-service
+            arm: native
+          - case_id: re3tt_ts-auth-service_f1_4
+            expected_service: ts-auth-service
+            arm: tracecite
+          - case_id: re3tt_ts-auth-service_f1_1
+            expected_service: ts-auth-service
+            arm: native
+          - case_id: re3tt_ts-auth-service_f1_1
+            expected_service: ts-auth-service
+            arm: tracecite
+          - case_id: re3tt_ts-route-service_f1_1
+            expected_service: ts-route-service
+            arm: native
+          - case_id: re3tt_ts-route-service_f1_1
+            expected_service: ts-route-service
+            arm: tracecite
+          - case_id: re3tt_ts-route-service_f3_6
+            expected_service: ts-route-service
+            arm: native
+          - case_id: re3tt_ts-route-service_f3_6
+            expected_service: ts-route-service
+            arm: tracecite
+    env:
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-config
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      RUN_ROOT: /tmp/rcaeval-run
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Pi and TraceCite under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          python -m pip install -q ".[dev]"
+          mkdir -p /tmp/tracecite-tooling
+          cp benchmarks/agent-investigation/pi_log_code_tracecite_extension.ts /tmp/tracecite-tooling/
+          cp benchmarks/agent-investigation/pi_tracecite_extension_impl.ts /tmp/tracecite-tooling/
+          cp benchmarks/agent-investigation/pi_tracecite_bridge.py /tmp/tracecite-tooling/
+          cp benchmarks/agent-investigation/pi_session_to_transcript.py /tmp/tracecite-tooling/
+          cp .pi/skills/tracecite/SKILL.md /tmp/tracecite-tooling/tracecite-SKILL.md
+          rm -rf .git
+          rm -f benchmarks/agent-investigation/RCAEval_SCALE_SUITE.md
+          rm -f .github/workflows/pi-rcaeval-four-scale-dual-gmi-ab.yml
+
+      - name: Download byte-identical prepared evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: rcaeval-prepared-${{ matrix.case_id }}
+          path: /tmp/prepared
+
+      - name: Isolate Agent-visible evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUN_ROOT"
+          mkdir -p "$RUN_ROOT/evidence" "$RUN_ROOT/source" "$RUN_ROOT/result" "$PI_CODING_AGENT_DIR"
+          cp /tmp/prepared/evidence/traces.jsonl "$RUN_ROOT/evidence/traces.jsonl"
+          cp /tmp/prepared/prepared.json "$RUN_ROOT/result/prepared.json"
+          rm -rf /tmp/prepared
+          test -s "$RUN_ROOT/evidence/traces.jsonl"
+
+      - name: Configure isolated GMI model
+        env:
+          ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+          ARM_API_KEY: ${{ matrix.arm == 'native' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ARM_API_KEY:-}" || { echo '${{ matrix.arm }} API key missing' >&2; exit 2; }
+          test -n "${ARM_MODEL:-}" || { echo '${{ matrix.arm }} model missing' >&2; exit 2; }
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['ARM_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          (Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Run Pi arm
+        env:
+          ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+          ARM_API_KEY: ${{ matrix.arm == 'native' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUESTION='Using only the supplied traces.jsonl, investigate the incident. Identify the single most likely root-cause microservice and explain the concrete failure mechanism or root-cause indicator visible in the traces. Reconstruct enough causal/temporal evidence to distinguish root cause from downstream symptoms. Cite exact traces.jsonl:L<line> locations for material claims. Distinguish direct observation from inference. Do not use case-name/injection metadata or outside knowledge.'
+          RUNTIME_LOG="$RUN_ROOT/evidence/traces.jsonl"
+          RESULT="$RUN_ROOT/result"
+          mkdir -p "$RESULT/pi-session"
+          printf '%s\n' "$ARM_MODEL" > "$RESULT/model.txt"
+          printf '%s\n' "${{ github.sha }}" > "$RESULT/core-commit.txt"
+          start="$(date +%s)"
+          set +e
+          if [[ "${{ matrix.arm }}" == native ]]; then
+            cd "$RUN_ROOT/evidence"
+            SYSTEM_PROMPT='You are a real coding agent investigating one supplied runtime trace file. Use only the evidence in the current working directory. You own hypotheses, causal reasoning, investigation order, conclusions, evidence sufficiency, and when to stop. Do not use web access, benchmark metadata, case names, fault labels, injection metadata, or outside knowledge. Cite exact traces.jsonl:L<line> references actually observed. Distinguish direct observation from inference.'
+            timeout -k 30s 1200s pi \
+              --provider gmi --model "$ARM_MODEL" --api-key "$ARM_API_KEY" \
+              --thinking off --mode text --print \
+              --session-dir "$RESULT/pi-session" \
+              --tools read,bash,grep,find,ls \
+              --no-extensions --no-skills --no-prompt-templates --no-context-files \
+              --system-prompt "$SYSTEM_PROMPT" "$QUESTION" \
+              > "$RESULT/answer.md" 2> "$RESULT/stderr.log"
+          else
+            cd "$RUN_ROOT/source"
+            SYSTEM_PROMPT="You are a real coding agent investigating one supplied runtime trace file at $RUNTIME_LOG. There is no source checkout. EVERY operation that inspects or derives runtime-evidence content MUST use TraceCite. Native read/grep/bash/find/ls are not an evidence channel. You own hypotheses, causal reasoning, investigation order, conclusions, evidence sufficiency, and when to stop. Do not use web access, benchmark metadata, case names, fault labels, injection metadata, or outside knowledge. Cite exact traces.jsonl:L<line> references actually observed. Distinguish direct observation from inference."
+            TRACECITE_PI_SESSION="$RESULT/tracecite-retrieval-session.json" \
+            TRACECITE_PI_ACTIVITY="$RESULT/tracecite-host-tool-activity.json" \
+            TRACECITE_LOG_GUARD_ACTIVITY="$RESULT/tracecite-log-guard-blocks.jsonl" \
+            TRACECITE_LOG_ACCESS_ACTIVITY="$RESULT/tracecite-runtime-log-access.jsonl" \
+            TRACECITE_CODE_ROOT="$RUN_ROOT/source" \
+            TRACECITE_RUNTIME_LOG="$RUNTIME_LOG" \
+            TRACECITE_EVIDENCE_FILES="$RUNTIME_LOG" \
+            timeout -k 30s 1200s pi \
+              --provider gmi --model "$ARM_MODEL" --api-key "$ARM_API_KEY" \
+              --thinking off --mode text --print \
+              --session-dir "$RESULT/pi-session" \
+              --extension /tmp/tracecite-tooling/pi_log_code_tracecite_extension.ts \
+              --tools read,bash,grep,find,ls,tracecite_retrieve,tracecite_materialize,tracecite_replay,tracecite_aggregate,tracecite_traverse,tracecite_verify,tracecite_search,tracecite_expand \
+              --no-skills --skill /tmp/tracecite-tooling/tracecite-SKILL.md \
+              --no-prompt-templates --no-context-files \
+              --system-prompt "$SYSTEM_PROMPT" "$QUESTION" \
+              > "$RESULT/answer.md" 2> "$RESULT/stderr.log"
+          fi
+          code=$?
+          set -e
+          end="$(date +%s)"
+          echo "$code" > "$RESULT/exit.txt"
+          echo "$((end-start))" > "$RESULT/wall-seconds.txt"
+          echo "arm=${{ matrix.arm }} exit=$code wall=$((end-start))s"
+
+      - name: Convert transcript and score
+        if: always()
+        env:
+          EXPECTED_SERVICE: ${{ matrix.expected_service }}
+          ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+          ARM: ${{ matrix.arm }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESULT="$RUN_ROOT/result"
+          SESSION="$(find "$RESULT/pi-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          if [[ -n "$SESSION" && -f "$RESULT/answer.md" ]]; then
+            python /tmp/tracecite-tooling/pi_session_to_transcript.py \
+              "$SESSION" "$RESULT/answer.md" "$RESULT/transcript.jsonl" \
+              --mode "rcaeval-${ARM}" --model "$ARM_MODEL" || true
+          fi
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          root = Path(os.environ['RUN_ROOT'])
+          result = root / 'result'
+          evidence = root / 'evidence' / 'traces.jsonl'
+          answer = (result / 'answer.md').read_text(errors='replace') if (result / 'answer.md').is_file() else ''
+          expected = os.environ['EXPECTED_SERVICE']
+          arm = os.environ['ARM']
+          citations = [int(x) for x in re.findall(r'traces\.jsonl:L(\d+)', answer)]
+          wanted = set(citations)
+          cited_text = {}
+          rows = 0
+          with evidence.open(encoding='utf-8', errors='replace') as fh:
+              for rows, line in enumerate(fh, start=1):
+                  if rows in wanted:
+                      cited_text[rows] = line.rstrip('\n')
+          valid_citations = [line for line in citations if 1 <= line <= rows]
+          supporting = [line for line in valid_citations if expected.lower() in cited_text.get(line, '').lower()]
+
+          usage = {'input_tokens': 0, 'output_tokens': 0, 'cached_input_tokens': 0, 'model_calls': 0}
+          transcript = result / 'transcript.jsonl'
+          tool_calls = 0
+          if transcript.is_file():
+              for raw in transcript.read_text(errors='replace').splitlines():
+                  try: event = json.loads(raw)
+                  except Exception: continue
+                  if event.get('type') == 'model':
+                      usage['model_calls'] += 1
+                      u = event.get('usage') or {}
+                      for key in ('input_tokens','output_tokens','cached_input_tokens'):
+                          value = u.get(key)
+                          if isinstance(value, int): usage[key] += value
+                  elif event.get('type') == 'tool':
+                      tool_calls += 1
+
+          access = result / 'tracecite-runtime-log-access.jsonl'
+          blocked = result / 'tracecite-log-guard-blocks.jsonl'
+          tracecite_accesses = sum(1 for x in access.read_text(errors='replace').splitlines() if x.strip()) if access.is_file() else 0
+          blocked_native = sum(1 for x in blocked.read_text(errors='replace').splitlines() if x.strip()) if blocked.is_file() else 0
+          exit_code = int((result / 'exit.txt').read_text().strip()) if (result / 'exit.txt').is_file() else None
+          prepared = json.loads((result / 'prepared.json').read_text())
+          boundary_ok = True if arm == 'native' else tracecite_accesses > 0
+          summary = {
+              'schema_version': 1,
+              'arm': arm,
+              'model': os.environ['ARM_MODEL'],
+              'core_commit': (result / 'core-commit.txt').read_text().strip() if (result / 'core-commit.txt').is_file() else None,
+              'evidence': prepared,
+              'exit_code': exit_code,
+              'wall_seconds': int((result / 'wall-seconds.txt').read_text().strip()) if (result / 'wall-seconds.txt').is_file() else None,
+              'expected_service': expected,
+              'service_match': expected.lower() in answer.lower(),
+              'citation_count': len(citations),
+              'valid_citation_count': len(valid_citations),
+              'service_supporting_citations': supporting,
+              'citation_grounding_pass': bool(valid_citations and supporting),
+              'tool_calls': tool_calls,
+              'token_usage': usage,
+              'tracecite_runtime_log_calls': tracecite_accesses,
+              'blocked_native_log_attempts': blocked_native,
+              'boundary_pass': boundary_ok,
+          }
+          summary['comparison_valid'] = bool(exit_code == 0 and summary['service_match'] and summary['citation_grounding_pass'] and boundary_ok)
+          (result / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload arm artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rcaeval-${{ matrix.case_id }}-${{ matrix.arm }}
+          path: /tmp/rcaeval-run/result
+          if-no-files-found: warn
+          retention-days: 14
+
+  aggregate:
+    name: aggregate four-case comparison
+    if: always()
+    needs: arm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all arm artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rcaeval-*
+          path: /tmp/rcaeval-results
+
+      - name: Build aggregate summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('/tmp/rcaeval-results')
+          rows = []
+          for path in sorted(root.rglob('summary.json')):
+              try: rows.append(json.loads(path.read_text()))
+              except Exception: pass
+          report = {'schema_version': 1, 'arms': rows}
+          by_size = {}
+          for row in rows:
+              key = str((row.get('evidence') or {}).get('bytes'))
+              by_size.setdefault(key, {})[row.get('arm')] = row
+          report['pairs'] = by_size
+          out = Path('/tmp/rcaeval-aggregate.json')
+          out.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          print(out.read_text())
+          PY
+
+      - name: Upload aggregate
+        uses: actions/upload-artifact@v4
+        with:
+          name: rcaeval-four-scale-aggregate
+          path: /tmp/rcaeval-aggregate.json
+          retention-days: 14
