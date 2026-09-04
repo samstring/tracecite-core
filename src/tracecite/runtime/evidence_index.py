@@ -1,9 +1,9 @@
 """Deterministic navigation index for high-cardinality text searches.
 
 The index describes the complete matched-record space without deciding which
-match is important.  When a search has only a few matches the normal Evidence
-pointers remain visible.  Larger match spaces are projected as rule counts and
-line locators so the Agent can choose what to materialize next.
+match is important. When a search has only a few matches the normal Evidence
+remains visible. Larger match spaces are projected as rule counts plus every
+matched source-line locator so the Agent can choose what to materialize next.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from typing import Any, Mapping
 
 
 DEFAULT_INLINE_EVIDENCE_THRESHOLD = 5
-DEFAULT_SAMPLE_LINES = 5
 
 
 def _matched_records_path(canonical: Mapping[str, Any]) -> Path | None:
@@ -91,17 +90,6 @@ def _rules(query: str, *, regex: bool) -> list[tuple[str, re.Pattern[str] | None
     return [(part, re.compile(part)) for part in parts]
 
 
-def _append_sample(samples: list[int], line: int, *, limit: int) -> None:
-    if line in samples:
-        return
-    if len(samples) < limit:
-        samples.append(line)
-        return
-    # Keep the earliest locators stable while making the final slot track the
-    # latest occurrence.  This is navigation coverage, not relevance ranking.
-    samples[-1] = line
-
-
 def build_evidence_index(
     records_path: Path,
     *,
@@ -110,20 +98,17 @@ def build_evidence_index(
     source: str,
     total_matches: int,
     source_sha256: str = "",
-    sample_lines: int = DEFAULT_SAMPLE_LINES,
 ) -> dict[str, Any] | None:
-    """Build a complete rule-level index from the already-produced match artifact."""
+    """Build a complete rule-level locator index from the matched-record artifact."""
 
-    if sample_lines < 1 or not records_path.is_file():
+    if not records_path.is_file():
         return None
     rules = _rules(query, regex=regex)
     stats = [
         {
             "rule": rule,
             "count": 0,
-            "start_line": None,
-            "end_line": None,
-            "sample_lines": [],
+            "lines": [],
         }
         for rule, _ in rules
     ]
@@ -140,11 +125,8 @@ def build_evidence_index(
             if not isinstance(metadata, Mapping):
                 continue
             start = metadata.get("start_line")
-            end = metadata.get("end_line")
             if not isinstance(start, int) or isinstance(start, bool) or start < 1:
                 continue
-            if not isinstance(end, int) or isinstance(end, bool) or end < start:
-                end = start
             text = str(row.get("text") or "")
 
             for index, (rule, compiled) in enumerate(rules):
@@ -153,10 +135,7 @@ def build_evidence_index(
                     continue
                 item = stats[index]
                 item["count"] = int(item["count"]) + 1
-                if item["start_line"] is None:
-                    item["start_line"] = start
-                item["end_line"] = end
-                _append_sample(item["sample_lines"], start, limit=sample_lines)
+                item["lines"].append(start)
 
     entries = [item for item in stats if int(item["count"]) > 0]
     if not entries:
@@ -170,8 +149,8 @@ def build_evidence_index(
         "total_matches": int(total_matches),
         "entries": entries,
         "note": (
-            "Complete rule-level match index; entries are locators, not Evidence. "
-            "Choose a rule/line and materialize the referenced source range before citing it."
+            "Complete rule-level match index; lines are locators, not Evidence. "
+            "Choose a line and materialize that source range before citing it."
         ),
     }
     if source_sha256:
@@ -187,7 +166,7 @@ def project_search_canonical(
     source: str,
     inline_threshold: int = DEFAULT_INLINE_EVIDENCE_THRESHOLD,
 ) -> dict[str, Any]:
-    """Apply the <=threshold Evidence / >threshold index-only search contract."""
+    """Apply the <=threshold Evidence / >threshold complete-index contract."""
 
     payload = dict(canonical)
     data = dict(payload.get("data") or {})
@@ -197,6 +176,7 @@ def project_search_canonical(
     data.pop("signal_hints", None)
     data.pop("signal_hint_note", None)
     coverage.pop("signal_hints_returned", None)
+    coverage.pop("evidence_index", None)
 
     match_records = coverage.get("match_records")
     if not isinstance(match_records, int) or isinstance(match_records, bool):
@@ -227,8 +207,8 @@ def project_search_canonical(
         payload["coverage"] = coverage
         return payload
 
-    # Do not expose a system-selected first-N body alongside the index.  The
-    # Agent chooses a locator and explicitly materializes formal Evidence.
+    # Do not expose a system-selected first-N body alongside the index. The
+    # Agent receives every locator and chooses what to materialize as Evidence.
     payload["evidence"] = []
     for key in ("text", "new_text", "direct_raw"):
         data.pop(key, None)
@@ -237,10 +217,6 @@ def project_search_canonical(
     coverage["evidence_truncated"] = False
     coverage["evidence_indexed"] = True
     coverage["evidence_bodies_withheld"] = match_records
-    # The Pi compact projection already forwards coverage, so expose the same
-    # bounded navigation structure there without requiring an adapter-specific
-    # hint channel.
-    coverage["evidence_index"] = index
     payload["data"] = data
     payload["coverage"] = coverage
     return payload
@@ -248,7 +224,6 @@ def project_search_canonical(
 
 __all__ = [
     "DEFAULT_INLINE_EVIDENCE_THRESHOLD",
-    "DEFAULT_SAMPLE_LINES",
     "build_evidence_index",
     "project_search_canonical",
 ]
