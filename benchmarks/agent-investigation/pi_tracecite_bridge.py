@@ -27,7 +27,6 @@ from tracecite.runtime import (
     traverse,
     verify,
 )
-from tracecite.runtime.evidence_selection import select_signal_hints
 from tracecite.runtime.repeated_evidence import attach_matched_existing_evidence
 
 
@@ -169,143 +168,6 @@ def _file_access_identity_evidence(
     }
 
 
-def _matched_records_path(payload: Mapping[str, Any]) -> Path | None:
-    for row in payload.get("artifacts") or []:
-        if not isinstance(row, Mapping) or row.get("role") != "matched_records":
-            continue
-        raw = str(row.get("path") or "").strip()
-        if raw:
-            return Path(raw)
-    return None
-
-
-def _refresh_source_aware_navigation_hints(requested: Path, payload: dict[str, Any]) -> None:
-    """Re-rank truncated Pi navigation hints with local source neighborhoods.
-
-    Core owns the generic structural selector. This Pi projection supplies the
-    original source path so identical matching lines can still be distinguished
-    by nearby caller/callee structure. The selector returns coordinates only;
-    the Agent must materialize a range before using its body as Evidence.
-    """
-
-    if not requested.is_file():
-        return
-    coverage = payload.get("coverage")
-    if not isinstance(coverage, Mapping) or not bool(coverage.get("evidence_truncated")):
-        return
-    records_path = _matched_records_path(payload)
-    if records_path is None:
-        return
-    try:
-        hints = select_signal_hints(
-            records_path,
-            source_path=requested,
-            limit=4,
-            signature_cap=256,
-        )
-    except (OSError, ValueError):
-        return
-    if not hints:
-        return
-
-    inline_ranges: list[tuple[int, int]] = []
-    for row in payload.get("evidence") or []:
-        if not isinstance(row, Mapping):
-            continue
-        start = row.get("start_line")
-        end = row.get("end_line")
-        if not isinstance(start, int) or isinstance(start, bool):
-            continue
-        if not isinstance(end, int) or isinstance(end, bool) or end < start:
-            end = start
-        inline_ranges.append((start, end))
-
-    retained: list[dict[str, Any]] = []
-    for hint in hints:
-        line = int(hint["line"])
-        if any(start <= line <= end for start, end in inline_ranges):
-            continue
-        retained.append(dict(hint))
-    if not retained:
-        return
-
-    data = payload.setdefault("data", {})
-    if isinstance(data, dict):
-        data["signal_hints"] = retained
-        data["signal_hint_note"] = (
-            "Structurally diverse truncated-search navigation candidates; "
-            "materialize the referenced range before citing."
-        )
-        data["source_neighborhood_diversity"] = True
-    if isinstance(coverage, dict):
-        coverage["signal_hints_returned"] = len(retained)
-
-
-def _navigation_hint_evidence(
-    requested: Path,
-    payload: Mapping[str, Any],
-) -> list[dict[str, Any]]:
-    """Project navigation hints without promoting them to source Evidence."""
-
-    if not requested.is_file():
-        return []
-    data = payload.get("data")
-    if not isinstance(data, Mapping):
-        return []
-    hints = data.get("signal_hints")
-    if not isinstance(hints, list):
-        return []
-
-    source_path = str(requested.expanduser().resolve())
-    digest = _payload_sha256(payload, requested)
-    name = Path(source_path).name
-    pointers: list[dict[str, Any]] = []
-    for row in hints:
-        if not isinstance(row, Mapping):
-            continue
-        start = row.get("line")
-        end = row.get("end_line")
-        if not isinstance(start, int) or isinstance(start, bool) or start < 1:
-            continue
-        if not isinstance(end, int) or isinstance(end, bool) or end < start:
-            end = start
-        severity = row.get("severity")
-        severity_value = int(severity) if isinstance(severity, int) and not isinstance(severity, bool) else 0
-        count = row.get("count")
-        count_value = int(count) if isinstance(count, int) and not isinstance(count, bool) else 1
-        kind = str(row.get("kind") or ("high_signal" if severity_value > 0 else "structural_diversity"))
-        preview = str(row.get("label") or "").strip()[:240]
-        line_ref = f"L{start}" if end == start else f"L{start}-L{end}"
-        label = [
-            f"navigation_hint={kind}",
-            f"source={name}",
-            f"follow_up_file={source_path}",
-            f"range={line_ref}",
-            f"cluster_count={count_value}",
-        ]
-        if severity_value:
-            label.append(f"severity={severity_value}")
-        if preview:
-            label.append(f"preview={preview}")
-        label.append("materialize this range with TraceCite before citing")
-        pointers.append(
-            {
-                "uri": (
-                    f"tracecite-navigation://sha256/{digest}/{line_ref}"
-                    if digest
-                    else f"tracecite-navigation://path/{name}/{line_ref}"
-                ),
-                "source_path": source_path,
-                "sha256": digest or None,
-                "start_line": start,
-                "end_line": end,
-                "label": " ".join(label),
-                "metadata_only": True,
-            }
-        )
-    return pointers
-
-
 def _append_identity_evidence(payload: dict[str, Any], rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
@@ -341,18 +203,12 @@ def _retrieve(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[
             if isinstance(data, dict):
                 data["source_identity_projection"] = True
     elif requested.is_file():
-        if args.query:
-            _refresh_source_aware_navigation_hints(requested, payload)
-        navigation = _navigation_hint_evidence(requested, payload)
-        _append_identity_evidence(payload, navigation)
         access = _file_access_identity_evidence(requested, payload)
         if access is not None:
             _append_identity_evidence(payload, [access])
             data = payload.setdefault("data", {})
             if isinstance(data, dict):
                 data["follow_up_access_file"] = access["source_path"]
-                if navigation:
-                    data["navigation_hint_projection"] = len(navigation)
 
     return payload
 
