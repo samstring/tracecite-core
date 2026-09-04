@@ -104,6 +104,9 @@ The budget is an Agent cost discipline, not a Runtime planner or causal stopping
 - `no_match` is a retrieval fact, not proof that an event never happened.
 - `new_evidence=0` means the operation exposed no new Evidence identity in the current RetrievalSession.
 - `matched_existing_evidence` identifies previously delivered Evidence matched by the current request without pretending it is new.
+- Query searches with at most 5 matches return all matched Evidence directly.
+- Query searches with more than 5 matches return a complete navigation-only `coverage.evidence_index` instead of an arbitrary first-N body. Each entry reports the matched rule, count, source `start_line`/`end_line`, and bounded `sample_lines` locators.
+- An Evidence Index is not cited Evidence and is not ranked by importance. Choose the rule/locator that answers the current unresolved question, then call `tracecite_materialize` on that source line/range before using it as evidence.
 
 Use exact refs and returned source SHA-256 for later materialization/replay.
 
