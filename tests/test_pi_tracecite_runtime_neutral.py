@@ -37,6 +37,17 @@ def test_path_errors_expose_only_configured_source_inventory() -> None:
     assert "next_source" not in text
 
 
+def test_skill_requires_tracecite_activation_before_diagnosis() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "**Activation invariant:**" in skill
+    assert "the first investigation action must be a TraceCite evidence call before any factual diagnosis or terminal answer" in skill
+    assert "Do not answer from prompt text, model memory, prior runs, or embedded examples" in skill
+    assert "that first call must follow the synchronization-orientation rule below" in skill
+    assert "Activation invariant" not in runtime
+    assert "first investigation action" not in runtime
+
+
 def test_skill_keeps_waiter_holder_and_lifecycle_boundaries_in_skill_only() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
