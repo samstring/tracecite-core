@@ -17,6 +17,9 @@ def test_reciprocal_closure_requires_both_components_in_both_paths() -> None:
     assert "Different outer callers that merely converge on the same inner lock" in skill
     assert "do not satisfy this four-endpoint membership test" in skill
     assert "If either component appears in only one path, reciprocal closure is false" in skill
+    assert "The very next evidence call must search the exact receiver/type-family identity of outer component `B`" in skill
+    assert "do not substitute a package-wide token, subsystem path, waiter census, or another synchronization primitive" in skill
 
     assert "four-endpoint membership test" not in runtime
     assert "Both `A` and `B` must appear in both materialized paths" not in runtime
+    assert "The very next evidence call must search the exact receiver/type-family identity of outer component `B`" not in runtime
