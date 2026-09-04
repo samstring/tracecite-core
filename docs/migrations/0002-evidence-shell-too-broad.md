@@ -80,15 +80,20 @@ SourceVersion
 
 ## SourceVersion behavior
 
-Agent text search now binds to an immutable QuestionSourceView:
+Agent text search now binds each logical source to an immutable `SessionSourceView` for the lifetime of one RetrievalSession/context:
 
-- one user-question RetrievalSession/context reuses one fixed SourceVersion;
-- unchanged mutable sources can reuse the previous snapshot + SHA + line metadata across questions;
+- the first access in a RetrievalSession establishes or reuses one fixed SourceVersion;
+- later tool calls in that same session reuse the exact version even if the original mutable/live path changes;
+- a Host does not need to rotate SourceVersion at every user message when one conversation maps to one RetrievalSession;
+- a new RetrievalSession checks the current source fingerprint on first access;
+- unchanged mutable sources reuse the previous snapshot + SHA + line metadata across sessions;
 - changed mutable files create a new immutable snapshot while computing SHA and line count in the same copy pass;
-- live mode prefers cooperative LiveCut and immutable segments, with a verified append-only incremental fallback;
+- live mode freezes on the session's first access, prefers cooperative LiveCut and immutable segments, and lets a later session capture newer bytes;
 - managed materialize/replay reuses the already established snapshot/segment SHA rather than hashing the full file again.
 
-Hosts that keep a long-lived conversation session across multiple user questions must rotate or supply a user-question retrieval context at each new question so the SourceVersion can be refreshed when appropriate.
+`SessionSourceView` and `SessionSourceVersionStore` are the canonical public names. The internal historical `QuestionSourceView` / `question_id` names may remain compatibility aliases/fields while persisted state is migrated.
+
+A newer SourceVersion requires a new RetrievalSession/context, or a future explicit refresh-source operation. TraceCite must never silently refresh a bound source inside the same session.
 
 ## Agent result SourceVersion projection
 
@@ -102,4 +107,4 @@ Canonical `retrieve`, `materialize`, `replay`, `aggregate`, `traverse`, and `ver
 
 ## Schema version
 
-`RESULT_SCHEMA_VERSION` remains `1` because `too_broad` and the compact SourceVersion metadata are additive/transport-compatible changes on the refactor branch. Consumers that validate a hard-coded status enum must update that enum before adopting this branch.
+`RESULT_SCHEMA_VERSION` remains `1` because `too_broad`, compact SourceVersion metadata, and the new public SessionSourceView aliases are additive/transport-compatible changes on the refactor branch. Consumers that validate a hard-coded status enum must update that enum before adopting this branch.
