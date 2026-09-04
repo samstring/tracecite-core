@@ -346,7 +346,7 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 | Agent skill for shell/refinement | 已实现 | `.agents/skills/tracecite-investigate/SKILL.md` |
 | Pi `tracecite_run` adapter | 已实现 | budget/source policy 由 Host 环境/产品配置持有 |
 | Public ResultHandle/MatchSet API | 待实现（延后） | 当前 all-or-refine contract 不需要公开 |
-| Full regression + Native/TraceCite benchmark validation | 待验证 | 代码完成后统一跑，不属于架构实现本身 |
+| Full regression + Native/TraceCite benchmark validation | 计划验证 | 代码完成后统一跑，不属于架构实现本身 |
 
 ## 16. 文档 / Governance
 
