@@ -1,14 +1,14 @@
-trigger: 2026-09-04 synchronization-first reciprocal diagnostic after clean convergence failure
+trigger: 2026-09-04 cross-component reciprocal-closure diagnostic after clean convergence failure
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-literal-sync-query-firewall
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-six-call-hard-stop-plus-mandatory-sync-first-orientation-plus-complementary-acquisition-reciprocal-search-plus-exact-four-paragraph-final
+adaptive_stopping_skill: stack-only-six-call-hard-stop-plus-mandatory-sync-first-orientation-plus-cross-component-reciprocal-closure-plus-exact-four-paragraph-final
 skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-6
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: first valid Go stack orientation query must be a single synchronization token, normally semacquire; runc/shim/process/RPC/FIFO/generic-goroutine and symptom nouns are forbidden before representative synchronization path; after RWMutex writer Lock the first reciprocal search targets RLock (and vice versa) or exact path symbols; no lifecycle/symptom reciprocal queries; whole answer starts Observed and contains exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
+diagnostic_focus: first valid Go stack orientation query must be a single synchronization token, normally semacquire; complementary Lock/RLock waiter is an orientation clue only and never a reciprocal endpoint; after materializing it, immediately use an exact caller/component symbol from that path to retrieve the opposite cross-component nesting; structural inversion requires two directly observed reversed cross-component paths; whole answer starts Observed and contains exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
 agent_timeout_seconds: 900
