@@ -1,0 +1,42 @@
+name: Budget model migration
+
+on:
+  push:
+    branches:
+      - feature_for_agent
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: "${{ github.event.head_commit.message == 'chore: run budget model migration' }}"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install development dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Apply budget model migration
+        run: python scripts/refactor_budget_model_once.py
+      - name: Run focused regressions
+        run: |
+          python -m pytest tests/test_budget_cache.py tests/test_runtime_schema_tools.py tests/test_session_novelty_regressions.py
+          python scripts/check_architecture.py
+      - name: Run full Core test suite
+        run: python -m pytest -W error::DeprecationWarning
+      - name: Commit validated migration
+        run: |
+          rm .github/workflows/refactor-budget-model-on-feature.yml
+          rm scripts/refactor_budget_model_once.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor: unify user budgets around rounds and input size'
+          git push origin HEAD:feature_for_agent
