@@ -84,11 +84,11 @@ Agent owns: query program -> hypothesis -> causal reasoning -> sufficiency -> an
 
 `SourceVersion` identifies the immutable bytes actually observed by an investigation rather than a pathname that may continue changing.
 
-At the start of one user question, the Host/Runtime resolves one `QuestionSourceView`; all search/run/materialize/replay operations in that investigation reuse it.
+At the start of one user question, the Host/Runtime resolves one `QuestionSourceView`; all search/run/materialize/replay operations in that investigation reuse it. A Host must map one RetrievalSession/context to one user question, or rotate the question/session identity when a new user question begins.
 
 ### Static sources
 
-A source declared immutable does not require a physical copy. The original file may be the immutable source; SHA is established once and cached.
+A source declared immutable does not require a physical copy. The original file may be the immutable source; SHA is established once and cached while the fingerprint remains unchanged.
 
 ### Potentially mutable files
 
@@ -99,16 +99,16 @@ device / file-id
 inode when available
 size
 mtime_ns
-optional ctime/provider revision
+ctime_ns
 ```
 
-Unchanged fingerprint -> reuse prior snapshot/path, SHA, line/index metadata.
+Unchanged fingerprint -> reuse the prior snapshot/path, SHA, and line metadata without another copy, full hash, or line recount.
 
-Changed fingerprint -> establish a new SourceVersion. The fingerprint is only a cheap reuse key; final Evidence identity still depends on immutable bytes + SHA/version.
+Changed fingerprint -> establish a new SourceVersion. Snapshot copying calculates SHA and line count in the same sequential read. The fingerprint is only a cheap reuse key; final Evidence identity still depends on immutable bytes + SHA/version.
 
 ### Live sources
 
-Large live sources should use cooperative `live_cut` + immutable segments rather than copying the full accumulated file for every question.
+Large live sources use cooperative `live_cut` + immutable segments rather than copying the full accumulated file for every question.
 
 ```text
 writer -> live.log
@@ -116,9 +116,9 @@ question boundary -> live cut -> immutable segment N
 writer continues -> new live.log
 ```
 
-Historical segments are not recopied or rehashed. A logical SourceVersion may be a manifest of immutable segments.
+Historical segments are not recopied or rehashed. The logical SourceVersion is an ordered immutable-segment manifest; each EvidencePointer still binds to an exact segment SHA and segment-local line range.
 
-Fallback order when cooperative cut is unavailable: CoW clone/reflink -> a bounded byte view for a provably append-only source -> full-copy snapshot.
+If the writer does not cooperate, the current fallback mechanically verifies append continuity at the previous capture boundary and copies only newly appended complete bytes into a new immutable segment. If continuity cannot be proven, TraceCite establishes a new immutable capture instead of treating unknown changes as append-only.
 
 ## 5. Evidence Shell / `tracecite_run`
 
@@ -132,19 +132,24 @@ search '"statusCode":500'
 | where latency >= 1000
 ```
 
-Capability families include:
+The implemented mechanical command surface includes:
 
-- literal / grep-like search;
-- regex;
-- time/range/source scope;
-- structured-field predicates;
-- filter/exclude;
-- aggregate/count/group/distinct;
-- sort/top/take/first/last;
-- seek/near/range navigation;
-- generic search backends registered later through capability plumbing.
+- `all`;
+- literal `search`;
+- grep-like fixed/regex/invert/case-insensitive search;
+- safe `regex`;
+- `exclude` / `exclude-regex`;
+- structured `where` comparison / contains / startswith / endswith / matches;
+- `exists` / `missing`;
+- `lines`;
+- Host/tool-level `last` / `since` / `until` / `segmenter` scope;
+- `sort` / `reverse`;
+- `take` / `head` / `first` / `last` / `tail`;
+- `near` / `seek`;
+- `count` / `group` / `distinct` / `uniq`;
+- `emit`.
 
-Evidence Shell is not unrestricted host bash by default. It may read only authorized SourceVersions and registered evidence/search primitives; it must not use the network, arbitrary filesystem access, shell escape, Evidence mutation, or policy bypass.
+Evidence Shell is not unrestricted host bash. It may read only authorized SourceVersions and TraceCite evidence/search primitives; it must not use the network, arbitrary filesystem access, shell escape, Evidence mutation, or policy bypass.
 
 The desired small Agent-facing tool surface is:
 
@@ -154,23 +159,29 @@ tracecite_run
 tracecite_materialize
 ```
 
-Existing `retrieve/search/aggregate/...` surfaces may remain canonical/compatibility entry points, but multi-step mechanical investigation should prefer one `tracecite_run` so intermediate tool outputs do not repeatedly enter model context.
+Existing `retrieve/search/aggregate/...` surfaces may remain canonical/compatibility entry points. Text `QueryTarget` retrieval already reduces to the Evidence Shell contract. Multi-step mechanical investigation should prefer one `tracecite_run` so intermediate outputs do not repeatedly enter model context.
 
 ## 6. Search -> Segment -> Complete Records
 
-The first shell stage yields raw hit locators. The Segmenter defines complete logical-record boundaries.
+Ordinary Evidence Shell search prefers this order:
 
 ```text
-Raw SourceVersion
-   -> search hits
-   -> Segmenter
-   -> Complete Records
+Raw immutable SourceVersion
+   -> raw physical-line candidate search
+   -> candidate locator
+   -> Segmenter local recovery
+   -> Complete logical Record
+   -> additional shell stages
    -> Evidence Budget Gate
 ```
 
 A physical grep line is not final Evidence, especially for multiline log/trace formats.
 
-During migration, the shell may reuse legacy `search_text` to preserve regex/time/fold/segmenter semantics. The target Agent hot path streams Records directly and no longer requires `matched_records.jsonl`, `hits.jsonl`, `evidence.log`, or filter history.
+For locally recoverable JsonLine, single-line RawText, FormatSegmenter records, and literal multiline FormatSegmenter records, Runtime searches raw hits first and restores only candidate Records. There is no hidden candidate-count limit.
+
+If regex semantics may span multiple physical lines, continuation state cannot be locally proven, or time/range/pid scope requires full record semantics, Runtime may fall back to full logical-record iteration to preserve correctness.
+
+The Agent Shell hot path no longer depends on `search_text` and does not require `matched_records.jsonl`, `hits.jsonl`, `evidence.log`, filter history, or unmatched-token summaries.
 
 ## 7. Evidence Budget Contract
 
@@ -181,7 +192,7 @@ max_evidence_tokens
 max_evidence_bytes  # hard safety cap
 ```
 
-The Agent tool schema must **not** expose parameters that allow the Agent to increase those values.
+The Agent tool schema must **not** expose parameters that allow the Agent to increase those values. Materialize/replay transport is also capped by Host/User Evidence policy rather than an Agent-controlled larger value.
 
 If the complete matched records exceed the budget:
 
@@ -194,13 +205,15 @@ evidence = []
 
 The Runtime may report `observed_at_least_tokens/bytes`; if it stops early after proving the bound was exceeded, it must not fabricate an exact total.
 
-After `too_broad`, the Agent may refine literals/regexes, add predicates, narrow time/range/source scope, use aggregation, or otherwise choose a more selective search. It may not raise/bypass the budget, request all locators, or treat arbitrary first-N output as complete.
+If an aggregate result itself is too large to transport, Runtime returns `AGGREGATE_OUTPUT_BUDGET_EXCEEDED` instead of dumping a large group/distinct result.
 
-Explicit `first/last/top/take/sample` remains valid when the user actually requests selection semantics; it must be marked as selection rather than completeness.
+After `too_broad`, the Agent may refine literals/regexes, add search/filter/where predicates, narrow time/range/source scope, use aggregation, use near/seek around an already meaningful anchor, or otherwise choose a more selective search. It may not raise/bypass the budget, request all locators, or treat arbitrary first-N output as complete.
+
+Explicit `first/last/head/tail/take` remains valid when subset semantics are intentionally requested; it must be marked as selection rather than completeness.
 
 ## 8. Internal MatchSet / intermediate state
 
-`MatchSet` is an internal Runtime implementation concept; the Agent does not need to understand it. It may be a locator array, bitmap, range set, lazy iterator, spill file, or backend handle.
+`MatchSet` is an internal Runtime implementation concept, not a required public Agent object. It may be an iterator, locator array, bitmap, range set, spill file, or backend handle.
 
 Large intermediate sets stay inside Runtime:
 
@@ -208,16 +221,16 @@ Large intermediate sets stay inside Runtime:
 173,320 -> 4,901 -> 331 -> 5
 ```
 
-Only the final compact result crosses the model boundary. If a large set must survive across tool calls, a stable `result_handle` may reference it; the handle must bind SourceVersion and QueryPlan identity rather than retransmitting the full set.
+Only the final compact result crosses the model boundary. The current all-or-refine shell does not require a public ResultHandle. If real cross-call workflows later require persistent large-set reuse, a stable handle may be introduced, but it must bind SourceVersion + QueryPlan identity and never retransmit the full set.
 
 ## 9. Canonical Evidence API
 
 The long-term canonical mechanical primitives remain:
 
-- `retrieve`: caller-selected source/scope/predicate -> Evidence + Coverage + Provenance + novelty/repetition;
+- `retrieve`: caller-selected source/scope/predicate -> Evidence + Coverage + Provenance + novelty/repetition; text QueryTarget reduces to Evidence Shell;
 - `materialize`: exact caller-selected immutable source/version range/ref;
 - `replay`: deliberate reread of old immutable Evidence; novelty remains zero;
-- `aggregate`: deterministic caller-selected count/distinct/group;
+- `aggregate`: compatibility deterministic count/distinct/group; Agent text investigation should prefer Shell aggregates;
 - `traverse`: deterministic traversal under caller-selected seed/scope/direction/limits;
 - `verify`: integrity/source-version/Manifest/exact-Evidence verification.
 
@@ -240,6 +253,8 @@ matched_existing_evidence = [E ref]
 
 A `too_broad` search has not admitted Evidence to the Agent; internally scanned rows therefore must not be added to `seen_evidence` or Coverage.
 
+Question SourceVersion binding is associated with the RetrievalSession/context identity. If a Host keeps a long-lived session across user turns, it must rotate the question/session identity at the next user question rather than silently carrying the previous frozen view forward as current data.
+
 ## 11. Materialize / provenance / citation
 
 Search candidates and final Evidence are separate. Exact context is materialized only when a sufficiently small candidate set needs to be read/reasoned over/cited.
@@ -253,13 +268,15 @@ exact line/range or equivalent locator
 exact raw content
 ```
 
-Once a TraceCite-managed immutable SourceVersion already has a SHA, downstream search/materialize/bridge operations should reuse it instead of hashing the full file again. A pathname that TraceCite has not frozen and that external processes may mutate still requires integrity revalidation.
+Once a TraceCite-managed immutable SourceVersion/segment has a SHA, Shell EvidencePointer creation, managed materialize, and replay reuse it instead of hashing the full file again. SourceVersionStore preserves both latest source state and question-bound historical views so an older immutable segment remains replayable after a newer SourceVersion is established.
+
+A pathname that TraceCite has not frozen and that external processes may mutate still requires integrity revalidation.
 
 ## 12. Agent / Host boundary
 
-The Host owns model/tool/context/wall-time budgets, Evidence token policy, tool exposure, prompt, and native-tool telemetry.
+The Host owns model/tool/context/wall-time budgets, Evidence token/byte policy, source mode, user-question boundary, tool exposure, prompt, and native-tool telemetry.
 
-The Agent skill must teach: prefer `tracecite_run` for combined mechanical search; refine on `too_broad`; never increase user Evidence budget; do not request complete locator dumps; materialize only when exact evidence is needed.
+The Agent skill must teach: prefer `tracecite_run` for combined mechanical search; refine on `too_broad`; never increase user Evidence budget; do not request complete locator dumps; materialize using the returned immutable `source_path + SHA + range` only when exact evidence is needed.
 
 Repository Agent instruction source: `.agents/skills/tracecite-investigate/SKILL.md`.
 
@@ -292,18 +309,22 @@ No domain package may become a required dependency of Core or Runtime.
 | Capability | Status | Current refactor branch |
 |---|---|---|
 | Existing SourceVersion identity (`sha256/cursor/generation/mutable`) | Implemented | `evidence_identity.py` |
-| RetrievalSession seen/repeated/range/replay | Implemented | existing Runtime |
-| Candidate-first literal scanner/local recovery | Implemented | existing Runtime internal |
-| `EvidenceShellPolicy` user/host-owned budget | Implemented | first version; Agent request has no budget override |
-| `tracecite_run` Evidence Shell | Partially implemented | literal/regex/filter/where/count/group/distinct/explicit selection implemented; remaining existing search/navigation semantics still migrating |
+| RetrievalSession seen/repeated/range/replay | Implemented | existing Runtime + Shell admission |
+| Raw-hit candidate-first + local complete-record recovery | Implemented | `record_search.py` + `candidate_recovery.py` |
+| `EvidenceShellPolicy` user/host-owned budget | Implemented | Agent request has no budget override; Pi materialize/replay also use Host budget |
+| `tracecite_run` Evidence Shell | Implemented | literal/grep/regex/where/filter/sort/selection/near/seek/count/group/distinct |
 | `too_broad` canonical transport status | Implemented | over-budget result exposes no Evidence body/locator dump |
-| Pi `tracecite_run` adapter | Implemented | budget comes from Host environment/product configuration |
+| Artifact-free Agent search hot path | Implemented | no matched-record/hit/evidence-log/filter-history dependency |
+| Remove high-cardinality EvidenceIndex from Agent QueryTarget | Implemented | text retrieve/search reduces to Evidence Shell |
+| Question-level SourceVersion binding | Implemented | SourceVersionStore + persisted question views; Host owns question/session boundary |
+| Mutable fingerprint snapshot reuse | Implemented | unchanged -> reuse snapshot + SHA + line metadata |
+| Snapshot SHA/count single pass | Implemented | copy + hash + newline count in one sequential read; no snapshot/original double count |
+| LiveCut + immutable-segment SourceVersion | Implemented | cooperative cut plus verified append-only incremental fallback |
+| Managed materialize/replay SHA reuse | Implemented | exact range reads on immutable managed source without whole-file rehash |
 | Agent skill for shell/refinement | Implemented | `.agents/skills/tracecite-investigate/SKILL.md` |
-| Remove `matched_records.jsonl` / legacy artifacts from Agent search hot path | Partially implemented | shell first stage temporarily reuses `search_text` for semantic compatibility |
-| Remove high-cardinality EvidenceIndex from Agent query path | Partially implemented | new shell does not build EvidenceIndex; legacy retrieve compatibility remains to migrate |
-| Question-level SourceVersion cache / fingerprint reuse | Planned | architecture/ADR fixed; implementation pending |
-| LiveCut + immutable-segment SourceVersion | Planned | Core already contains `live_cut.py` / `segment_store.py` foundations |
-| SHA/count full-file pass consolidation/caching | Planned | bridge now prefers `data.source_sha256`; full SourceVersion cache pending |
+| Pi `tracecite_run` adapter | Implemented | budget/source policy comes from Host environment/product configuration |
+| Public ResultHandle/MatchSet API | Deferred | current all-or-refine contract does not require a public API |
+| Full regression + Native/TraceCite benchmark validation | Pending validation | run after implementation completion; not an architecture implementation gap |
 
 ## 16. Documentation / governance
 
