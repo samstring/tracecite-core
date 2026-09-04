@@ -610,10 +610,6 @@ def search(
             until=until,
             template_threshold=10 if fold else 0,
             max_line_chars=max_line_chars,
-            # Evidence identity is SHA + line range; unscoped Agent search does
-            # not need to normalize every JSON timestamp. Time-scoped/folded
-            # searches keep historical timestamp parsing semantics.
-            parse_record_timestamps=bool(last or since or until or fold),
         )
         evidence_source = Path(result.work_input).resolve()
         digest = (
