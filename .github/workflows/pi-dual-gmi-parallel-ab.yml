@@ -15,6 +15,7 @@ on:
   push:
     branches:
       - experiment/evidence-intelligence
+      - feature_for_agent_refacotr_shell
     paths:
       - .github/workflows/pi-dual-gmi-parallel-ab.yml
       - benchmarks/agent-investigation/agent_flow_runner.py
@@ -24,30 +25,34 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-dual-gmi-parallel-ab-${{ inputs.case_key || '140039' }}
+  group: pi-dual-gmi-parallel-ab-${{ github.event_name == 'workflow_dispatch' && inputs.case_key || github.sha }}
   cancel-in-progress: true
 
 jobs:
   arm:
-    name: ${{ matrix.arm }} / ${{ inputs.case_key || '140039' }}
+    name: ${{ matrix.arm }} / ${{ matrix.case_key }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 4
       matrix:
         arm: [native, tracecite]
+        case_key: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.case_key) || '["140039","140848"]') }}
     env:
-      CASE_KEY: ${{ inputs.case_key || '140039' }}
+      CASE_KEY: ${{ matrix.case_key }}
       GMI_BASE_URL: https://api.gmi-serving.com/v1
-      PI_CODING_AGENT_DIR: /tmp/pi-agent-${{ matrix.arm }}-${{ github.run_id }}
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-${{ matrix.arm }}-${{ matrix.case_key }}-${{ github.run_id }}
       PI_SKIP_VERSION_CHECK: "1"
       PI_TELEMETRY: "0"
-      RESULT_ROOT: /tmp/pi-dual-gmi/${{ inputs.case_key || '140039' }}/${{ matrix.arm }}
-      WORK_ROOT: /tmp/pi-dual-gmi/${{ inputs.case_key || '140039' }}/${{ matrix.arm }}/workspace
-      PREP: /tmp/pi-dual-gmi/${{ inputs.case_key || '140039' }}/${{ matrix.arm }}/prepared
-      SOURCE_ROOT: /tmp/pi-dual-gmi/${{ inputs.case_key || '140039' }}/${{ matrix.arm }}/source
-      TRACECITE_MCP_REF: 71ca06d7e16a1c6ed7ebde65658f9944a10d7c51
+      RESULT_ROOT: /tmp/pi-dual-gmi/${{ matrix.case_key }}/${{ matrix.arm }}
+      WORK_ROOT: /tmp/pi-dual-gmi/${{ matrix.case_key }}/${{ matrix.arm }}/workspace
+      PREP: /tmp/pi-dual-gmi/${{ matrix.case_key }}/${{ matrix.arm }}/prepared
+      SOURCE_ROOT: /tmp/pi-dual-gmi/${{ matrix.case_key }}/${{ matrix.arm }}/source
+      TRACECITE_MCP_REF: 01b15396efa59bac0ef6a76fbe611713612f92b8
+      TRACECITE_EVIDENCE_MAX_TOKENS: "12000"
+      TRACECITE_EVIDENCE_MAX_BYTES: "65536"
+      TRACECITE_MATERIALIZE_MAX_CHARS: "8000"
 
     steps:
       - name: Checkout TraceCite Core under test
@@ -298,34 +303,38 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dual-gmi-${{ inputs.case_key || '140039' }}-${{ matrix.arm }}
+          name: dual-gmi-${{ matrix.case_key }}-${{ matrix.arm }}
           path: ${{ env.RESULT_ROOT }}
           if-no-files-found: error
           retention-days: 14
 
   compare:
-    name: Compare / ${{ inputs.case_key || '140039' }}
+    name: Compare / ${{ matrix.case_key }}
     if: always()
     needs: arm
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        case_key: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.case_key) || '["140039","140848"]') }}
     env:
-      CASE_KEY: ${{ inputs.case_key || '140039' }}
+      CASE_KEY: ${{ matrix.case_key }}
       NATIVE_MODEL: ${{ vars.GMI_MODEL }}
       TRACECITE_MODEL: ${{ vars.GMI2_MODEL }}
-      COMPARE_ROOT: /tmp/pi-dual-gmi-compare
+      COMPARE_ROOT: /tmp/pi-dual-gmi-compare/${{ matrix.case_key }}
 
     steps:
       - name: Download native artifact
         uses: actions/download-artifact@v4
         with:
-          name: dual-gmi-${{ inputs.case_key || '140039' }}-native
-          path: /tmp/pi-dual-gmi-compare/native
+          name: dual-gmi-${{ matrix.case_key }}-native
+          path: /tmp/pi-dual-gmi-compare/${{ matrix.case_key }}/native
 
       - name: Download TraceCite artifact
         uses: actions/download-artifact@v4
         with:
-          name: dual-gmi-${{ inputs.case_key || '140039' }}-tracecite
-          path: /tmp/pi-dual-gmi-compare/tracecite
+          name: dual-gmi-${{ matrix.case_key }}-tracecite
+          path: /tmp/pi-dual-gmi-compare/${{ matrix.case_key }}/tracecite
 
       - name: Build comparison
         shell: bash
@@ -438,9 +447,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dual-gmi-${{ inputs.case_key || '140039' }}-comparison
+          name: dual-gmi-${{ matrix.case_key }}-comparison
           path: |
-            /tmp/pi-dual-gmi-compare/comparison.json
-            /tmp/pi-dual-gmi-compare/comparison.md
+            ${{ env.COMPARE_ROOT }}/comparison.json
+            ${{ env.COMPARE_ROOT }}/comparison.md
           if-no-files-found: error
           retention-days: 14
