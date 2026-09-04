@@ -84,6 +84,18 @@ def test_skill_repairs_invalid_source_without_changing_claim() -> None:
     assert "recommended_source" not in runtime
 
 
+def test_skill_forces_sync_first_orientation_and_reciprocal_queries() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "the first valid orientation search **must** be a single synchronization token or single-construct regex" in skill
+    assert "normally `semacquire`" in skill
+    assert "process/lifecycle/symptom tokens such as `runc`, `shim`, `process`, `RPC`, `FIFO`, generic `goroutine`" in skill
+    assert "the **first reciprocal search must target the complementary acquisition primitive**" in skill
+    assert "`RLock` after an observed writer `Lock`" in skill
+    assert "Never use process/lifecycle/symptom nouns as reciprocal queries" in skill
+    assert "complementary acquisition primitive" not in runtime
+
+
 def test_skill_stops_after_nonadvancing_reciprocal_attempts() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
