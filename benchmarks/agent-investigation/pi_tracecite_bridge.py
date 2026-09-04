@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -15,6 +16,8 @@ from tracecite.extension.retrieval import (
 from tracecite.runtime import (
     AggregateRequest,
     EvidenceRequest,
+    EvidenceShellPolicy,
+    EvidenceShellRequest,
     QueryTarget,
     RangeTarget,
     RetrievalSessionStore,
@@ -24,6 +27,7 @@ from tracecite.runtime import (
     materialize,
     replay,
     retrieve,
+    run_evidence_shell,
     traverse,
     verify,
 )
@@ -42,6 +46,28 @@ def _session_store(path: str) -> RetrievalSessionStore:
     )
     store.load()
     return store
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    raw = str(os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _shell_policy() -> EvidenceShellPolicy:
+    """Read host/user policy. Agent tool arguments cannot override it."""
+
+    return EvidenceShellPolicy(
+        max_evidence_tokens=_positive_env_int("TRACECITE_MAX_EVIDENCE_TOKENS", 12_000),
+        max_evidence_bytes=_positive_env_int("TRACECITE_MAX_EVIDENCE_BYTES", 64 * 1024),
+    )
 
 
 def _valid_sha256(value: object) -> str:
@@ -66,6 +92,16 @@ def _payload_sha256(payload: Mapping[str, Any], source: Path) -> str:
 
     data = payload.get("data")
     if isinstance(data, Mapping):
+        source_sha = _valid_sha256(data.get("source_sha256"))
+        if source_sha:
+            return source_sha
+        source_version = data.get("source_version")
+        if isinstance(source_version, Mapping):
+            version = source_version.get("version")
+            if isinstance(version, Mapping):
+                digest = _valid_sha256(version.get("value"))
+                if digest:
+                    return digest
         sources = data.get("sources")
         if isinstance(sources, list):
             resolved = source.resolve()
@@ -210,6 +246,22 @@ def _retrieve(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[
                 data["follow_up_access_file"] = access["source_path"]
 
     return payload
+
+
+def _run_shell(args: argparse.Namespace, session: RetrievalSessionStore) -> dict[str, Any]:
+    return run_evidence_shell(
+        EvidenceShellRequest(
+            source=Path(args.file),
+            program=args.program,
+            segmenter=args.segmenter,
+            last=args.last or None,
+            since=args.since or None,
+            until=args.until or None,
+            fold=bool(args.fold),
+        ),
+        policy=_shell_policy(),
+        session=session,
+    )
 
 
 def _range_target(args: argparse.Namespace) -> RangeTarget:
@@ -364,6 +416,15 @@ def build_parser() -> argparse.ArgumentParser:
     retrieve_parser.add_argument("--glob", default="*")
     retrieve_parser.add_argument("--recursive", action="store_true")
 
+    run_parser = sub.add_parser("run")
+    run_parser.add_argument("file")
+    run_parser.add_argument("program")
+    run_parser.add_argument("--segmenter", default="auto")
+    run_parser.add_argument("--last", default="")
+    run_parser.add_argument("--since", default="")
+    run_parser.add_argument("--until", default="")
+    run_parser.add_argument("--fold", action="store_true")
+
     materialize_parser = sub.add_parser("materialize")
     _add_range_args(materialize_parser)
 
@@ -398,6 +459,8 @@ def main() -> int:
     session = _session_store(args.session)
     if args.command == "retrieve":
         payload = _retrieve(args, session)
+    elif args.command == "run":
+        payload = _run_shell(args, session)
     elif args.command == "materialize":
         payload = _materialize(args, session)
     elif args.command == "replay":
