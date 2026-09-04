@@ -1,14 +1,14 @@
-trigger: 2026-09-05 reserved reciprocal-slot diagnostic after clean semantic/convergence failure
+trigger: 2026-09-05 TraceCite activation-before-diagnosis diagnostic after clean activation/convergence failure
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-literal-sync-query-firewall-plus-component-family-reciprocal
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: stack-only-six-call-hard-stop-plus-all-invocations-count-plus-authoritative-host-count-plus-mandatory-sync-first-orientation-plus-structural-diversity-hint-first-reciprocal-plus-cross-component-reciprocal-closure-plus-reserved-final-outer-component-family-slot-plus-four-endpoint-membership-plus-exact-four-paragraph-final
+adaptive_stopping_skill: explicit-tracecite-activation-before-diagnosis-plus-stack-only-six-call-hard-stop-plus-all-invocations-count-plus-authoritative-host-count-plus-mandatory-sync-first-orientation-plus-structural-diversity-hint-first-reciprocal-plus-cross-component-reciprocal-closure-plus-reserved-final-outer-component-family-slot-plus-four-endpoint-membership-plus-exact-four-paragraph-final
 skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-6
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: count every TraceCite invocation including source errors/no-match/no-new-evidence/refusal toward the six-call budget; once a complementary path exposes ordered outer-component B -> inner-component A, reserve the very next and final available slot exclusively for the outer B receiver/type-family reciprocal search and never re-expand an already materialized path instead; after call 6 returns finalize immediately with Observed as literal first bytes and exactly four short paragraphs; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
+diagnostic_focus: when the user explicitly requests TraceCite analysis of supplied evidence, the first investigation action must be a TraceCite evidence call and no factual diagnosis may be emitted from prompt text/model memory/prior runs; for stack-only synchronization use the normal semacquire orientation, then preserve the six-call reciprocal-closure rules and exact four-paragraph terminal serializer; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
 agent_timeout_seconds: 900
