@@ -8,6 +8,7 @@ from tracecite.runtime import (
     RetrievalSessionStore,
     run_evidence_shell,
 )
+from tracecite.runtime.evidence_shell_public import run_evidence_shell as run_canonical_evidence_shell
 
 
 def _write_jsonl(tmp_path, rows: list[dict]) -> str:
@@ -171,3 +172,59 @@ def test_unsupported_program_returns_actionable_error_instead_of_tool_exception(
     assert "unsupported" in result["error"].lower()
     assert "supported_hint" in result["data"]
     assert result["evidence"] == []
+
+
+def _refs(result) -> list[tuple[int, int]]:
+    return [
+        (int(row["start_line"]), int(row["end_line"]))
+        for row in result.get("evidence") or []
+    ]
+
+
+def test_terminal_sort_head_fast_path_matches_canonical_ascending(tmp_path) -> None:
+    source = _write_jsonl(
+        tmp_path,
+        [
+            {"service": "route", "start": 30, "name": "c"},
+            {"service": "other", "start": 1, "name": "x"},
+            {"service": "route", "start": 10, "name": "a"},
+            {"service": "route", "start": 20, "name": "b"},
+            {"service": "route", "start": 10, "name": "a2"},
+        ],
+    )
+    request = EvidenceShellRequest(
+        source=source,
+        program="where service == route | sort start asc numeric | head 3",
+    )
+
+    fast = run_evidence_shell(request, policy=_policy())
+    canonical = run_canonical_evidence_shell(request, policy=_policy())
+
+    assert fast["status"] == "ok"
+    assert fast["data"]["execution_engine"] == "bounded_terminal_topn"
+    assert _refs(fast) == _refs(canonical)
+    assert fast["coverage"]["selection_explicit"] is True
+    assert fast["coverage"]["complete"] is False
+
+
+def test_terminal_sort_head_fast_path_matches_canonical_descending_and_ties(tmp_path) -> None:
+    source = _write_jsonl(
+        tmp_path,
+        [
+            {"service": "route", "start": 10, "name": "first-low"},
+            {"service": "route", "start": 50, "name": "first-high"},
+            {"service": "route", "start": 50, "name": "second-high"},
+            {"service": "route", "start": 30, "name": "middle"},
+        ],
+    )
+    request = EvidenceShellRequest(
+        source=source,
+        program="where service == route | sort start desc numeric | take 2",
+    )
+
+    fast = run_evidence_shell(request, policy=_policy())
+    canonical = run_canonical_evidence_shell(request, policy=_policy())
+
+    assert fast["data"]["execution_engine"] == "bounded_terminal_topn"
+    assert _refs(fast) == _refs(canonical)
+    assert _refs(fast) == [(2, 2), (3, 3)]
