@@ -110,7 +110,7 @@ jobs:
       RESULT_ROOT: /tmp/result-${{ matrix.arm }}
       WORK_ROOT: /tmp/work-${{ matrix.arm }}
       MCP_STATE_ROOT: /tmp/mcp-state-${{ matrix.arm }}
-      TRACECITE_MCP_REF: b83c3e64a1b5d8018ebb57a089ec1c5c96263d2a
+      TRACECITE_MCP_REF: a79413cb5cbfd60722fb5a24c1d36c8d45422db3
       TRACECITE_EVIDENCE_MAX_TOKENS: "60000"
       TRACECITE_EVIDENCE_MAX_BYTES: "327680"
       TRACECITE_MATERIALIZE_MAX_CHARS: "4000"
@@ -159,6 +159,7 @@ jobs:
             tests/test_agent_flow_tracecite_hot_path.py
           python -m pytest -q \
             tracecite-mcp/tests/test_server.py \
+            tracecite-mcp/tests/test_analyze_time_scope.py \
             tracecite-mcp/tests/test_stdio_integration.py \
             tracecite-mcp/tests/test_shell_projection_agent_feedback.py \
             tracecite-mcp/tests/test_session_transport_regressions.py
