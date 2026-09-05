@@ -109,6 +109,7 @@ def _compact_repeated_evidence(
     data = dict(result.get("data") or {})
     repeated_raw = data.pop("matched_existing_evidence", None)
     repeated = [item for item in repeated_raw or [] if isinstance(item, Mapping)]
+    representatives = _representatives(repeated, str(request.source))
 
     novelty_raw = data.get("novelty")
     novelty = dict(novelty_raw) if isinstance(novelty_raw, Mapping) else {}
@@ -131,10 +132,14 @@ def _compact_repeated_evidence(
         data["novelty"] = novelty
 
     if repeated_count:
+        # Preserve the historical field for compatibility, but cap it at two
+        # representative receipts so repeated matches cannot recreate a large
+        # locator index in model context.
+        data["matched_existing_evidence"] = representatives
         data["existing_evidence_summary"] = {
             "count": repeated_count,
             "all_matches_previously_seen": bool(new_count == 0),
-            "representative": _representatives(repeated, str(request.source)),
+            "representative": representatives,
             "replay_hint": (
                 "Previously seen Evidence remains recoverable with tracecite_materialize/tracecite_replay "
                 "using its source, line range and SHA when another look is actually needed."
