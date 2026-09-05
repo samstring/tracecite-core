@@ -44,7 +44,7 @@ def test_skill_has_hard_reciprocal_handoff_after_distinct_sync_path() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "Hard reciprocal handoff" in skill
-    assert "the very next TraceCite invocation must be `tracecite_search` for `B`'s receiver/type family" in skill
+    assert "the very next TraceCite invocation must be `tracecite_search` for that exact `B` receiver/type family" in skill
     assert "Remaining pending hints are suspended and must not be consumed first" in skill
     assert "This handoff overrides the rest of the investigation heuristics below" in skill
     assert "Hard reciprocal handoff" not in runtime
@@ -81,3 +81,14 @@ def test_pending_path_can_bind_direct_dependency_component() -> None:
     assert "Exclude only runtime/stdlib synchronization plumbing and generic framework frames" in skill
     assert "direct vendored or third-party receiver/type is eligible" not in runtime
     assert "do not discard it merely because it is library code" not in runtime
+
+
+def test_reciprocal_family_prefers_different_member_before_same_method_waiters() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Reciprocal-family candidate selection is mandatory, not a preference" in skill
+    assert "the next evidence call must expand the earliest such different-member hit in TraceCite result order" in skill
+    assert "Same-method hits are non-progressing while a different-member hit is available" in skill
+    assert "do not issue lifecycle/symptom searches before that candidate is materialized" in skill
+    assert "Reciprocal-family candidate selection is mandatory" not in runtime
+    assert "different-member hit" not in runtime
