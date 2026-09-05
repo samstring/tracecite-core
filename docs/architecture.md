@@ -213,6 +213,14 @@ The Runtime may report `observed_at_least_tokens/bytes`; if it stops early after
 
 If an aggregate result itself is too large to transport, Runtime returns `AGGREGATE_OUTPUT_BUDGET_EXCEEDED` instead of dumping a large group/distinct result.
 
+Bounded `group`/`distinct` results also protect the model boundary from an
+individual oversized string key. A key longer than the derived-value transport
+threshold is represented by a compact descriptor containing a bounded preview,
+length, value digest, and representative Evidence URI; counts, totals,
+ordering, coverage, and the exact source line remain authoritative. Short keys
+keep their historical scalar shape. Consumers must materialize the referenced
+line when the exact long value is required.
+
 After `too_broad`, the Agent may refine literals/regexes, add search/filter/where predicates, narrow time/range/source scope, use aggregation, use near/seek around an already meaningful anchor, or otherwise choose a more selective search. It may not raise/bypass the budget, request all locators, or treat arbitrary first-N output as complete.
 
 Explicit `first/last/head/tail/take` remains valid when subset semantics are intentionally requested; it must be marked as selection rather than completeness.
@@ -228,6 +236,10 @@ Large intermediate sets stay inside Runtime:
 ```
 
 Only the final compact result crosses the model boundary. The current all-or-refine shell does not require a public ResultHandle. If real cross-call workflows later require persistent large-set reuse, a stable handle may be introduced, but it must bind SourceVersion + QueryPlan identity and never retransmit the full set.
+
+Derived-value descriptors are part of this compact-result boundary: they are
+not a lossy replacement for SourceVersion evidence, and their representative
+URI is the recovery handle for an exact value.
 
 ## 9. Canonical Evidence API
 
@@ -331,6 +343,7 @@ No domain package may become a required dependency of Core or Runtime.
 | Managed materialize/replay SHA reuse | Implemented | exact range reads on immutable managed source without whole-file rehash |
 | Agent skill for shell/refinement | Implemented | `.agents/skills/tracecite-investigate/SKILL.md` |
 | Pi `tracecite_run` adapter | Implemented | budget/source policy comes from Host environment/product configuration |
+| Oversized derived-value transport | Implemented | long group/distinct keys use preview + digest + Evidence URI descriptors |
 | Public ResultHandle/MatchSet API | Planned (intentionally deferred) | current all-or-refine contract does not require a public API |
 | Full regression + Native/TraceCite benchmark validation | Pending validation | run after implementation completion; not an architecture implementation gap |
 

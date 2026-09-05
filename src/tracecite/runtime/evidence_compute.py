@@ -104,10 +104,13 @@ class _CompiledJsonlAggregate:
     referenced_fields: set[str]
     matched: int = 0
     counts: dict[str, int] | None = None
+    representative_refs: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if self.counts is None:
             self.counts = {}
+        if self.representative_refs is None:
+            self.representative_refs = {}
 
     @property
     def needs_semantic_json(self) -> bool:
@@ -466,6 +469,67 @@ def _update_topn(
     _trim_topn(item)
 
 
+_DERIVED_VALUE_COMPACT_THRESHOLD = 512
+_DERIVED_VALUE_PREVIEW_CHARS = 240
+
+
+def _derived_value_descriptor(value: str, reference: str | None) -> dict[str, Any]:
+    """Describe an oversized derived value without transporting its body."""
+
+    descriptor: dict[str, Any] = {
+        "preview": value[:_DERIVED_VALUE_PREVIEW_CHARS],
+        "truncated": True,
+        "length": len(value),
+        "value_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+    }
+    if reference:
+        descriptor["evidence_ref"] = reference
+    return descriptor
+
+
+def _compact_derived_aggregate(
+    aggregate: dict[str, Any],
+    *,
+    command: str,
+    representative_refs: Mapping[str, str],
+) -> dict[str, Any]:
+    """Keep long group/distinct keys bounded while retaining exact recovery.
+
+    Counts, totals, ordering, and coverage remain exact. Only a string key
+    whose serialized value is unusually large becomes a descriptor carrying a
+    bounded preview, digest, and representative Evidence URI. The full value
+    remains recoverable by materializing that URI's source line; short values
+    retain the historical scalar shape.
+    """
+
+    result = dict(aggregate)
+    compacted = False
+
+    def compact(value: Any) -> Any:
+        nonlocal compacted
+        if not isinstance(value, str) or len(value) <= _DERIVED_VALUE_COMPACT_THRESHOLD:
+            return value
+        compacted = True
+        return _derived_value_descriptor(value, representative_refs.get(value))
+
+    if command == "group":
+        result["groups"] = [
+            {
+                **dict(row),
+                "key": compact(row.get("key")),
+            }
+            if isinstance(row, Mapping)
+            else row
+            for row in result.get("groups") or []
+        ]
+    elif command == "distinct":
+        result["values"] = [compact(value) for value in result.get("values") or []]
+
+    if compacted:
+        result["derived_value_representation"] = "compact_descriptor"
+    return result
+
+
 def _finalize_aggregate(
     compiled: _CompiledJsonlAggregate,
     *,
@@ -491,6 +555,11 @@ def _finalize_aggregate(
                 "distinct_total": len(ordered),
             }
         aggregate = _postprocess(aggregate, aggregate_stage.command, compiled.post)
+        aggregate = _compact_derived_aggregate(
+            aggregate,
+            command=aggregate_stage.command,
+            representative_refs=compiled.representative_refs or {},
+        )
 
     output = {
         "name": compiled.spec.name,
@@ -756,6 +825,10 @@ def _try_partitioned_jsonl(
                             key = "<missing>" if value is None else str(value)
                             assert item.counts is not None
                             item.counts[key] = item.counts.get(key, 0) + 1
+                            if key not in item.representative_refs:
+                                item.representative_refs[key] = (
+                                    f"evidence://sha256/{segment.sha256}#L{line_number}"
+                                )
                     else:
                         _update_topn(
                             item,

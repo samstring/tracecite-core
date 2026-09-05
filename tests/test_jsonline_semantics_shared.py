@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+import tracecite_core.jsonline_semantics as jsonline_semantics
 from tracecite_core.jsonline_semantics import extract_jsonline_semantics
 from tracecite_core.segmenter import JsonLineSegmenter
 
@@ -59,3 +60,23 @@ def test_custom_jsonline_aliases_share_the_same_semantics() -> None:
     assert semantics.timestamp == datetime(2026, 9, 5, 2, 0, 0)
     assert semantics.timestamp == record.timestamp
     assert semantics.fields == record.fields == {"level": "high", "msg": "payload"}
+
+
+def test_repeated_scalar_timestamp_values_use_bounded_parse_cache(monkeypatch) -> None:
+    jsonline_semantics._parse_scalar_timestamp.cache_clear()
+    real_parse = jsonline_semantics._parse_timestamp
+    calls = 0
+
+    def counted_parse(value):
+        nonlocal calls
+        calls += 1
+        return real_parse(value)
+
+    monkeypatch.setattr(jsonline_semantics, "_parse_timestamp", counted_parse)
+
+    for message in ("first", "second", "third"):
+        semantics = extract_jsonline_semantics({"time": "16:04", "msg": message})
+        assert semantics.timestamp is None
+        assert semantics.fields["msg"] == message
+
+    assert calls == 1

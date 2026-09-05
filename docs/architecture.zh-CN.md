@@ -213,6 +213,8 @@ evidence = []
 
 若内部 aggregate 本身结果过大，则返回 `AGGREGATE_OUTPUT_BUDGET_EXCEEDED`，而不是把超大 group/distinct 列表传给模型。
 
+有界 `group`/`distinct` 结果还必须防止单个超长字符串 key 穿过模型边界。超过 derived-value transport 阈值的 key 会变成 compact descriptor，包含有界 preview、长度、值摘要和代表性 Evidence URI；count、total、排序、Coverage 以及精确 source line 仍保持权威。短 key 继续使用历史 scalar 形状；需要完整长值时，Agent 应 materialize 该 URI 指向的行。
+
 `too_broad` 后 Agent 可以：
 
 - 更精确 literal/regex；
@@ -242,6 +244,8 @@ Agent 不可以：
 ```
 
 Agent 只看到最终小结果。当前 all-or-refine shell 不要求公开 ResultHandle；如果未来真实跨调用 workflow 需要复用大型集合，再引入绑定 SourceVersion + QueryPlan identity 的稳定 handle，仍不得把完整集合传给模型。
+
+Derived-value descriptor 属于这个 compact-result 边界：它不是对 SourceVersion Evidence 的有损替代，代表性 URI 是恢复精确值的 handle。
 
 ## 9. Canonical Evidence API
 
@@ -345,6 +349,7 @@ Domain Extensions     CLI / Pi / Codex / Cursor / MCP/custom
 | Managed materialize/replay SHA reuse | 已实现 | immutable snapshot/segment 读取 exact range，不重新 whole-file SHA |
 | Agent skill for shell/refinement | 已实现 | `.agents/skills/tracecite-investigate/SKILL.md` |
 | Pi `tracecite_run` adapter | 已实现 | budget/source policy 由 Host 环境/产品配置持有 |
+| Oversized derived-value transport | 已实现 | 长 group/distinct key 使用 preview + digest + Evidence URI descriptor |
 | Public ResultHandle/MatchSet API | 待实现（延后） | 当前 all-or-refine contract 不需要公开 |
 | Full regression + Native/TraceCite benchmark validation | 计划验证 | 代码完成后统一跑，不属于架构实现本身 |
 

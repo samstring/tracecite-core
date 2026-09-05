@@ -7,7 +7,9 @@ from tracecite.runtime import (
     EvidenceAnalysisSpec,
     EvidenceComputeRequest,
     EvidenceShellPolicy,
+    EvidenceShellRequest,
     run_evidence_compute,
+    run_evidence_shell,
 )
 from tracecite_core.segmenter import JsonLineSegmenter
 
@@ -177,3 +179,136 @@ def test_unsupported_sibling_does_not_downgrade_supported_topk(tmp_path, monkeyp
     ]
     assert by_name["first"]["status"] == "ok"
     assert by_name["first"]["aggregate"]["rows"][0]["values"]["duration"] == 0
+
+
+def test_group_and_distinct_post_topk_use_bounded_shared_scan(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "events.jsonl"
+    rows = (
+        [{"bucket": "hot", "value": "z"}] * 8
+        + [{"bucket": "warm", "value": "a"}] * 5
+        + [{"bucket": "cool", "value": "m"}] * 3
+        + [
+            {"bucket": f"tail-{index:04d}", "value": f"v-{index:04d}"}
+            for index in range(2_000)
+        ]
+    )
+    path.write_text(
+        "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    import tracecite.runtime.evidence_compute_jsonl_physical as physical
+
+    real_topk = physical.FixedCapacityTopK
+    heaps = []
+
+    class TrackingTopK(real_topk):
+        def __init__(self, limit, *, descending):
+            super().__init__(limit, descending=descending)
+            heaps.append(self)
+
+    monkeypatch.setattr(physical, "FixedCapacityTopK", TrackingTopK)
+
+    real_finalize = legacy._finalize_aggregate
+
+    def fail_unbounded_aggregate_finalize(item, *, policy):
+        if item.aggregate_stage.command in {"group", "distinct"}:
+            raise AssertionError("post-aggregate Top-K must not use full legacy sorting")
+        return real_finalize(item, policy=policy)
+
+    monkeypatch.setattr(legacy, "_finalize_aggregate", fail_unbounded_aggregate_finalize)
+
+    result = run_evidence_compute(
+        EvidenceComputeRequest(
+            source=path,
+            analyses=(
+                EvidenceAnalysisSpec(name="count", program="count"),
+                EvidenceAnalysisSpec(
+                    name="groups",
+                    program="group bucket | sort count desc | head 3",
+                ),
+                EvidenceAnalysisSpec(
+                    name="values",
+                    program="distinct value | sort value asc | head 4",
+                ),
+            ),
+        ),
+        policy=_policy(),
+    )
+
+    assert result["status"] == "ok"
+    data = result["data"]
+    assert data["execution_engine"] == "jsonl_shared_scan_batch"
+    assert data["canonical_remainder_analyses"] == 0
+    assert data["physical_plan"]["aggregate_topk"] == "fixed_capacity_heap"
+    assert data["physical_plan"]["topk_projection"] == "none"
+    assert [heap.limit for heap in heaps] == [3, 4]
+    assert all(heap.retained <= heap.limit for heap in heaps)
+
+    by_name = {item["name"]: item for item in data["outputs"]}
+    assert by_name["count"]["aggregate"]["count"] == len(rows)
+    assert by_name["groups"]["aggregate"]["groups"] == [
+        {"key": "hot", "count": 8},
+        {"key": "warm", "count": 5},
+        {"key": "cool", "count": 3},
+    ]
+    assert by_name["groups"]["aggregate"]["group_total"] == 2_003
+    assert by_name["values"]["aggregate"]["values"] == [
+        "a",
+        "m",
+        "v-0000",
+        "v-0001",
+    ]
+    assert by_name["values"]["aggregate"]["distinct_total"] == 2_003
+
+
+def test_aggregate_post_topk_preserves_missing_ties_and_sort_fields(tmp_path) -> None:
+    path = tmp_path / "events.jsonl"
+    rows = [
+        {"bucket": "z", "number": "10"},
+        {"bucket": "a", "number": "2"},
+        {"bucket": "y", "number": "1"},
+        {"bucket": "b", "number": "1.0"},
+        {"bucket": "z", "number": "2"},
+        {"bucket": "a", "number": "10"},
+        {"bucket": "y", "number": "1"},
+        {"bucket": "b"},
+        {"bucket": "c"},
+        {},
+        {"number": "1"},
+    ]
+    path.write_text(
+        "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    programs = (
+        "group bucket | sort count desc | head 3",
+        "group bucket | sort count asc | head 3",
+        "group bucket | sort key asc | head 3",
+        "group bucket | sort key desc | head 3",
+        "group number | sort key asc numeric | head 4",
+        "distinct bucket | sort value asc | head 3",
+        "distinct bucket | sort value desc | head 3",
+        "distinct number | sort value asc numeric | head 4",
+    )
+    for index, program in enumerate(programs):
+        name = f"analysis-{index}"
+        batch = run_evidence_compute(
+            EvidenceComputeRequest(
+                source=path,
+                analyses=(EvidenceAnalysisSpec(name=name, program=program),),
+            ),
+            policy=_policy(),
+        )
+        canonical = run_evidence_shell(
+            EvidenceShellRequest(source=path, program=program),
+            policy=_policy(),
+        )
+
+        assert batch["status"] == "ok"
+        assert batch["data"]["canonical_remainder_analyses"] == 0
+        assert batch["data"]["physical_plan"]["aggregate_topk"] == "fixed_capacity_heap"
+        output = batch["data"]["outputs"][0]
+        assert output["aggregate"] == canonical["data"]["aggregate"]
+        assert output["coverage"]["match_records"] == canonical["coverage"]["match_records"]

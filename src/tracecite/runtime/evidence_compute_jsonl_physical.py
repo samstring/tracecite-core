@@ -14,6 +14,8 @@ silently return unscoped aggregates as though the scope had been applied.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from functools import total_ordering
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -27,6 +29,49 @@ from .jsonl_physical import FixedCapacityTopK, JsonlLineContext, topk_sort_key
 from .retrieval_session import RetrievalSessionStore
 from .schema import AgentResult
 from .source_versions import SourceVersionStore
+
+
+@total_ordering
+class _AggregateRank:
+    """Comparable rank for stable post-aggregate sort lowering.
+
+    The canonical aggregate starts in ``(-count, key)`` order and applies
+    post-group/distinct sorts stably.  Keeping the sort keys in reverse stage
+    order reproduces that lexicographic ordering without materializing and
+    sorting every derived row before ``head``.
+    """
+
+    __slots__ = ("_components", "_base")
+
+    def __init__(
+        self,
+        components: tuple[tuple[tuple[int, float | str], bool], ...],
+        base: tuple[int, str],
+    ) -> None:
+        self._components = components
+        self._base = base
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _AggregateRank):
+            return NotImplemented
+        return self._components == other._components and self._base == other._base
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, _AggregateRank):
+            return NotImplemented
+        for (left, descending), (right, _) in zip(self._components, other._components):
+            if left != right:
+                return right < left if descending else left < right
+        return self._base < other._base
+
+
+@dataclass(frozen=True)
+class _AggregateTopKPlan:
+    """Bounded lowering for the first selection after aggregate post-sorts."""
+
+    limit: int
+    prefix_sorts: tuple[Any, ...]
+    suffix_stages: tuple[Any, ...]
 
 
 def _project_selected(item: Any, context: JsonlLineContext) -> dict[str, Any]:
@@ -83,6 +128,165 @@ def _finalize_topn(
     }
 
 
+def _aggregate_sort_spec(item: Any, stage: Any) -> tuple[str, bool, bool] | None:
+    """Return a canonical aggregate sort specification when it is valid."""
+
+    command = item.aggregate_stage.command
+    args = tuple(str(value) for value in stage.args)
+    if command == "group":
+        if not args or args[0] not in {"count", "key"}:
+            return None
+        field = args[0]
+    elif command == "distinct":
+        if not args:
+            return "value", False, False
+        if args[0] not in {"value", "text"}:
+            return None
+        field = args[0]
+    else:
+        return None
+
+    direction = args[1].lower() if len(args) > 1 else "asc"
+    if direction not in {"asc", "desc"} or len(args) > 3:
+        return None
+    numeric = len(args) > 2 and args[2].lower() == "numeric"
+    return field, direction == "desc", numeric
+
+
+def _compile_aggregate_topk(item: Any) -> _AggregateTopKPlan | None:
+    """Lower a legal aggregate post-selection to bounded Top-K state.
+
+    A selection only needs the order established before it. Any later
+    post-processing runs over at most that selected prefix and therefore stays
+    bounded without changing the established pipeline semantics.
+    """
+
+    if not isinstance(item, legacy._CompiledJsonlAggregate):
+        return None
+    if item.aggregate_stage.command not in {"group", "distinct"}:
+        return None
+
+    post = list(item.post)
+    selection_index = next(
+        (index for index, stage in enumerate(post) if stage.command in {"head", "take", "first"}),
+        None,
+    )
+    if selection_index is None:
+        return None
+    selection = post[selection_index]
+    if (
+        len(selection.args) != 1
+        or not str(selection.args[0]).isdigit()
+        or int(selection.args[0]) < 1
+    ):
+        return None
+
+    prefix_sorts = tuple(post[:selection_index])
+    if any(stage.command != "sort" for stage in prefix_sorts):
+        return None
+    if any(_aggregate_sort_spec(item, stage) is None for stage in prefix_sorts):
+        return None
+    return _AggregateTopKPlan(
+        limit=int(selection.args[0]),
+        prefix_sorts=prefix_sorts,
+        suffix_stages=tuple(post[selection_index + 1 :]),
+    )
+
+
+def _aggregate_rank(
+    item: Any,
+    key: str,
+    count: int,
+    prefix_sorts: tuple[Any, ...],
+) -> _AggregateRank:
+    components: list[tuple[tuple[int, float | str], bool]] = []
+    for stage in reversed(prefix_sorts):
+        sort_spec = _aggregate_sort_spec(item, stage)
+        assert sort_spec is not None
+        field, descending, numeric = sort_spec
+        value = count if field == "count" else key
+        components.append((topk_sort_key(value, numeric=numeric), descending))
+    # This is the exact initial order produced by legacy._finalize_aggregate.
+    # It is also the stable-sort tie breaker for every legal post pipeline.
+    return _AggregateRank(tuple(components), (-count, key))
+
+
+def _populate_aggregate_topk(
+    item: Any,
+    plan: _AggregateTopKPlan,
+    accumulator: FixedCapacityTopK,
+) -> None:
+    counts = item.counts or {}
+    for key, count in counts.items():
+        rank = _aggregate_rank(item, key, count, plan.prefix_sorts)
+        value: Any
+        if item.aggregate_stage.command == "group":
+            value = {"key": key, "count": count}
+        else:
+            value = key
+        # FixedCapacityTopK's ordinary scalar key is deliberately wrapped in a
+        # one-item tuple so the rank object can express mixed sort directions.
+        accumulator.add((rank,), value)
+
+
+def _finalize_aggregate_topk(
+    item: Any,
+    plan: _AggregateTopKPlan,
+    accumulator: FixedCapacityTopK,
+    *,
+    policy: EvidenceShellPolicy,
+) -> dict[str, Any]:
+    _populate_aggregate_topk(item, plan, accumulator)
+    selected = accumulator.values()
+    aggregate_field = item.aggregate_stage.args[0] if item.aggregate_stage.args else None
+    if item.aggregate_stage.command == "group":
+        aggregate: dict[str, Any] = {
+            "field": aggregate_field,
+            "groups": selected,
+            "group_total": len(item.counts or {}),
+        }
+    else:
+        aggregate = {
+            "field": aggregate_field,
+            "values": selected,
+            "distinct_total": len(item.counts or {}),
+        }
+    # Only the prefix before the first selection is lowered. The remaining
+    # pipeline is already bounded by ``plan.limit`` and keeps legacy ordering
+    # and validation behavior.
+    aggregate = legacy._postprocess(
+        aggregate,
+        item.aggregate_stage.command,
+        plan.suffix_stages,
+    )
+    aggregate = legacy._compact_derived_aggregate(
+        aggregate,
+        command=item.aggregate_stage.command,
+        representative_refs=item.representative_refs or {},
+    )
+    output = {
+        "name": item.spec.name,
+        "status": "ok",
+        "program": item.normalized,
+        "coverage": {"complete": True, "match_records": item.matched},
+        "aggregate": aggregate,
+        "execution_engine": "jsonl_shared_scan_aggregate",
+    }
+    fits, token_count, byte_count = _payload_fits(output, policy)
+    if fits:
+        return output
+    return {
+        "name": item.spec.name,
+        "status": "too_broad",
+        "program": item.normalized,
+        "coverage": {"complete": True, "match_records": item.matched},
+        "reason": "AGGREGATE_OUTPUT_BUDGET_EXCEEDED",
+        "observed_at_least_tokens": token_count,
+        "observed_at_least_bytes": byte_count,
+        "execution_engine": "jsonl_shared_scan_aggregate",
+    }
+
+
 def _time_scope_unresolved_output(spec: legacy.EvidenceAnalysisSpec) -> dict[str, Any]:
     prepared = legacy._normalize_spec(spec)
     normalized = prepared[0] if prepared is not None else spec.program
@@ -130,6 +334,11 @@ def try_run_jsonl_batch(
     if not compiled:
         return None
     topn_items = [item for item in compiled if isinstance(item, legacy._CompiledJsonlTopN)]
+    aggregate_topk_plans = {
+        id(item): plan
+        for item in compiled
+        if (plan := _compile_aggregate_topk(item)) is not None
+    }
 
     selected_segmenter = build_segmenter(kind)
     if not isinstance(selected_segmenter, JsonLineSegmenter):
@@ -157,6 +366,10 @@ def try_run_jsonl_batch(
     accumulators = {
         id(item): FixedCapacityTopK(item.limit, descending=item.descending)
         for item in topn_items
+    }
+    aggregate_topk_accumulators = {
+        item_id: FixedCapacityTopK(plan.limit, descending=False)
+        for item_id, plan in aggregate_topk_plans.items()
     }
     parseable_timestamp_records = 0
     untimestamped_records = 0
@@ -250,6 +463,10 @@ def try_run_jsonl_batch(
                             key = "<missing>" if value is None else str(value)
                             assert item.counts is not None
                             item.counts[key] = item.counts.get(key, 0) + 1
+                            if key not in item.representative_refs:
+                                item.representative_refs[key] = (
+                                    f"evidence://sha256/{segment.sha256}#L{line_number}"
+                                )
                     else:
                         sort_value = context.value(item.sort_field)
                         accumulators[id(item)].add(
@@ -295,7 +512,16 @@ def try_run_jsonl_batch(
     output_by_name: dict[str, dict[str, Any]] = {}
     for item in compiled:
         if isinstance(item, legacy._CompiledJsonlAggregate):
-            output_by_name[item.spec.name] = legacy._finalize_aggregate(item, policy=policy)
+            plan = aggregate_topk_plans.get(id(item))
+            if plan is None:
+                output_by_name[item.spec.name] = legacy._finalize_aggregate(item, policy=policy)
+            else:
+                output_by_name[item.spec.name] = _finalize_aggregate_topk(
+                    item,
+                    plan,
+                    aggregate_topk_accumulators[id(item)],
+                    policy=policy,
+                )
         else:
             output_by_name[item.spec.name] = _finalize_topn(
                 item,
@@ -343,6 +569,15 @@ def try_run_jsonl_batch(
 
     statuses = {str(item.get("status") or "") for item in outputs}
     engine = "jsonl_shared_scan_batch" if not fallback_specs else "jsonl_partitioned_batch"
+    physical_plan: dict[str, Any] = {
+        "source_scan": "jsonl_raw_lines",
+        "json_decode": "shared_once_per_candidate_line",
+        "predicate_evaluation": "memoized_once_per_unique_stage_per_line",
+        "topk_projection": "post_selection" if topn_items else "none",
+        "semantic_enrichment": "lazy_from_decoded_json",
+    }
+    if aggregate_topk_plans:
+        physical_plan["aggregate_topk"] = "fixed_capacity_heap"
     data: dict[str, Any] = {
         "outputs": outputs,
         "analysis_count": len(outputs),
@@ -352,13 +587,7 @@ def try_run_jsonl_batch(
         "execution_engine": engine,
         "shared_scan_analyses": len(compiled),
         "canonical_remainder_analyses": len(fallback_specs),
-        "physical_plan": {
-            "source_scan": "jsonl_raw_lines",
-            "json_decode": "shared_once_per_candidate_line",
-            "predicate_evaluation": "memoized_once_per_unique_stage_per_line",
-            "topk_projection": "post_selection" if topn_items else "none",
-            "semantic_enrichment": "lazy_from_decoded_json",
-        },
+        "physical_plan": physical_plan,
         "time_scope": {
             "last": request.last,
             "since": request.since,

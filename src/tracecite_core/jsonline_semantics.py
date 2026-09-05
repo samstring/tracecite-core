@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Mapping
 
 
@@ -92,6 +93,23 @@ def _parse_timestamp(value: Any) -> tuple[datetime | None, str | None]:
     return None, f"时间戳类型不受支持: {type(value).__name__}"
 
 
+@lru_cache(maxsize=512)
+def _parse_scalar_timestamp(
+    value: str | int | float | bool | None,
+) -> tuple[datetime | None, str | None]:
+    """Cache the pure parse result for repeated scalar timestamp values.
+
+    JSONL telemetry commonly repeats a low-cardinality clock value (for
+    example ``"16:04"``) across thousands of records.  Parsing that value is
+    deterministic, including its failure result, so a bounded process-local
+    cache preserves semantics while avoiding repeated ``strptime`` fallback
+    work.  Non-scalar JSON values intentionally bypass this helper because
+    they are not guaranteed to be hashable.
+    """
+
+    return _parse_timestamp(value)
+
+
 def extract_jsonline_semantics(
     obj: Mapping[str, Any],
     *,
@@ -110,7 +128,10 @@ def extract_jsonline_semantics(
                 raw_timestamp = obj.get(key)
                 break
 
-    timestamp, timestamp_parse_error = _parse_timestamp(raw_timestamp)
+    if raw_timestamp is None or type(raw_timestamp) in {str, int, float, bool}:
+        timestamp, timestamp_parse_error = _parse_scalar_timestamp(raw_timestamp)
+    else:
+        timestamp, timestamp_parse_error = _parse_timestamp(raw_timestamp)
     fields: dict[str, Any] = {}
     if timestamp_parse_error is not None:
         fields["timestamp_parse_error"] = timestamp_parse_error
