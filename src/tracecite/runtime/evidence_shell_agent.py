@@ -132,8 +132,8 @@ def _compact_repeated_evidence(
         if novelty.get("state") == "no_new_evidence":
             novelty["guidance"] = (
                 "This query produced no Evidence identity not already seen in this RetrievalSession. "
-                "Do not repeat the same query; change investigation direction, use a compact aggregate, "
-                "or conclude at the evidence boundary if the remaining mechanism is not observable."
+                "An exact repeated query will not deliver a new body; previously seen Evidence remains "
+                "recoverable through explicit materialize/replay."
             )
         data["novelty"] = novelty
 
