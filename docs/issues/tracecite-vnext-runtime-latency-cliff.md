@@ -175,3 +175,36 @@ Skill 应逐步收敛为 Evidence Compute usage contract：
 - parity regression: `a6504504ccee3449bc18c311ccff2058b46b61eb`
 - 第一版 parity test 曾因直接拿 Agent compound syntax 调 canonical executor 而失败；产品实现未因此放宽语义，测试已改成双方共同支持的 terminal aggregate shape。
 - benchmark 尚未重跑；在进入 A/B 前继续处理已由同一失败轨迹确认的 P0-5/P0-6/P0-3，以避免已知的 4×60s mixed-batch cliff 污染下一轮。
+
+### Iteration 2 — partitioned planner + bounded top-K + explicit Analyze scope
+
+Core：
+
+- batch planner refactor: `fbfaaa522f5fa73a483256c2c224b8e1f398f5a2`
+- planner/time-scope regressions: `4b0d73e1b46802052333e280d6dd9c8336e66e95`
+- semantic parity test adjustment: `3358134c77208ebe1f51f4149c4ca5957f69b003`
+- Core CI `33965579147`: Ubuntu Python 3.10–3.14 + macOS 3.14 全部通过。
+
+MCP：
+
+- explicit `tracecite_analyze(last/since/until)` schema + forwarding: `42f0e98127050801753b95b1417bf6bc307c0143`
+- scope regression: `5b6e50e4413df30e694249183568f42ebc7198bf`
+- Skill 从 Shell manual 收敛为 Evidence Compute usage contract: `f918fc9e85ecf2f18d6aa078c39cb9562aacbaad`
+- compact response 保留实际 applied `time_scope`: `a79413cb5cbfd60722fb5a24c1d36c8d45422db3`
+- MCP CI `33965783388`: Ubuntu Python 3.10–3.14 + macOS 3.14 全部通过。
+
+Planner 行为：
+
+- supported aggregate 不再被 unsupported sibling 拖入整批 canonical fallback；
+- `sort FIELD asc|desc [numeric] | head/take/first N | project FIELD` 进入通用 bounded top-K physical plan；
+- aggregate + bounded top-K 可共享 JSONL scan；
+- absolute `since/until` 成为显式 Compute scope，并进入 request fingerprint / MCP schema / compact response；
+- reference-relative clock scope 和 `last` 在有严格等价 plan 前仍保留 canonical fallback。
+
+下一轮公平 A/B：
+
+- workflow update/pin commit: `4c32ccc078df18de6f3b7c8502985765b3cc5a7b`
+- benchmark run: `33965883856`
+- MCP pin: `a79413cb5cbfd60722fb5a24c1d36c8d45422db3`
+- Agent timeout 保持 600 秒，没有用放宽 timeout 掩盖 Runtime 问题。
+- 当前状态：运行中；结果出来后继续按 token / real elapsed / answer quality 三门验收。
