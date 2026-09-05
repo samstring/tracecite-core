@@ -33,6 +33,38 @@ def _line_count(path: Path, *, encoding: str) -> int:
     return count
 
 
+def _iter_reverse_physical_lines(
+    path: Path,
+    *,
+    encoding: str,
+    block_size: int = 64 * 1024,
+) -> Iterator[str]:
+    """Yield physical lines from the end without scanning the whole file first.
+
+    This helper is only used for single-line JSON Records. It intentionally does
+    not try to reverse arbitrary multiline Segmenters.
+    """
+
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        position = handle.tell()
+        pending = b""
+        while position > 0:
+            size = min(block_size, position)
+            position -= size
+            handle.seek(position)
+            chunk = handle.read(size)
+            merged = chunk + pending
+            parts = merged.split(b"\n")
+            pending = parts[0]
+            for raw in reversed(parts[1:]):
+                if not raw.strip():
+                    continue
+                yield raw.decode(encoding, errors="replace") + "\n"
+        if pending.strip():
+            yield pending.decode(encoding, errors="replace")
+
+
 def _last_timestamp(
     path: Path,
     *,
@@ -40,6 +72,21 @@ def _last_timestamp(
     reference: datetime,
     encoding: str,
 ) -> Optional[datetime]:
+    # JsonLineSegmenter has an exact one-physical-line == one-Record contract.
+    # Therefore the canonical "last parseable Record timestamp" can be found
+    # from the file tail without a full forward pre-scan. No timestamp ordering
+    # assumption is made: the first parseable Record encountered in reverse file
+    # order is exactly the last parseable Record in forward order.
+    if isinstance(segmenter, JsonLineSegmenter):
+        for line in _iter_reverse_physical_lines(path, encoding=encoding):
+            record = next(segmenter.segment_lines(iter(((1, line),))), None)
+            if record is None:
+                continue
+            ts = record_timestamp(record, ref=reference, segmenter=segmenter)
+            if ts is not None:
+                return ts
+        return None
+
     last: Optional[datetime] = None
     for record in segmenter.segment_file(path, encoding=encoding):
         ts = record_timestamp(record, ref=reference, segmenter=segmenter)
