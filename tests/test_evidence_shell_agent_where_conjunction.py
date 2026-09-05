@@ -22,9 +22,9 @@ def _count(source: Path, program: str) -> int:
 def test_explicit_where_and_is_lowered_to_multiple_predicate_stages(tmp_path: Path) -> None:
     source = tmp_path / "events.jsonl"
     rows = [
-        {"service": "route", "timestamp": 10, "status": 200},
-        {"service": "route", "timestamp": 20, "status": 503},
-        {"service": "travel", "timestamp": 20, "status": 503},
+        {"service": "route", "seq": 10, "status": 200},
+        {"service": "route", "seq": 20, "status": 503},
+        {"service": "travel", "seq": 20, "status": 503},
     ]
     source.write_text(
         "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows),
@@ -33,7 +33,7 @@ def test_explicit_where_and_is_lowered_to_multiple_predicate_stages(tmp_path: Pa
 
     assert _count(
         source,
-        "where service == route and timestamp >= 15 and timestamp <= 25 | count",
+        "where service == route and seq >= 15 and seq <= 25 | count",
     ) == 1
 
 
