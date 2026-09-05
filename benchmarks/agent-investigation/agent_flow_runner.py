@@ -10,9 +10,9 @@ Native mode:
 
 TraceCite mode:
     The same Agent keeps native tools for source-code exploration and additionally receives
-    the explicit TraceCite Skill plus standard TraceCite MCP tools. For benchmark purity,
-    direct native access to runtime evidence is blocked before execution by the benchmark
-    host extension; runtime evidence must go through TraceCite MCP.
+    the explicit TraceCite Skill plus a narrow direct TraceCite MCP hot path. For benchmark
+    purity, direct native access to runtime evidence is blocked before execution by the
+    benchmark host extension; runtime evidence must go through TraceCite MCP.
 """
 
 from __future__ import annotations
@@ -26,13 +26,11 @@ import subprocess
 import sys
 
 
-TRACE_TOOLS = (
-    "tracecite_retrieve",
+TRACE_HOT_PATH_TOOLS = (
+    "tracecite_analyze",
+    "tracecite_run",
     "tracecite_materialize",
     "tracecite_replay",
-    "tracecite_aggregate",
-    "tracecite_traverse",
-    "tracecite_verify",
 )
 
 
@@ -75,6 +73,15 @@ def configure_tracecite_mcp(
     evidence_root: Path,
     state_dir: Path,
 ) -> None:
+    """Expose the already-selected Evidence Runtime without MCP discovery tax.
+
+    TraceCite compatibility tools remain product capabilities, but a user who
+    explicitly selected TraceCite should not spend model rounds discovering an
+    MCP scripting/proxy surface before reaching the primary evidence operations.
+    The benchmark therefore mirrors the intended host profile: four direct,
+    general-purpose Evidence tools and no scripting/proxy wrapper.
+    """
+
     (source_root / ".pi").mkdir(parents=True, exist_ok=True)
     state_dir.mkdir(parents=True, exist_ok=True)
     (source_root / ".mcp.json").write_text(
@@ -96,13 +103,18 @@ def configure_tracecite_mcp(
         + "\n",
         encoding="utf-8",
     )
+    hot_path = list(TRACE_HOT_PATH_TOOLS)
     (source_root / ".pi" / "mcp.json").write_text(
         json.dumps(
             {
-                "settings": {"disableProxyTool": True},
+                "settings": {
+                    "disableProxyTool": True,
+                    "scriptMode": False,
+                },
                 "mcpServers": {
                     "tracecite": {
-                        "directTools": True,
+                        "directTools": hot_path,
+                        "includeTools": hot_path,
                         "toolPrefix": "none",
                         "lifecycle": "eager",
                     }
@@ -157,7 +169,7 @@ def build_prompt(mode: str, runtime_log: Path, workspace_kind: str) -> str:
     return (
         base
         + " The user explicitly selected TraceCite for this investigation. Follow the TraceCite "
-        "Agent Skill and use the standard TraceCite MCP Evidence Runtime for all runtime-evidence "
+        "Agent Skill and use the direct TraceCite MCP Evidence Runtime tools for all runtime-evidence "
         f"handling. {tracecite_scope} If a native runtime-evidence tool call is rejected, continue "
         "through TraceCite MCP instead."
     )
@@ -234,9 +246,9 @@ def run_pi(args: argparse.Namespace) -> int:
     if args.mode == "tracecite":
         command += ["--skill", str(skill_dir)]
 
-    # Deliberately no --tools allowlist and no --no-skills. The Agent keeps its
-    # normal source-analysis capability surface; the benchmark host enforces only
-    # the TraceCite arm's runtime-evidence channel boundary.
+    # Deliberately no global --tools allowlist and no --no-skills. The Agent
+    # keeps normal non-evidence capabilities; the MCP host profile itself keeps
+    # the explicitly selected TraceCite runtime surface narrow and direct.
     command.append(task)
 
     env = os.environ.copy()
@@ -268,7 +280,7 @@ def run_pi(args: argparse.Namespace) -> int:
         "tracecite_skill_activation": "/skill:tracecite" if args.mode == "tracecite" else None,
         "tracecite_mcp_configured": args.mode == "tracecite",
         "tracecite_runtime_evidence_enforcement": "hard-block-before-execution" if args.mode == "tracecite" else None,
-        "tracecite_tools_expected": list(TRACE_TOOLS) if args.mode == "tracecite" else [],
+        "tracecite_tools_expected": list(TRACE_HOT_PATH_TOOLS) if args.mode == "tracecite" else [],
         "runtime_log": str(runtime_log),
         "source_root": str(source_root),
     }
