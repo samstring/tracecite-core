@@ -1,5 +1,5 @@
 name: Pi RCAEval Parallel A/B 5x Budget
-# Iteration 15: validate the new model-to-mechanical-filtering flow on run11 telemetry.
+# Iteration 16: validate the semantic-cache and bounded-derived-result changes on run11 telemetry.
 
 on:
   workflow_dispatch:

@@ -208,3 +208,17 @@ Planner 行为：
 - MCP pin: `a79413cb5cbfd60722fb5a24c1d36c8d45422db3`
 - Agent timeout 保持 600 秒，没有用放宽 timeout 掩盖 Runtime 问题。
 - 当前状态：运行中；结果出来后继续按 token / real elapsed / answer quality 三门验收。
+
+### Iteration 3 — local Run #11 trace profiling: semantic parse cache + bounded derived values
+
+- implementation commit: `9baec95`
+- local input: `/private/tmp/tracecite-run11/shared/traces.jsonl` (79,563,985 bytes) and `logs.jsonl` (41,264,282 bytes)
+- root cause confirmed by cProfile: `sort timestamp` called `extract_jsonline_semantics()` 242,715 times; the repeated clock-only `time` values triggered 1,941,720 `strptime` fallback attempts. This was semantic timestamp parsing overhead, not raw scan or heap selection.
+- generic fix: bounded cache for pure scalar timestamp parse results; no telemetry value, service, issue, or benchmark-specific shortcut.
+- local timing: traces initial four-analysis batch `13.442s -> 1.842s`; `first_time/last_time` each about `12.6s -> 1.3s`.
+- generic aggregate fix: `group/distinct -> sort -> head` now lowers to fixed-capacity heap after the exact counts are collected; random parity checks across nine sort shapes matched canonical output.
+- transport fix: oversized derived group/distinct keys use preview + length + value SHA + representative Evidence URI; the exact source line remains materializable. The Run #15 local reproduction reduced the initial logs batch from `54,494` to `7,674` JSON characters.
+- validation: Core `741 passed, 1 skipped`; architecture governance passed; schema compatibility passed; focused MCP projection behavior was checked manually, but the temporary MCP checkout's current Python environment has no `pytest`, so that suite was not claimed as passed.
+- Run #15 (`33976206687`) completed both jobs, but its TraceCite arm had 12 provider rate-limit incidents and no final answer, so it is an infrastructure-invalid quality comparison; a new paired run is required after this commit.
+
+Remaining highest-priority issue: measure the next paired run's final answer quality and model-visible context under the same blind protocol. If the new trace still shows multi-predicate numeric Top-K CPU cost, profile that path separately before changing the planner.
