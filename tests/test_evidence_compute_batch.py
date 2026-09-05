@@ -96,6 +96,7 @@ def test_batch_decodes_each_json_line_once_for_multiple_field_analyses(tmp_path,
     result = run_evidence_compute(
         EvidenceComputeRequest(
             source=source,
+            segmenter="jsonline",
             analyses=(
                 EvidenceAnalysisSpec("services", "group service"),
                 EvidenceAnalysisSpec("failures", "where status >= 500 | count"),
