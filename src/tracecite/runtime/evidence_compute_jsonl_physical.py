@@ -5,6 +5,10 @@ Compute compiler and output contract, but executes compatible aggregate + Top-K
 analyses in one raw JSONL scan. Repeated sibling predicates are evaluated once
 per line, Top-K state has fixed capacity, and projection is deferred until after
 selection so discarded candidates stay cheap.
+
+Unsupported siblings are partitioned into the established canonical remainder
+instead of poisoning compatible work. This preserves the planner invariant that
+one analysis shape cannot silently downgrade another analysis's physical plan.
 """
 
 from __future__ import annotations
@@ -84,7 +88,7 @@ def try_run_jsonl_batch(
     policy: EvidenceShellPolicy,
     session: RetrievalSessionStore | None,
 ) -> dict[str, Any] | None:
-    """Return one shared JSONL batch, or ``None`` for planner fallback."""
+    """Return a partitioned shared JSONL batch, or ``None`` for full fallback."""
 
     source = Path(request.source).expanduser().resolve()
     if not source.is_file():
@@ -94,11 +98,15 @@ def try_run_jsonl_batch(
         return None
 
     compiled: list[Any] = []
+    fallback_specs: list[legacy.EvidenceAnalysisSpec] = []
     for spec in request.analyses:
         item = legacy._compile_jsonl(spec)
         if item is None:
-            return None
-        compiled.append(item)
+            fallback_specs.append(spec)
+        else:
+            compiled.append(item)
+    if not compiled:
+        return None
     topn_items = [item for item in compiled if isinstance(item, legacy._CompiledJsonlTopN)]
 
     selected_segmenter = build_segmenter(kind)
@@ -159,9 +167,6 @@ def try_run_jsonl_batch(
                 obj: Mapping[str, Any] = {}
                 if needs_json:
                     try:
-                        # Preserve the existing planner's shared JSON decoder seam
-                        # so instrumentation and compatibility tests observe one
-                        # decode per candidate line across physical plans.
                         decoded = legacy.json.loads(raw)
                         obj = decoded if isinstance(decoded, Mapping) else {}
                     except legacy.json.JSONDecodeError:
@@ -208,15 +213,36 @@ def try_run_jsonl_batch(
                             context,
                         )
 
-    outputs: list[dict[str, Any]] = []
+    output_by_name: dict[str, dict[str, Any]] = {}
     for item in compiled:
         if isinstance(item, legacy._CompiledJsonlAggregate):
-            outputs.append(legacy._finalize_aggregate(item, policy=policy))
+            output_by_name[item.spec.name] = legacy._finalize_aggregate(item, policy=policy)
         else:
-            outputs.append(_finalize_topn(item, accumulators[id(item)], policy=policy))
+            output_by_name[item.spec.name] = _finalize_topn(
+                item,
+                accumulators[id(item)],
+                policy=policy,
+            )
 
+    fallback_view: Mapping[str, Any] | None = None
+    fallback_version: str | None = None
+    for spec in fallback_specs:
+        output, candidate_view, candidate_version = legacy._fallback_output(
+            spec,
+            request=request,
+            policy=policy,
+            session=session,
+        )
+        output_by_name[spec.name] = output
+        if fallback_view is None and candidate_view is not None:
+            fallback_view = candidate_view
+        if fallback_version is None and candidate_version is not None:
+            fallback_version = candidate_version
+
+    outputs = [output_by_name[spec.name] for spec in request.analyses]
     fits, token_count, byte_count = _payload_fits({"outputs": outputs}, policy)
     source_view = view.to_dict()
+    source_version = view.key
     if not fits:
         return AgentResult(
             operation="evidence_compute",
@@ -228,14 +254,17 @@ def try_run_jsonl_batch(
                 "analysis_count": len(outputs),
                 "observed_at_least_tokens": token_count,
                 "observed_at_least_bytes": byte_count,
-                "source_view": source_view,
-                "source_version": view.key,
+                "source_view": source_view or dict(fallback_view or {}),
+                "source_version": source_version or fallback_version,
                 "evidence_budget": _budget_data(policy),
-                "execution_engine": "jsonl_shared_scan_batch",
+                "execution_engine": (
+                    "jsonl_shared_scan_batch" if not fallback_specs else "jsonl_partitioned_batch"
+                ),
             },
         ).to_dict()
 
     statuses = {str(item.get("status") or "") for item in outputs}
+    engine = "jsonl_shared_scan_batch" if not fallback_specs else "jsonl_partitioned_batch"
     return AgentResult(
         operation="evidence_compute",
         status="ok" if statuses == {"ok"} else "partial",
@@ -245,11 +274,11 @@ def try_run_jsonl_batch(
             "outputs": outputs,
             "analysis_count": len(outputs),
             "source_view": source_view,
-            "source_version": view.key,
+            "source_version": source_version,
             "evidence_budget": _budget_data(policy),
-            "execution_engine": "jsonl_shared_scan_batch",
-            "shared_scan_analyses": len(outputs),
-            "canonical_remainder_analyses": 0,
+            "execution_engine": engine,
+            "shared_scan_analyses": len(compiled),
+            "canonical_remainder_analyses": len(fallback_specs),
             "physical_plan": {
                 "source_scan": "jsonl_raw_lines",
                 "json_decode": "shared_once_per_candidate_line",
@@ -266,8 +295,6 @@ def try_run_jsonl_batch(
     ).to_dict()
 
 
-# Compatibility alias for internal callers/tests created while Top-K was the
-# first consumer of this executor. New orchestration should use the general name.
 try_run_fixed_topk_jsonl_batch = try_run_jsonl_batch
 
 
