@@ -12,6 +12,21 @@ import re
 import shlex
 
 
+_WHERE_OPERATORS = {
+    "=",
+    "==",
+    "!=",
+    ">",
+    ">=",
+    "<",
+    "<=",
+    "contains",
+    "startswith",
+    "endswith",
+    "matches",
+}
+
+
 def _pipeline_tokens(program: str) -> list[list[str]]:
     lexer = shlex.shlex(program, posix=True, punctuation_chars="|")
     lexer.whitespace_split = True
@@ -30,6 +45,36 @@ def _pipeline_tokens(program: str) -> list[list[str]]:
     if not stages[-1]:
         raise ValueError("empty evidence shell stage")
     return stages
+
+
+def _split_where_conjunction(tokens: list[str]) -> list[list[str]] | None:
+    """Lower an explicit ``where A OP x and B OP y`` into pipeline predicates.
+
+    Canonical ``where`` is intentionally one predicate per stage. Historically,
+    an Agent-authored conjunction was silently interpreted as one long value,
+    which could turn a real match into a false ``no_match``. Only split when
+    every ``and``-separated clause is unambiguously a valid where clause. A
+    quoted value containing the word "and" arrives as one token and is therefore
+    preserved unchanged.
+    """
+
+    if not tokens or tokens[0].lower() != "where" or "and" not in tokens[1:]:
+        return None
+    args = tokens[1:]
+    clauses: list[list[str]] = []
+    current: list[str] = []
+    for token in args:
+        if token == "and":
+            clauses.append(current)
+            current = []
+        else:
+            current.append(token)
+    clauses.append(current)
+    if len(clauses) < 2:
+        return None
+    if any(len(clause) < 3 or clause[1].lower() not in _WHERE_OPERATORS for clause in clauses):
+        return None
+    return [["where", *clause] for clause in clauses]
 
 
 def _head_count(tokens: list[str]) -> int | None:
@@ -168,6 +213,15 @@ def normalize_agent_evidence_shell_program(program: str) -> str:
     """Rewrite common Agent-authored pipelines before canonical normalization."""
 
     stages = _pipeline_tokens(program)
+
+    # Lower an explicit boolean conjunction to canonical one-predicate-per-stage
+    # form. This is a semantics-preserving compatibility rewrite, not a planner
+    # decision, and prevents silent false no-match results.
+    expanded: list[list[str]] = []
+    for stage in stages:
+        conjunction = _split_where_conjunction(stage)
+        expanded.extend(conjunction if conjunction is not None else [stage])
+    stages = expanded
 
     # jq select(.FIELD | test("REGEX")) is a direct structured regex predicate.
     replaced: list[list[str]] = []
