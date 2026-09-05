@@ -11,13 +11,14 @@ def test_reciprocal_pair_binding_waits_for_distinct_sync_path() -> None:
     runtime = RUNTIME.read_text(encoding="utf-8")
 
     assert "do **not** bind `B -> A` from the first representative synchronization-bearing path" in skill
-    assert "nearest caller may be an incidental task/orchestration caller" in skill
-    assert "unmaterialized `structural_diversity` / `navigation_hint` candidate" in skill
-    assert "a **different synchronization-bearing stack block**" in skill
-    assert "before any component-pair binding, WaitGroup branch, Lock/RLock spelling search" in skill
-    assert "Once that distinct synchronization-bearing path is materialized" in skill
+    assert "pending ordered queue in the exact order TraceCite returned them" in skill
+    assert "Materializing the representative does not clear that queue" in skill
+    assert "the next TraceCite invocation must materialize the first still-unmaterialized candidate" in skill
+    assert "do not replace that mandatory handoff with a fresh function/method query" in skill
+    assert "continue only with the next still-pending orientation candidate" in skill
+    assert "Once a pending distinct synchronization-bearing path materializes" in skill
     assert "the next TraceCite invocation is then fixed: `tracecite_search` for `B`'s receiver/type family" in skill
 
-    assert "incidental task/orchestration caller" not in runtime
+    assert "pending ordered queue" not in runtime
     assert "component-pair binding" not in runtime
     assert "receiver/type family" not in runtime
