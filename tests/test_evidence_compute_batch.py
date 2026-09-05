@@ -7,6 +7,7 @@ from tracecite.runtime import (
     EvidenceComputeRequest,
     EvidenceShellPolicy,
     EvidenceShellRequest,
+    RetrievalSessionStore,
     run_evidence_compute,
     run_evidence_shell,
 )
@@ -108,6 +109,52 @@ def test_batch_decodes_each_json_line_once_for_multiple_field_analyses(tmp_path,
 
     assert result["status"] == "ok"
     assert calls == 40
+
+
+def test_batch_records_one_session_operation_and_reuses_bound_source_version(tmp_path) -> None:
+    source = _jsonl(
+        tmp_path,
+        [
+            {"service": "route", "status": 200},
+            {"service": "route", "status": 503},
+        ],
+    )
+    session = RetrievalSessionStore(tmp_path / "state", "compute-session")
+    request = EvidenceComputeRequest(
+        source=source,
+        segmenter="jsonline",
+        analyses=(EvidenceAnalysisSpec("services", "group service"),),
+    )
+    mutable_policy = _policy(source_mode="mutable")
+
+    first = run_evidence_compute(request, policy=mutable_policy, session=session)
+    first_state = session.load()
+    first_version = first["data"]["source_version"]
+
+    assert first_state.revision == 1
+    assert first_state.operation_counts["evidence_compute"] == 1
+    assert first_state.recent_operations[-1].source_version == first_version
+    assert _aggregate(first, "services")["groups"] == [{"key": "route", "count": 2}]
+
+    with open(source, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"service": "order", "status": 500}, separators=(",", ":")) + "\n")
+
+    same_session = run_evidence_compute(request, policy=mutable_policy, session=session)
+    second_state = session.load()
+
+    assert same_session["data"]["source_version"] == first_version
+    assert _aggregate(same_session, "services")["groups"] == [{"key": "route", "count": 2}]
+    assert second_state.revision == 2
+    assert second_state.operation_counts["evidence_compute"] == 2
+    assert second_state.exact_duplicate_requests == 1
+
+    independent = RetrievalSessionStore(tmp_path / "state", "compute-session-2")
+    new_session = run_evidence_compute(request, policy=mutable_policy, session=independent)
+    assert new_session["data"]["source_version"] != first_version
+    assert _aggregate(new_session, "services")["groups"] == [
+        {"key": "route", "count": 2},
+        {"key": "order", "count": 1},
+    ]
 
 
 def test_non_jsonl_batch_keeps_one_agent_boundary_via_canonical_fallback(tmp_path) -> None:
