@@ -1,10 +1,10 @@
-"""Shared JSONL physical execution for Evidence Compute batches with Top-K work.
+"""Shared JSONL physical execution for compatible Evidence Compute batches.
 
 This module is intentionally mechanical. It reuses the existing Evidence
 Compute compiler and output contract, but executes compatible aggregate + Top-K
-analyses in one raw JSONL scan with a true fixed-capacity Top-K accumulator.
-Repeated sibling predicates are evaluated once per line, and projection is
-deferred until after Top-K selection so discarded candidates stay cheap.
+analyses in one raw JSONL scan. Repeated sibling predicates are evaluated once
+per line, Top-K state has fixed capacity, and projection is deferred until after
+selection so discarded candidates stay cheap.
 """
 
 from __future__ import annotations
@@ -78,13 +78,13 @@ def _finalize_topn(
     }
 
 
-def try_run_fixed_topk_jsonl_batch(
+def try_run_jsonl_batch(
     request: legacy.EvidenceComputeRequest,
     *,
     policy: EvidenceShellPolicy,
     session: RetrievalSessionStore | None,
 ) -> dict[str, Any] | None:
-    """Return a shared fixed-TopK JSONL batch, or ``None`` for planner fallback."""
+    """Return one shared JSONL batch, or ``None`` for planner fallback."""
 
     source = Path(request.source).expanduser().resolve()
     if not source.is_file():
@@ -100,8 +100,6 @@ def try_run_fixed_topk_jsonl_batch(
             return None
         compiled.append(item)
     topn_items = [item for item in compiled if isinstance(item, legacy._CompiledJsonlTopN)]
-    if not topn_items:
-        return None
 
     selected_segmenter = build_segmenter(kind)
     if not isinstance(selected_segmenter, JsonLineSegmenter):
@@ -163,7 +161,7 @@ def try_run_fixed_topk_jsonl_batch(
                     try:
                         # Preserve the existing planner's shared JSON decoder seam
                         # so instrumentation and compatibility tests observe one
-                        # decode per candidate line across both physical plans.
+                        # decode per candidate line across physical plans.
                         decoded = legacy.json.loads(raw)
                         obj = decoded if isinstance(decoded, Mapping) else {}
                     except legacy.json.JSONDecodeError:
@@ -256,7 +254,7 @@ def try_run_fixed_topk_jsonl_batch(
                 "source_scan": "jsonl_raw_lines",
                 "json_decode": "shared_once_per_candidate_line",
                 "predicate_evaluation": "memoized_once_per_unique_stage_per_line",
-                "topk_projection": "post_selection",
+                "topk_projection": "post_selection" if topn_items else "none",
                 "semantic_enrichment": "lazy_from_decoded_json",
             },
             "time_scope": {
@@ -268,4 +266,9 @@ def try_run_fixed_topk_jsonl_batch(
     ).to_dict()
 
 
-__all__ = ["try_run_fixed_topk_jsonl_batch"]
+# Compatibility alias for internal callers/tests created while Top-K was the
+# first consumer of this executor. New orchestration should use the general name.
+try_run_fixed_topk_jsonl_batch = try_run_jsonl_batch
+
+
+__all__ = ["try_run_fixed_topk_jsonl_batch", "try_run_jsonl_batch"]
