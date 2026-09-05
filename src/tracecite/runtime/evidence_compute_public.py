@@ -9,7 +9,7 @@ from .evidence_compute import (
     _record_compute_session,
     run_evidence_compute as _run_legacy_compute,
 )
-from .evidence_compute_jsonl_physical import try_run_fixed_topk_jsonl_batch
+from .evidence_compute_jsonl_physical import try_run_jsonl_batch
 from .evidence_shell_public import EvidenceShellPolicy
 from .retrieval_session import RetrievalSessionStore
 
@@ -27,7 +27,7 @@ def run_evidence_compute(
     if not isinstance(policy, EvidenceShellPolicy):
         raise TypeError("policy must be EvidenceShellPolicy")
 
-    payload = try_run_fixed_topk_jsonl_batch(request, policy=policy, session=session)
+    payload = try_run_jsonl_batch(request, policy=policy, session=session)
     if payload is None:
         return _run_legacy_compute(request, policy=policy, session=session)
     return _record_compute_session(payload, request=request, session=session)
