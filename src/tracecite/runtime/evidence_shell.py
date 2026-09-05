@@ -459,21 +459,33 @@ def _aggregate(rows: Iterable[_RecordRow], stage: _Stage) -> tuple[dict[str, Any
     field = stage.args[0]
 
     if stage.command == "project":
+        fields = tuple(str(item) for item in stage.args)
         projected: list[dict[str, Any]] = []
         matched = 0
         for row in rows:
             matched += 1
-            projected.append(
-                {
-                    "value": _field_value(row, field),
-                    "uri": _project_uri(row),
-                    "source": row.source_path,
-                    "sha256": row.sha256,
-                    "start_line": row.global_start_line,
-                    "end_line": row.global_end_line,
-                }
-            )
-        return {"field": field, "rows": projected, "row_total": matched}, matched
+            values = {name: _field_value(row, name) for name in fields}
+            item: dict[str, Any] = {
+                "uri": _project_uri(row),
+                "source": row.source_path,
+                "sha256": row.sha256,
+                "start_line": row.global_start_line,
+                "end_line": row.global_end_line,
+            }
+            if len(fields) == 1:
+                item["value"] = values[fields[0]]
+            else:
+                item["values"] = values
+            projected.append(item)
+        aggregate: dict[str, Any] = {
+            "rows": projected,
+            "row_total": matched,
+        }
+        if len(fields) == 1:
+            aggregate["field"] = fields[0]
+        else:
+            aggregate["fields"] = list(fields)
+        return aggregate, matched
 
     counts: dict[str, int] = {}
     matched = 0
