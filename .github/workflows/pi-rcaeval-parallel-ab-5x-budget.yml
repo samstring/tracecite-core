@@ -1,5 +1,5 @@
 name: Pi RCAEval Parallel A/B 5x Budget
-# Iteration 12: projected Run selection + shared predicate execution.
+# Iteration 13: validate generic causal lifecycle attribution guardrails.
 
 on:
   workflow_dispatch:
@@ -111,7 +111,7 @@ jobs:
       RESULT_ROOT: /tmp/result-${{ matrix.arm }}
       WORK_ROOT: /tmp/work-${{ matrix.arm }}
       MCP_STATE_ROOT: /tmp/mcp-state-${{ matrix.arm }}
-      TRACECITE_MCP_REF: 913a3c16cd6ca0de1d7e9c0419011c603de3e0ab
+      TRACECITE_MCP_REF: e8a96baa441c9825a80c0db72302b9d953bb43e8
       TRACECITE_EVIDENCE_MAX_TOKENS: "60000"
       TRACECITE_EVIDENCE_MAX_BYTES: "327680"
       TRACECITE_MATERIALIZE_MAX_CHARS: "4000"
@@ -207,9 +207,6 @@ jobs:
 
           extra=()
           if [[ "${{ matrix.arm }}" == tracecite ]]; then
-            # This prepared benchmark fixture is immutable for the duration of
-            # the real Agent run. Scope the Host lifecycle declaration here so
-            # preflight still exercises the product's default mutable contract.
             export TRACECITE_SOURCE_MODE="static"
             export TRACECITE_MCP_SESSION_ID="rcaeval-${GITHUB_RUN_ID}-tracecite"
             extra=(
