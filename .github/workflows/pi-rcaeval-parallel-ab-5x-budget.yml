@@ -114,9 +114,6 @@ jobs:
       TRACECITE_EVIDENCE_MAX_TOKENS: "60000"
       TRACECITE_EVIDENCE_MAX_BYTES: "327680"
       TRACECITE_MATERIALIZE_MAX_CHARS: "4000"
-      # Host-owned conversation boundary. The Agent may synthesize arbitrary
-      # per-call session_id strings; TraceCite maps them to this stable session.
-      TRACECITE_MCP_SESSION_ID: rcaeval-${{ github.run_id }}-${{ matrix.arm }}
       ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
       ARM_API_KEY: ${{ matrix.arm == 'native' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
     steps:
@@ -192,6 +189,9 @@ jobs:
 
           extra=()
           if [[ "${{ matrix.arm }}" == tracecite ]]; then
+            # Only the real Agent run is host-pinned. Preflight tests retain the
+            # default caller-selected session semantics.
+            export TRACECITE_MCP_SESSION_ID="rcaeval-${GITHUB_RUN_ID}-tracecite"
             extra=(
               --skill-dir "$GITHUB_WORKSPACE/tracecite-mcp/skills/tracecite"
               --mcp-evidence-root "$EVIDENCE_ROOT"
