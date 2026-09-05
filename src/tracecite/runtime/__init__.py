@@ -23,8 +23,9 @@ from .evidence_shell_agent import (
     EvidenceShellPolicy, EvidenceShellRequest, run_evidence_shell,
 )
 from .evidence_compute import (
-    MAX_BATCH_ANALYSES, EvidenceAnalysisSpec, EvidenceComputeRequest, run_evidence_compute,
+    MAX_BATCH_ANALYSES, EvidenceAnalysisSpec, EvidenceComputeRequest,
 )
+from .evidence_compute_public import run_evidence_compute
 from .source_versions import (
     QuestionSourceView, SourceFingerprint, SourceSegment, SourceVersionStore,
 )
