@@ -41,7 +41,9 @@ def test_repeated_evidence_returns_compact_receipt_and_query_memory(tmp_path) ->
     assert novelty["state"] == "no_new_evidence"
     assert novelty["matched_evidence"] == 10
     assert novelty["query_repeated"] is True
-    assert "evidence boundary" in novelty["guidance"]
+    assert "no Evidence identity" in novelty["guidance"]
+    assert "materialize/replay" in novelty["guidance"]
+    assert "conclude" not in novelty["guidance"].lower()
 
     summary = repeated["data"]["existing_evidence_summary"]
     assert summary["count"] == 10
