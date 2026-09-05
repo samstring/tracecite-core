@@ -1,6 +1,6 @@
 # TraceCite vNext 问题：Run 33965883856 Orchestration / Projection Cliffs
 
-状态：**Open — P0**  
+状态：**Open — P0，最新 A/B 验证中**  
 发现于：RCAEval A/B run `33965883856`  
 适用范围：通用 Agent + Evidence Compute Runtime，不针对任何具体服务、故障类型、字段名或隐藏答案。
 
@@ -68,7 +68,7 @@ find / -name "mcpScript" ...
 - Host 应最终做到 capability advertisement 一致：禁用 scripting surface 时，不应再把 scripting discovery 当成首选路径；
 - 不能通过 case prompt 写“不要查某个目录”解决。
 
-已实施 Skill 修复：`tracecite-mcp` commit `6a253ec8f12541a418fec6b6a8faf40e6d1c9d4b`。
+已实施 Skill 修复：`tracecite-mcp` commit `6a253ec8f12541a418fec6b6a8faf40e6d1c9d4b`；MCP CI `33966864148` 全部通过。最新 A/B 已 pin 到该 commit，待真实 Agent 验证 discovery 是否彻底消失。
 
 ## 4. P0-2：multi-field bounded projection 仍掉入 canonical remainder
 
@@ -77,8 +77,6 @@ find / -name "mcpScript" ...
 ```text
 sort FIELD asc|desc | head N | project FIELD_A FIELD_B ...
 ```
-
-仍未进入 shared bounded top-K physical plan。
 
 旧 compiler 只接受 `project` 恰好一个字段。于是：
 
@@ -133,21 +131,56 @@ distinct *
 
 执行引擎报告 `jsonl_shared_scan_batch`，但实际耗时约 `36.9s`。
 
-原因是 `timestamp` 属于 Segmenter special field。Planner 只要发现任何 compiled analysis `needs_record=true`，就让整个 242k-row shared scan 走 `JsonLineSegmenter.segment_file()` + canonical Record 构造，即使源 JSON 根本没有可解析 `timestamp`。
+原因是 `timestamp` 属于 Segmenter special field。旧 Planner 只要发现任何 compiled analysis `needs_record=true`，就让整个 242k-row shared scan 走 `JsonLineSegmenter.segment_file()` + canonical Record 构造，即使其他 sibling 只需要普通 JSON 字段。
 
 同一个 traces 文件只做普通 JSON field aggregate 时约 3 秒级，说明 shared scan 名称本身不代表相同 physical cost。
 
-### 通用修复要求
+### 方案比较与最终决策
 
-统一 planner 需要把“JSON decode”和“Record semantic enrichment”拆为可按 analysis/field 需要选择的 physical operators，而不是一个 analysis 请求特殊字段就让整批 Record 化。
+考虑过三种方向：
 
-至少应做到：
+1. 只给 `timestamp` 写轻量 shortcut：性能成本最低，但会复制 JsonLineSegmenter 时间语义，长期容易产生 fast/canonical 漂移，拒绝。
+2. 将 special-field analysis 单独拆成第二次 canonical scan：能避免拖慢普通 sibling，但仍需额外全量扫描，而且没有解决语义实现重复问题。
+3. **把 JSON decode 与 Segmenter semantic enrichment 分层，并抽取单一 JSONL 语义实现**：一次 raw-line scan、每候选行最多一次 JSON decode，只有需要 `timestamp/level/msg` 时才从 decoded mapping 做语义 enrichment；canonical JsonLineSegmenter 也调用同一函数。
 
-- 普通 JSON analyses 保持 raw JSON streaming；
-- 需要 Segmenter semantic field 的 analyses 单独 enrichment，不能把无关 sibling 一起拖入；
-- 对 JSONL 可证明的 aliases 使用轻量 field resolver；无法证明等价才使用 canonical enrichment。
+选择方案 3，因为它同时满足正确性、通用性、架构一致性、可维护性和性能要求，不依赖当前 case 的字段分布。
 
-状态：**待修复，当前下一优先级。**
+### 已实施
+
+共享语义模块：
+
+- `src/tracecite_core/jsonline_semantics.py`
+- commit `6d2cd4d202d5db765a85575438b80ea17875d827`
+- 统一拥有 JSONL timestamp/level/msg alias、时间戳解析/归一化语义。
+
+canonical Segmenter：
+
+- `JsonLineSegmenter` 改为 decode 后调用共享 `extract_jsonline_semantics()`：`92d6df294ab20d8c18ce1c74ba768930335bf5d0`
+- 第一次 CI 暴露旧 `text_filter.py` 仍私有导入 `_normalize_timestamp`；这是迁移兼容缺口，不是架构方向错误。
+- 保留 `_normalize_timestamp` 兼容 alias，但实现仍只有共享模块一份：`b7afd174ded5aa2687ff6f6d9e607f8ec2d2d7b2`。
+
+Evidence Compute physical plan：
+
+- commit `92534f30f01caa23602eb7943eafbbbfdbe2ecb1`
+- 删除 whole-batch `any(needs_record)` 决策；
+- JSONL 始终从 raw physical lines streaming；
+- raw predicates 优先；
+- 同一候选行 JSON 只 decode 一次；
+- `timestamp/level/msg` 按需从 decoded mapping 做 lazy semantic enrichment；
+- line/source/text 等 locator metadata 不需要构造 Record；
+- absolute time scope 直接复用同一 semantic timestamp，同时保持“无可解析时间戳的记录不会被时间窗口静默排除”的 canonical 语义。
+
+新增架构回归：
+
+- `tests/test_jsonline_semantics_shared.py`：`292ffcfa1b7c2224223887e7c4fac6b402f32e21`
+  - 验证共享语义与 canonical JsonLineSegmenter 完全一致；
+  - 覆盖 ISO/epoch/非法 timestamp、level/msg alias、custom alias。
+- `tests/test_evidence_compute_lazy_jsonl_semantics.py`：`d2824908347b04326c2c2d3a522c2edbde3ae902`
+  - monkeypatch `JsonLineSegmenter.segment_file` 为失败，证明 shared Compute 不再构造 whole Record scan；
+  - semantic + normal fields 一行只允许一次 `json.loads`；
+  - absolute time scope 也不允许退回 Record scan。
+
+最终 Core CI `33967903026`：Ubuntu Python 3.10–3.14 + macOS 3.14 全部通过。
 
 ## 6. P0-4：`where ... and ...` 被静默误解析，产生 false no-match
 
@@ -217,20 +250,70 @@ quoted value 中的 `and` 不拆分。
 
 Runtime 不应决定调查哪个时间/字段；只负责执行 Agent 已经选择的机械目标。
 
-## 8. 当前修复顺序
+## 8. 新确认的通用执行层缺口：Run Top-N / tail 仍未统一 physical scan
+
+在等待最新 A/B 时继续审查发现：
+
+- `tracecite_run` 的 `sort ... | head N` 虽已使用 heap，避免 full sort；
+- 但其输入仍通过 `_initial_rows -> iter_matching_records -> Record`，JSONL 没有复用 Analyze 现在的 raw-line/shared-decode physical scan；
+- canonical `tail_lines` 会先 `_line_count()` 全扫一次，再 `segment_file()` 从头扫描；
+- pipeline 层 `tail N` 甚至没有 pushdown 到 source scanner。
+
+SourceVersion/SourceSegment 已保存 `lines` 元数据，因此如果最新 trajectory 继续证明 tail/Run Top-N 是显著耗时，正确下一步是：
+
+```text
+Program IR Selection/TopK
+        ↓ pushdown
+SourceView physical line reader
+  ├─ forward stream
+  └─ reverse bounded stream
+        ↓
+shared JSON decode / semantic resolver
+```
+
+而不是新增 case-specific `fast_tail` 或增大 timeout。该方向可以让 `tail`、`last` 锚点、Run Top-N 与 Analyze 共用更底层 physical primitive。
+
+## 9. 当前修复顺序
 
 P0：
 
-1. ~~修 direct-tool discovery 冲突~~ — Skill 已修，待真实 A/B 验证；
+1. ~~修 direct-tool discovery 冲突~~ — Skill + MCP CI 已通过，真实 A/B 验证中；
 2. ~~修 boolean where false no-match~~ — Core CI 已通过；
 3. ~~扩展 bounded TopK IR 到 multi-field projection~~ — canonical/Compute parity 已通过；
-4. 将 special-field enrichment 从整个 shared batch 中解耦；
-5. 让 `tracecite_run` 的 JSONL search + top-K 复用 streaming Compute physical operator，减少 candidate-recovery 开销；
-6. 增加 Compute deadline/cancellation，避免未来 timeout zombie work；
-7. 重跑相同 A/B，timeout 保持 600 秒。
+4. ~~将 special-field enrichment 从整个 shared batch 中解耦~~ — lazy shared semantics + 全矩阵 Core CI 已通过；
+5. 根据最新 A/B trajectory 决定是否将 `tracecite_run` JSONL Top-N / tail 下推到统一 SourceView physical scan；
+6. 增加 Compute deadline/cancellation，避免 transport timeout 留下 zombie work；
+7. 继续同一 A/B，timeout 保持 600 秒。
 
-## 9. 质量信号
+## 10. Iteration 3 — lazy JSONL semantics + direct-tool Skill + latest A/B
 
-虽然最终 answer 为空，但 timeout 前最后一次 materialize 已读到直接 shutdown 证据：ExecutorService shutdown、JMX unregister、Mongo connection pool closed 等。也就是说 Agent 在 600 秒边界前已经接近 Native 的正确 RCA，只是没有剩余时间形成最终答案。
+代码/Skill：
+
+- MCP direct-tool discovery contract：`6a253ec8f12541a418fec6b6a8faf40e6d1c9d4b`
+- shared JSONL semantics：`6d2cd4d202d5db765a85575438b80ea17875d827`
+- canonical Segmenter uses shared semantics：`92d6df294ab20d8c18ce1c74ba768930335bf5d0`
+- Evidence Compute lazy semantic physical plan：`92534f30f01caa23602eb7943eafbbbfdbe2ecb1`
+- semantic parity regression：`292ffcfa1b7c2224223887e7c4fac6b402f32e21`
+- no whole-Record scan regression：`d2824908347b04326c2c2d3a522c2edbde3ae902`
+- migration compatibility alias：`b7afd174ded5aa2687ff6f6d9e607f8ec2d2d7b2`
+
+验证：
+
+- Core CI `33967903026`：SUCCESS，Ubuntu Python 3.10–3.14 + macOS 3.14 全部通过；
+- MCP CI `33966864148`：SUCCESS。
+
+最新 A/B：
+
+- workflow commit：`3f1b0d917abaf865dbffc63e86006152248feea5`
+- run：`33967988159`
+- MCP pin：`6a253ec8f12541a418fec6b6a8faf40e6d1c9d4b`
+- Agent timeout：仍为 600 秒；
+- 新增 `agent-elapsed-ms.txt`，后续 real elapsed 直接读取，不再靠 transcript timestamp 近似；
+- preflight 加入 lazy semantics、semantic parity、conjunction、last fastpath 等回归；
+- 当前状态：Native / TraceCite 真实 Agent 阶段运行中。
+
+## 11. 质量信号
+
+虽然 run `33965883856` 最终 answer 为空，但 timeout 前最后一次 materialize 已读到直接 shutdown 证据：ExecutorService shutdown、JMX unregister、Mongo connection pool closed 等。也就是说 Agent 在 600 秒边界前已经接近 Native 的正确 RCA，只是没有剩余时间形成最终答案。
 
 这进一步说明优先级应该是消除无效 discovery、planner cliff 和机械 round-trip，而不是给 Agent 增加 case-specific RCA 知识。
