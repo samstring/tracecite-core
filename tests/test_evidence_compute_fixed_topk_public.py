@@ -126,6 +126,54 @@ def test_public_compute_memoizes_shared_predicates_for_aggregate_only_batch(tmp_
     assert by_name["count"]["aggregate"]["count"] == 500
     assert by_name["group"]["aggregate"]["group_total"] == 5
     assert by_name["distinct"]["aggregate"]["distinct_total"] == 5
-    # Three sibling analyses share one predicate. The physical scan evaluates
-    # that predicate once per source line, not once per analysis per line.
     assert shared_predicate_evaluations == 1000
+
+
+def test_unsupported_sibling_does_not_downgrade_supported_topk(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        "".join(
+            json.dumps({"duration": index, "service": "svc"}, separators=(",", ":")) + "\n"
+            for index in range(1000)
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_legacy_trim(*args, **kwargs):
+        raise AssertionError("supported Top-K sibling must retain fixed-capacity physical plan")
+
+    monkeypatch.setattr(legacy, "_trim_topn", fail_legacy_trim)
+
+    result = run_evidence_compute(
+        EvidenceComputeRequest(
+            source=path,
+            analyses=(
+                EvidenceAnalysisSpec(
+                    name="top",
+                    program="sort duration desc numeric | head 3 | project duration service",
+                ),
+                # Valid Analyze output, but not part of the shared sort+head+project
+                # compiler. It should become only the canonical remainder.
+                EvidenceAnalysisSpec(
+                    name="first",
+                    program="head 1 | project duration service",
+                ),
+            ),
+        ),
+        policy=_policy(),
+    )
+
+    assert result["status"] == "ok"
+    data = result["data"]
+    assert data["execution_engine"] == "jsonl_partitioned_batch"
+    assert data["shared_scan_analyses"] == 1
+    assert data["canonical_remainder_analyses"] == 1
+    by_name = {item["name"]: item for item in data["outputs"]}
+    assert by_name["top"]["execution_engine"] == "jsonl_shared_scan_topn_project"
+    assert [row["values"]["duration"] for row in by_name["top"]["aggregate"]["rows"]] == [
+        999,
+        998,
+        997,
+    ]
+    assert by_name["first"]["status"] == "ok"
+    assert by_name["first"]["aggregate"]["rows"][0]["values"]["duration"] == 0
