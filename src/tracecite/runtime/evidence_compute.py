@@ -143,7 +143,7 @@ class _CompiledJsonlTopN:
     raw_predicates: list[Any]
     field_predicates: list[Any]
     sort_field: str
-    project_field: str
+    project_fields: tuple[str, ...]
     descending: bool
     numeric: bool
     limit: int
@@ -169,7 +169,7 @@ class _CompiledJsonlTopN:
         return (
             normal_predicate_field
             or self.sort_field not in _SPECIAL_FIELDS
-            or self.project_field not in _SPECIAL_FIELDS
+            or any(field not in _SPECIAL_FIELDS for field in self.project_fields)
         )
 
 
@@ -252,7 +252,7 @@ def _compile_jsonl_topn(
         return None
     if not sort_stage.args or len(sort_stage.args) > 3:
         return None
-    if len(select_stage.args) != 1 or len(project_stage.args) != 1:
+    if len(select_stage.args) != 1 or not project_stage.args:
         return None
     try:
         limit = int(select_stage.args[0])
@@ -273,8 +273,8 @@ def _compile_jsonl_topn(
     if any(stage.command not in _PREDICATES for stage in predicates):
         return None
     raw_predicates, field_predicates = _split_predicates(predicates)
-    project_field = str(project_stage.args[0])
-    referenced = _referenced_fields_for(predicates) | {sort_field, project_field}
+    project_fields = tuple(str(field) for field in project_stage.args)
+    referenced = _referenced_fields_for(predicates) | {sort_field} | set(project_fields)
     return _CompiledJsonlTopN(
         spec=spec,
         normalized=normalized,
@@ -282,7 +282,7 @@ def _compile_jsonl_topn(
         raw_predicates=raw_predicates,
         field_predicates=field_predicates,
         sort_field=sort_field,
-        project_field=project_field,
+        project_fields=project_fields,
         descending=direction == "desc",
         numeric=numeric,
         limit=limit,
@@ -368,20 +368,26 @@ def _update_topn(
     local_end_line: int,
 ) -> None:
     sort_value = _field_value(obj, item.sort_field, canonical_row=canonical_row)
-    project_value = _field_value(obj, item.project_field, canonical_row=canonical_row)
+    values = {
+        field: _field_value(obj, field, canonical_row=canonical_row)
+        for field in item.project_fields
+    }
     global_start = segment.line_base + max(0, local_start_line - 1)
     global_end = segment.line_base + max(0, local_end_line - 1)
     fragment = f"#L{local_start_line}"
     if local_end_line != local_start_line:
         fragment += f"-L{local_end_line}"
-    projected = {
-        "value": project_value,
+    projected: dict[str, Any] = {
         "uri": f"evidence://sha256/{segment.sha256}{fragment}",
         "source": segment.path,
         "sha256": segment.sha256,
         "start_line": global_start,
         "end_line": global_end,
     }
+    if len(item.project_fields) == 1:
+        projected["value"] = values[item.project_fields[0]]
+    else:
+        projected["values"] = values
     item.ordinal += 1
     assert item.candidates is not None
     item.candidates.append(
@@ -462,11 +468,14 @@ def _finalize_topn(
             key=lambda candidate: (candidate[0], candidate[1]),
         )
     rows = [candidate[2] for candidate in selected]
-    aggregate = {
-        "field": compiled.project_field,
+    aggregate: dict[str, Any] = {
         "rows": rows,
         "row_total": len(rows),
     }
+    if len(compiled.project_fields) == 1:
+        aggregate["field"] = compiled.project_fields[0]
+    else:
+        aggregate["fields"] = list(compiled.project_fields)
     output = {
         "name": compiled.spec.name,
         "status": "ok",
