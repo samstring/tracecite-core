@@ -8,7 +8,6 @@ Unsupported programs fall back to the established planner.
 
 from __future__ import annotations
 
-from json import JSONDecodeError, loads as json_loads
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -174,9 +173,12 @@ def try_run_fixed_topk_jsonl_batch(
                 obj: Mapping[str, Any] = {}
                 if needs_json:
                     try:
-                        decoded = json_loads(raw)
+                        # Preserve the existing planner's shared JSON decoder seam
+                        # so instrumentation and compatibility tests observe one
+                        # decode per candidate line across both physical plans.
+                        decoded = legacy.json.loads(raw)
                         obj = decoded if isinstance(decoded, Mapping) else {}
-                    except JSONDecodeError:
+                    except legacy.json.JSONDecodeError:
                         obj = {}
 
                 semantics: JsonLineSemantics | None = None
@@ -282,7 +284,6 @@ def try_run_fixed_topk_jsonl_batch(
                 "source_scan": "jsonl_raw_lines",
                 "json_decode": "shared_once_per_candidate_line",
                 "semantic_enrichment": "lazy_from_decoded_json",
-                "topk": "fixed_capacity_heap",
             },
             "time_scope": {
                 "last": request.last,
