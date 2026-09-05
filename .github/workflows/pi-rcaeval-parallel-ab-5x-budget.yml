@@ -110,7 +110,7 @@ jobs:
       RESULT_ROOT: /tmp/result-${{ matrix.arm }}
       WORK_ROOT: /tmp/work-${{ matrix.arm }}
       MCP_STATE_ROOT: /tmp/mcp-state-${{ matrix.arm }}
-      TRACECITE_MCP_REF: 735d0887efea3efc3ad1609213fae55761e8f9d9
+      TRACECITE_MCP_REF: 35c7c3c2016439b076492c5f35f4b0a030d7045a
       TRACECITE_EVIDENCE_MAX_TOKENS: "60000"
       TRACECITE_EVIDENCE_MAX_BYTES: "327680"
       TRACECITE_MATERIALIZE_MAX_CHARS: "4000"
