@@ -13,12 +13,14 @@ authoritative.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from tracecite_core.segmenter import detect_segmenter_kind
+from tracecite_core.state_file import state_lock
 
 from .evidence_shell import _budget_data, _payload_fits
 from .evidence_shell_agent import run_evidence_shell
@@ -34,7 +36,7 @@ from .evidence_shell_fast_jsonl import (
     _value,
 )
 from .evidence_shell_public import EvidenceShellPolicy, EvidenceShellRequest
-from .retrieval_session import RetrievalSessionStore
+from .retrieval_session import RetrievalOperation, RetrievalSessionStore
 from .schema import AgentResult
 from .source_versions import SourceVersionStore
 
@@ -373,6 +375,71 @@ def _fallback_sequential(
     ).to_dict()
 
 
+def _compute_request_fingerprint(
+    request: EvidenceComputeRequest,
+    *,
+    source_version: str,
+    payload: Mapping[str, Any],
+) -> str:
+    data = payload.get("data") if isinstance(payload.get("data"), Mapping) else {}
+    normalized_by_name = {
+        str(item.get("name") or ""): str(item.get("program") or "")
+        for item in data.get("outputs") or ()
+        if isinstance(item, Mapping)
+    }
+    analyses = [
+        {
+            "name": spec.name,
+            "program": normalized_by_name.get(spec.name) or spec.program,
+        }
+        for spec in request.analyses
+    ]
+    encoded = json.dumps(
+        {
+            "operation": "evidence_compute",
+            "source_version": source_version,
+            "segmenter": request.segmenter,
+            "analyses": analyses,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _record_compute_session(
+    payload: dict[str, Any],
+    *,
+    request: EvidenceComputeRequest,
+    session: RetrievalSessionStore | None,
+) -> dict[str, Any]:
+    """Record one batch as one mechanical session operation, never N Agent rounds."""
+
+    if session is None or payload.get("status") == "too_broad":
+        return payload
+    data = payload.get("data") if isinstance(payload.get("data"), Mapping) else {}
+    source_version = str(data.get("source_version") or "").strip()
+    if not source_version:
+        return payload
+
+    operation = RetrievalOperation(
+        operation="evidence_compute",
+        status=str(payload.get("status") or "unknown"),
+        request_fingerprint=_compute_request_fingerprint(
+            request,
+            source_version=source_version,
+            payload=payload,
+        ),
+        source_version=source_version,
+    )
+    with state_lock(session.path):
+        state = session.load()
+        next_state, _ = state.advance(operation=operation)
+        session.save(next_state)
+    return payload
+
+
 def run_evidence_compute(
     request: EvidenceComputeRequest,
     *,
@@ -386,10 +453,10 @@ def run_evidence_compute(
     if not isinstance(policy, EvidenceShellPolicy):
         raise TypeError("policy must be EvidenceShellPolicy")
 
-    fused = _try_shared_jsonl(request, policy=policy, session=session)
-    if fused is not None:
-        return fused
-    return _fallback_sequential(request, policy=policy, session=session)
+    payload = _try_shared_jsonl(request, policy=policy, session=session)
+    if payload is None:
+        payload = _fallback_sequential(request, policy=policy, session=session)
+    return _record_compute_session(payload, request=request, session=session)
 
 
 __all__ = [
