@@ -92,3 +92,13 @@ def test_reciprocal_family_prefers_different_member_before_same_method_waiters()
     assert "do not issue lifecycle/symptom searches before that candidate is materialized" in skill
     assert "Reciprocal-family candidate selection is mandatory" not in runtime
     assert "different-member hit" not in runtime
+
+
+def test_pending_pair_binding_does_not_require_reciprocal_closure_first() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "Pair binding is a syntactic handoff, not a closure judgment" in skill
+    assert "even when the pending acquisition is on the same synchronization domain as the representative" in skill
+    assert "the mandatory `B` family search is what tests for that reverse path" in skill
+    assert "Pair binding is a syntactic handoff" not in runtime
+    assert "same synchronization domain as the representative" not in runtime
