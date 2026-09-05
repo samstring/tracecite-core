@@ -71,8 +71,12 @@ def test_absolute_time_scoped_jsonl_group_stays_on_streaming_fast_path(tmp_path)
 
     assert fast["status"] == "ok"
     assert fast["data"]["execution_engine"] == "jsonl_single_pass_time_scoped_field_aggregate"
-    assert fast["data"]["aggregate"] == canonical["data"]["aggregate"]
-    assert fast["data"]["aggregate"]["groups"] == [{"key": "route", "count": 2}]
+    fast_aggregate = fast["data"]["aggregate"]
+    canonical_aggregate = canonical["data"]["aggregate"]
+    assert fast_aggregate["field"] == canonical_aggregate["field"]
+    assert fast_aggregate["groups"] == canonical_aggregate["groups"]
+    assert fast_aggregate["group_total"] == canonical_aggregate["group_total"]
+    assert fast_aggregate["groups"] == [{"key": "route", "count": 2}]
     assert fast["coverage"]["match_records"] == 2
 
 
