@@ -1,4 +1,5 @@
 name: Pi RCAEval Parallel A/B 5x Budget
+# Iteration 12: projected Run selection + shared predicate execution.
 
 on:
   workflow_dispatch:
