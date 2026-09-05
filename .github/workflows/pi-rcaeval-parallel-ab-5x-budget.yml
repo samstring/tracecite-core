@@ -1,5 +1,5 @@
 name: Pi RCAEval Parallel A/B 5x Budget
-# Iteration 13: validate generic causal lifecycle attribution guardrails.
+# Iteration 14: validate sufficiency stopping and current Core planner correctness.
 
 on:
   workflow_dispatch:
@@ -111,7 +111,7 @@ jobs:
       RESULT_ROOT: /tmp/result-${{ matrix.arm }}
       WORK_ROOT: /tmp/work-${{ matrix.arm }}
       MCP_STATE_ROOT: /tmp/mcp-state-${{ matrix.arm }}
-      TRACECITE_MCP_REF: e8a96baa441c9825a80c0db72302b9d953bb43e8
+      TRACECITE_MCP_REF: d3d03264788166ce2b1d696acaf19daa6699d6cd
       TRACECITE_EVIDENCE_MAX_TOKENS: "60000"
       TRACECITE_EVIDENCE_MAX_BYTES: "327680"
       TRACECITE_MATERIALIZE_MAX_CHARS: "4000"
@@ -153,6 +153,7 @@ jobs:
           set -euo pipefail
           python -m pytest -q \
             tests/test_evidence_compute_batch.py \
+            tests/test_evidence_compute_contract_preflight.py \
             tests/test_evidence_compute_lazy_jsonl_semantics.py \
             tests/test_evidence_compute_fixed_topk_public.py \
             tests/test_jsonl_physical_topk.py \
