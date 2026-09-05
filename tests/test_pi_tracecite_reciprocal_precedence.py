@@ -27,15 +27,17 @@ def test_skill_forbids_same_block_expand_after_component_pair_is_materialized() 
     assert "outer-`B` receiver/type-family search" not in runtime
 
 
-def test_skill_anchors_reciprocal_pair_to_nearest_application_component() -> None:
+def test_skill_anchors_reciprocal_pair_to_nearest_eligible_component() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "Pair-selection rule" in skill
-    assert "nearest non-library application receiver/type immediately above `A`" in skill
+    assert "nearest eligible non-stdlib receiver/type immediately above `A`" in skill
+    assert "A direct vendored/third-party component is eligible" in skill
+    assert "library provenance alone is not a reason to skip it" in skill
     assert "do not choose an arbitrary outermost caller" in skill
     assert "Direct impact must stop at the highest materialized blocked caller" in skill
-    assert "Pair-selection rule" not in runtime
-    assert "nearest non-library application receiver/type immediately above `A`" not in runtime
+    assert "nearest eligible non-stdlib receiver/type immediately above `A`" not in runtime
+    assert "vendored/third-party component is eligible" not in runtime
 
 
 def test_skill_has_hard_reciprocal_handoff_after_distinct_sync_path() -> None:
@@ -69,3 +71,13 @@ def test_pending_path_exclusively_binds_reciprocal_pair_before_impact_expansion(
     assert "Until that reciprocal family search has been issued, re-expanding the representative path for caller/impact context is forbidden" in skill
     assert "just-materialized pending candidate only" not in runtime
     assert "re-expanding the representative path for caller/impact context is forbidden" not in runtime
+
+
+def test_pending_path_can_bind_direct_dependency_component() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "A direct vendored or third-party receiver/type is eligible for `B`" in skill
+    assert "do not discard it merely because it is library code" in skill
+    assert "Exclude only runtime/stdlib synchronization plumbing and generic framework frames" in skill
+    assert "direct vendored or third-party receiver/type is eligible" not in runtime
+    assert "do not discard it merely because it is library code" not in runtime
