@@ -1,9 +1,11 @@
 """Agent-facing Evidence Shell contract.
 
 The canonical Runtime remains responsible for SourceVersion, Record recovery,
-Evidence budgets and RetrievalSession novelty.  This thin layer improves the
+Evidence budgets and RetrievalSession novelty. This thin layer improves the
 Agent transport contract only: familiar pipeline rewrites, structured program
-errors, and compact receipts for Evidence already seen in the same session.
+errors, compact receipts for Evidence already seen in the same session, and
+Runtime-side execution of safe mechanical aggregate work that would otherwise
+force extra model/tool round trips.
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ import re
 from typing import Any, Mapping
 
 from .evidence_shell_agent_compat import normalize_agent_evidence_shell_program
+from .evidence_shell_compound import apply_compound_aggregate, split_compound_aggregate_program
+from .evidence_shell_fast_jsonl import try_run_fast_jsonl_aggregate
 from .evidence_shell_public import (
     DEFAULT_MAX_EVIDENCE_BYTES,
     DEFAULT_MAX_EVIDENCE_TOKENS,
@@ -45,7 +49,8 @@ def _program_error(request: EvidenceShellRequest, exc: ValueError) -> dict[str, 
             "program": request.program,
             "supported_hint": (
                 "Use search/regex/where, sort before project, count/group/distinct, "
-                "or an explicit head/tail selection."
+                "or an explicit head/tail selection. group/distinct results may be "
+                "followed by sort and head/take/first in the same tool call."
             ),
         },
     ).to_dict()
@@ -154,6 +159,20 @@ def _compact_repeated_evidence(
     return result
 
 
+def _request_with_program(request: EvidenceShellRequest, program: str) -> EvidenceShellRequest:
+    if program == request.program:
+        return request
+    return EvidenceShellRequest(
+        source=request.source,
+        program=program,
+        segmenter=request.segmenter,
+        last=request.last,
+        since=request.since,
+        until=request.until,
+        fold=request.fold,
+    )
+
+
 def run_evidence_shell(
     request: EvidenceShellRequest,
     *,
@@ -170,18 +189,24 @@ def run_evidence_shell(
     requested_program = request.program
     try:
         preprocessed = normalize_agent_evidence_shell_program(request.program)
-        prepared = request
-        if preprocessed != request.program:
-            prepared = EvidenceShellRequest(
-                source=request.source,
-                program=preprocessed,
-                segmenter=request.segmenter,
-                last=request.last,
-                since=request.since,
-                until=request.until,
-                fold=request.fold,
-            )
-        payload = _run_evidence_shell(prepared, policy=policy, session=session)
+        prepared = _request_with_program(request, preprocessed)
+
+        # JSONL field aggregates are a common large-trace hot path. Evaluate
+        # supported aggregate-only programs in one streaming JSON decode pass.
+        payload = try_run_fast_jsonl_aggregate(prepared, policy=policy, session=session)
+
+        if payload is None:
+            # A compact aggregate can continue through mechanical sort/head
+            # Runtime-side. The canonical aggregate still owns matching and
+            # budget semantics; only the already-bounded derived result is
+            # transformed here.
+            compound = split_compound_aggregate_program(prepared.program)
+            if compound is not None:
+                base_request = _request_with_program(prepared, compound.base_program)
+                payload = _run_evidence_shell(base_request, policy=policy, session=session)
+                payload = apply_compound_aggregate(payload, compound)
+            else:
+                payload = _run_evidence_shell(prepared, policy=policy, session=session)
     except ValueError as exc:
         return _program_error(request, exc)
 
