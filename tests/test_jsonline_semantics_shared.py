@@ -80,3 +80,14 @@ def test_repeated_scalar_timestamp_values_use_bounded_parse_cache(monkeypatch) -
         assert semantics.fields["msg"] == message
 
     assert calls == 1
+
+
+def test_timestamp_parse_cache_keeps_bool_and_number_semantics_distinct() -> None:
+    jsonline_semantics._parse_scalar_timestamp.cache_clear()
+
+    boolean = extract_jsonline_semantics({"time": True})
+    number = extract_jsonline_semantics({"time": 1})
+
+    assert boolean.timestamp is None
+    assert "布尔值" in boolean.fields["timestamp_parse_error"]
+    assert number.timestamp is not None

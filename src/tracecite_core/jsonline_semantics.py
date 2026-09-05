@@ -93,7 +93,7 @@ def _parse_timestamp(value: Any) -> tuple[datetime | None, str | None]:
     return None, f"时间戳类型不受支持: {type(value).__name__}"
 
 
-@lru_cache(maxsize=512)
+@lru_cache(maxsize=512, typed=True)
 def _parse_scalar_timestamp(
     value: str | int | float | bool | None,
 ) -> tuple[datetime | None, str | None]:
