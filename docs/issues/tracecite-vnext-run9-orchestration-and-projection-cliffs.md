@@ -80,7 +80,7 @@ sort FIELD asc|desc | head N | project FIELD_A FIELD_B ...
 
 仍未进入 shared bounded top-K physical plan。
 
-当前 compiler 只接受 `project` 恰好一个字段。于是：
+旧 compiler 只接受 `project` 恰好一个字段。于是：
 
 - `sort startTime ... | project startTime startTimeMillis ...`
 - `sort duration ... | project startTime duration operationName ...`
@@ -96,7 +96,7 @@ sort FIELD asc|desc | head N | project FIELD_A FIELD_B ...
 - ~35.0s：shared top-K + multi-field projection fallback；
 - ~32.0s：两个都无法 compile 时退为 canonical batch。
 
-这说明 Iteration 2 已修复“unsupported sibling 毒化 supported sibling”，但 physical plan 的 bounded projection 仍不完整。
+这说明 Iteration 2 已修复“unsupported sibling 毒化 supported sibling”，但当时 physical plan 的 bounded projection 仍不完整。
 
 ### 通用修复要求
 
@@ -112,6 +112,13 @@ TopK(
 ```
 
 Runtime 在 heap candidate 中只保留 bounded projected columns + provenance locator；不能因 `project` 多一个字段退回 full canonical sort/materialization。
+
+### 已实施
+
+- canonical `project` 已扩展为真正的多字段 bounded projection，单字段旧结果形状保持兼容：`cd2f4ae7c3b458bde1dde2811a12ed6ae10e970b`
+- Evidence Compute Top-K compiler/heap 已改为 `project_fields`，多字段 projection 不再进入 canonical remainder：`f7c879c5d395c9e4fefa61ce0b8825f33cb37009`
+- canonical/Compute parity + `canonical_remainder_analyses == 0` 回归：`265ebdd41685a6b5dde426757b192680a48b9b7a`
+- Core CI `33967201272`：Ubuntu Python 3.10–3.14 + macOS 3.14 全部通过。
 
 ## 5. P0-3：特殊字段会把 shared JSONL scan 变成 Record construction scan
 
@@ -139,6 +146,8 @@ distinct *
 - 普通 JSON analyses 保持 raw JSON streaming；
 - 需要 Segmenter semantic field 的 analyses 单独 enrichment，不能把无关 sibling 一起拖入；
 - 对 JSONL 可证明的 aliases 使用轻量 field resolver；无法证明等价才使用 canonical enrichment。
+
+状态：**待修复，当前下一优先级。**
 
 ## 6. P0-4：`where ... and ...` 被静默误解析，产生 false no-match
 
@@ -183,8 +192,11 @@ where A OP X | where B OP Y | where C OP Z
 
 quoted value 中的 `and` 不拆分。
 
-实现：`c4950bc6f7cb58b8f4187f62acdf7ab1b5c8d673`  
-回归：`72dc369fbddb01d59aa770b001115d2b5606b949`
+实现：`c4950bc6f7cb58b8f4187f62acdf7ab1b5c8d673`。
+
+第一版回归使用了 JSON `timestamp` 数值字段，意外混入了 TraceCite `timestamp` 特殊语义，因此测试预期不独立；随后改用普通 `seq` 字段，只验证 boolean lowering 本身：`8d24e22d58967dfffe7660266b0a1909bb02ee6a`。
+
+该修复与多字段 projection 一起在 Core CI `33967201272` 全矩阵通过。
 
 长期应把 predicate boolean expression lowering 放进统一 IR parser，而不是继续堆 Agent compatibility rewrite。
 
@@ -209,9 +221,9 @@ Runtime 不应决定调查哪个时间/字段；只负责执行 Agent 已经选�
 
 P0：
 
-1. 修 direct-tool discovery 冲突；
-2. 修 boolean where false no-match；
-3. 扩展 bounded TopK IR 到 multi-field projection；
+1. ~~修 direct-tool discovery 冲突~~ — Skill 已修，待真实 A/B 验证；
+2. ~~修 boolean where false no-match~~ — Core CI 已通过；
+3. ~~扩展 bounded TopK IR 到 multi-field projection~~ — canonical/Compute parity 已通过；
 4. 将 special-field enrichment 从整个 shared batch 中解耦；
 5. 让 `tracecite_run` 的 JSONL search + top-K 复用 streaming Compute physical operator，减少 candidate-recovery 开销；
 6. 增加 Compute deadline/cancellation，避免未来 timeout zombie work；
