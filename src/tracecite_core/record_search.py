@@ -217,14 +217,24 @@ def iter_matching_records(
         return
 
     matcher = Matcher(query) if query is not None and regex else None
-    reference, time_from, time_to = _time_window(
-        source,
-        segmenter=selected,
-        last=last,
-        since=since,
-        until=until,
-        encoding=encoding,
-    )
+    if last is None and since is None and until is None:
+        # A reference timestamp is only needed to interpret an explicit time
+        # scope. Computing it for an unscoped read can require a full source
+        # scan before a bounded head/line selection is even allowed to start.
+        # Keep the placeholder private to _in_time_window; with no boundaries
+        # that function returns before consulting the reference value.
+        reference = datetime.min
+        time_from = None
+        time_to = None
+    else:
+        reference, time_from, time_to = _time_window(
+            source,
+            segmenter=selected,
+            last=last,
+            since=since,
+            until=until,
+            encoding=encoding,
+        )
 
     start_line = line_from or 1
     if tail_lines is not None:
