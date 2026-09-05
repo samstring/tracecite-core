@@ -18,7 +18,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
-from .jsonline_semantics import extract_jsonline_semantics, strptime_timestamp
+from .jsonline_semantics import (
+    extract_jsonline_semantics,
+    normalize_timestamp as _normalize_timestamp,
+    strptime_timestamp,
+)
 from .matcher import _compile_safe_regex
 from .records import Record
 # ---------------------------------------------------------------------------
