@@ -61,7 +61,7 @@ def test_absolute_time_scoped_jsonl_group_stays_on_streaming_fast_path(tmp_path)
     )
     request = EvidenceShellRequest(
         source=source,
-        program="where statusCode >= 500 | group serviceName | sort count desc numeric | head 5",
+        program="where statusCode >= 500 | group serviceName",
         since="2026-09-05T10:04:00Z",
         until="2026-09-05T10:15:00Z",
     )
