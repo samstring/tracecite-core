@@ -1,15 +1,16 @@
 """Shared JSONL physical-plan primitives.
 
 This module contains mechanics that are safe to reuse from both Evidence Compute
-and Evidence Shell.  It does not choose investigations or hypotheses.  It only
-resolves fields from an already-decoded JSON line and keeps bounded Top-K state
-without constructing canonical Record objects.
+and Evidence Shell. It does not choose investigations or hypotheses. It resolves
+fields from an already-decoded JSON line, memoizes repeated mechanical work
+within that line, and keeps bounded Top-K state without constructing canonical
+Record objects.
 """
 
 from __future__ import annotations
 
 import heapq
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from tracecite_core.jsonline_semantics import JsonLineSemantics
@@ -31,9 +32,9 @@ def predicate_field(stage: Any) -> str | None:
 def referenced_fields(stages: Sequence[Any]) -> set[str]:
     result: set[str] = set()
     for stage in stages:
-        field = predicate_field(stage)
-        if field is not None:
-            result.add(field)
+        field_name = predicate_field(stage)
+        if field_name is not None:
+            result.add(field_name)
     return result
 
 
@@ -49,14 +50,14 @@ def split_predicates(stages: Sequence[Any]) -> tuple[list[Any], list[Any]]:
 
 def special_field_value(
     raw: str,
-    field: str,
+    field_name: str,
     *,
     semantics: JsonLineSemantics | None,
     segment: SourceSegment,
     local_start_line: int,
     local_end_line: int,
 ) -> Any:
-    key = str(field).strip()
+    key = str(field_name).strip()
     global_start = segment.line_base + max(0, local_start_line - 1)
     global_end = segment.line_base + max(0, local_end_line - 1)
     if key == "text":
@@ -83,23 +84,23 @@ def special_field_value(
 def field_value(
     obj: Mapping[str, Any],
     raw: str,
-    field: str,
+    field_name: str,
     *,
     semantics: JsonLineSemantics | None,
     segment: SourceSegment,
     local_start_line: int,
     local_end_line: int,
 ) -> Any:
-    if field in _SPECIAL_FIELDS:
+    if field_name in _SPECIAL_FIELDS:
         return special_field_value(
             raw,
-            field,
+            field_name,
             semantics=semantics,
             segment=segment,
             local_start_line=local_start_line,
             local_end_line=local_end_line,
         )
-    return _value(obj, field)
+    return _value(obj, field_name)
 
 
 def field_predicate_matches(
@@ -112,19 +113,76 @@ def field_predicate_matches(
     local_start_line: int,
     local_end_line: int,
 ) -> bool:
-    field = predicate_field(stage)
-    if field in _SPECIAL_FIELDS:
+    field_name = predicate_field(stage)
+    if field_name in _SPECIAL_FIELDS:
         value = field_value(
             obj,
             raw,
-            str(field),
+            str(field_name),
             semantics=semantics,
             segment=segment,
             local_start_line=local_start_line,
             local_end_line=local_end_line,
         )
-        return _matches({str(field): value}, raw, stage)
+        return _matches({str(field_name): value}, raw, stage)
     return _matches(obj, raw, stage)
+
+
+def _stage_key(stage: Any) -> tuple[str, tuple[str, ...]]:
+    return str(stage.command), tuple(str(value) for value in stage.args)
+
+
+@dataclass
+class JsonlLineContext:
+    """One decoded JSONL line with per-line common-subexpression caches.
+
+    Evidence Compute batches frequently contain sibling analyses that share a
+    service/operation/time predicate. Evaluating the same predicate independently
+    for every sibling makes one physical scan behave like N logical scans. This
+    context keeps those mechanical results local to one source line; nothing is
+    cached across lines, sources, SourceVersions, or requests.
+    """
+
+    obj: Mapping[str, Any]
+    raw: str
+    semantics: JsonLineSemantics | None
+    segment: SourceSegment
+    line_number: int
+    _raw_predicates: dict[tuple[str, tuple[str, ...]], bool] = field(default_factory=dict)
+    _field_predicates: dict[tuple[str, tuple[str, ...]], bool] = field(default_factory=dict)
+    _values: dict[str, Any] = field(default_factory=dict)
+
+    def raw_matches(self, stage: Any) -> bool:
+        key = _stage_key(stage)
+        if key not in self._raw_predicates:
+            self._raw_predicates[key] = _matches({}, self.raw, stage)
+        return self._raw_predicates[key]
+
+    def predicate_matches(self, stage: Any) -> bool:
+        key = _stage_key(stage)
+        if key not in self._field_predicates:
+            field_name = predicate_field(stage)
+            if field_name in _SPECIAL_FIELDS:
+                value = self.value(str(field_name))
+                matched = _matches({str(field_name): value}, self.raw, stage)
+            else:
+                matched = _matches(self.obj, self.raw, stage)
+            self._field_predicates[key] = matched
+        return self._field_predicates[key]
+
+    def value(self, field_name: str) -> Any:
+        key = str(field_name)
+        if key not in self._values:
+            self._values[key] = field_value(
+                self.obj,
+                self.raw,
+                key,
+                semantics=self.semantics,
+                segment=self.segment,
+                local_start_line=self.line_number,
+                local_end_line=self.line_number,
+            )
+        return self._values[key]
 
 
 def topk_sort_key(value: Any, *, numeric: bool) -> tuple[int, float | str]:
@@ -159,7 +217,7 @@ class _WorstFirstEntry:
     descending: bool
 
     def __lt__(self, other: "_WorstFirstEntry") -> bool:
-        # heapq keeps the smallest item at index 0.  We intentionally define
+        # heapq keeps the smallest item at index 0. We intentionally define
         # "smaller" as "worse" so the root is always the candidate to evict.
         return _better(
             other.key,
@@ -216,6 +274,7 @@ class FixedCapacityTopK:
 
 __all__ = [
     "FixedCapacityTopK",
+    "JsonlLineContext",
     "RAW_FALLBACK_FIELDS",
     "SEMANTIC_JSON_FIELDS",
     "field_predicate_matches",
