@@ -1,0 +1,398 @@
+name: Pi RCAEval Blind Manual A/B
+
+on:
+  workflow_dispatch:
+    inputs:
+      case_id:
+        description: "Official RCAEval case directory"
+        required: true
+        default: "re3tt_ts-route-service_f3_6"
+        type: string
+  push:
+    branches:
+      - feature_for_agent_refacotr_shell
+    paths:
+      - .github/workflows/pi-rcaeval-manual-ab.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-rcaeval-blind-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  arm:
+    name: ${{ matrix.arm }} / RCAEval blind
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [native, tracecite]
+    env:
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      PI_CODING_AGENT_DIR: /tmp/pi-rcaeval-${{ matrix.arm }}-${{ github.run_id }}
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      RESULT_ROOT: /tmp/pi-rcaeval/${{ matrix.arm }}/result
+      WORK_ROOT: /tmp/pi-rcaeval/${{ matrix.arm }}/work
+      SOURCE_ROOT: /tmp/pi-rcaeval/${{ matrix.arm }}/source
+      DATA_ROOT: /tmp/pi-rcaeval/${{ matrix.arm }}/download
+      TRACECITE_MCP_REF: 92bce8483dd734e6270d5d6a0a2fd2dbe69d185e
+      TRACECITE_EVIDENCE_MAX_TOKENS: "12000"
+      TRACECITE_EVIDENCE_MAX_BYTES: "65536"
+      TRACECITE_MATERIALIZE_MAX_CHARS: "8000"
+
+    steps:
+      - name: Checkout TraceCite Core under test
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned TraceCite MCP
+        if: matrix.arm == 'tracecite'
+        uses: actions/checkout@v4
+        with:
+          repository: samstring/tracecite-mcp
+          ref: ${{ env.TRACECITE_MCP_REF }}
+          path: tracecite-mcp
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install isolated runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python -m pip install -e ".[dev]"
+          python -m pip install pandas pyarrow huggingface_hub
+          if [[ "${{ matrix.arm }}" == tracecite ]]; then
+            pi install npm:pi-mcp-adapter@2.27.0 --approve
+            python -m pip install 'mcp>=2,<3'
+            python -m pip install -e ./tracecite-mcp --no-deps
+          fi
+
+      - name: Verify arm configuration
+        env:
+          ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+          ARM_API_KEY: ${{ matrix.arm == 'native' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ARM_API_KEY:-}" || { echo 'GMI API key is empty' >&2; exit 2; }
+          test -n "${ARM_MODEL:-}" || { echo 'GMI model is empty' >&2; exit 2; }
+          python -m pytest -q tests/test_evidence_shell.py tests/test_evidence_shell_unix_compat.py tests/test_benchmark_provider_retry_chain.py
+          if [[ "${{ matrix.arm }}" == tracecite ]]; then
+            python -m pytest -q tests/test_pi_mcp_benchmark_boundary.py tracecite-mcp/tests/test_server.py
+          fi
+
+      - name: Configure isolated Pi model
+        env:
+          ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['ARM_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model, 'name': model, 'reasoning': False, 'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000, 'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          path = Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json'
+          path.write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Download and blind official RCAEval telemetry
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT_ROOT" "$WORK_ROOT" "$SOURCE_ROOT" "$DATA_ROOT"
+          mkdir -p "$RESULT_ROOT" "$WORK_ROOT/evidence" "$SOURCE_ROOT" "$DATA_ROOT"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import snapshot_download
+
+          case_id = "${{ github.event_name == 'workflow_dispatch' && inputs.case_id || 're3tt_ts-route-service_f3_6' }}"
+          data_root = Path(os.environ['DATA_ROOT'])
+          snapshot_download(
+              repo_id='phamquiluan/RCAEval',
+              repo_type='dataset',
+              allow_patterns=[f'{case_id}/logs.parquet', f'{case_id}/inject_time.txt'],
+              local_dir=data_root,
+          )
+          case_dir = data_root / case_id
+          logs_path = case_dir / 'logs.parquet'
+          inject_path = case_dir / 'inject_time.txt'
+          if not logs_path.is_file() or not inject_path.is_file():
+              raise SystemExit(f'missing official RCAEval telemetry for requested case')
+          logs = pd.read_parquet(logs_path)
+          runtime = Path(os.environ['WORK_ROOT']) / 'evidence' / 'runtime.jsonl'
+          logs.to_json(runtime, orient='records', lines=True, force_ascii=False)
+          inject_time = int(inject_path.read_text().strip())
+          question = Path(os.environ['WORK_ROOT']) / 'question.md'
+          question.write_text(
+              '# Incident investigation\n\n'
+              'You are investigating a microservice failure from a public RCA benchmark. '
+              'The benchmark case identifier and answer annotations are intentionally withheld.\n\n'
+              f'Known fault/anomaly injection time (Unix seconds): {inject_time}.\n\n'
+              'Using only the supplied runtime telemetry, determine:\n'
+              '1. the root-cause service/component;\n'
+              '2. the underlying failure mechanism or code-level fault category, as specifically as the evidence supports;\n'
+              '3. the causal chain from the root cause to observed symptoms; and\n'
+              '4. concise concrete log evidence supporting the conclusion.\n\n'
+              'Do not infer the answer from filenames, paths, environment variables, benchmark naming conventions, or infrastructure metadata. '
+              'If the telemetry cannot distinguish the exact mutation category, say so rather than guessing.\n',
+              encoding='utf-8',
+          )
+          meta = {
+              'rows': int(len(logs)),
+              'runtime_bytes': runtime.stat().st_size,
+              'parquet_bytes': logs_path.stat().st_size,
+              'inject_time': inject_time,
+              'columns': list(logs.columns),
+          }
+          (Path(os.environ['RESULT_ROOT']) / 'telemetry-meta.json').write_text(json.dumps(meta, indent=2) + '\n')
+          print(json.dumps(meta, indent=2))
+          PY
+          rm -rf "$DATA_ROOT"
+          printf '%s\n' 'RCAEval telemetry-only investigation; no source checkout supplied.' > "$SOURCE_ROOT/README.txt"
+          echo "RUNTIME_LOG=$WORK_ROOT/evidence/runtime.jsonl" >> "$GITHUB_ENV"
+          echo "QUESTION_FILE=$WORK_ROOT/question.md" >> "$GITHUB_ENV"
+          sha256sum "$WORK_ROOT/evidence/runtime.jsonl" > "$RESULT_ROOT/evidence-sha256.txt"
+
+      - name: Run isolated Pi arm
+        env:
+          ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+          ARM_API_KEY: ${{ matrix.arm == 'native' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          extra=()
+          if [[ "${{ matrix.arm }}" == tracecite ]]; then
+            extra=(
+              --skill-dir "$GITHUB_WORKSPACE/tracecite-mcp/skills/tracecite"
+              --mcp-evidence-root "$WORK_ROOT/evidence"
+              --mcp-state-dir "$RESULT_ROOT/tracecite-mcp-state"
+            )
+          fi
+          printf '%s\n' "$ARM_MODEL" > "$RESULT_ROOT/model.txt"
+          printf '%s\n' "${{ matrix.arm }}" > "$RESULT_ROOT/arm.txt"
+          set +e
+          python benchmarks/agent-investigation/agent_flow_runner.py \
+            --agent pi \
+            --mode "${{ matrix.arm }}" \
+            --source-root "$SOURCE_ROOT" \
+            --runtime-log "$RUNTIME_LOG" \
+            --result-root "$RESULT_ROOT" \
+            --question-file "$QUESTION_FILE" \
+            --provider gmi \
+            --model "$ARM_MODEL" \
+            --api-key "$ARM_API_KEY" \
+            --thinking off \
+            --timeout-seconds 1200 \
+            --host-extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_log_code_benchmark_host.ts" \
+            "${extra[@]}"
+          code=$?
+          set -e
+          echo "${{ matrix.arm }} runner exit=$code"
+
+      - name: Build no-gold run summary
+        if: always()
+        env:
+          ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          arm="${{ matrix.arm }}"
+          SESSION="$(find "$RESULT_ROOT/pi-${arm}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+          ANSWER="$RESULT_ROOT/pi-${arm}-answer.md"
+          EXIT="$RESULT_ROOT/pi-${arm}-exit.txt"
+          if [[ -z "$SESSION" || ! -f "$ANSWER" || ! -f "$EXIT" ]]; then
+            echo 'arm outputs incomplete' >&2
+            exit 0
+          fi
+          TRANSCRIPT="$RESULT_ROOT/pi-${arm}-transcript.jsonl"
+          python benchmarks/agent-investigation/pi_session_to_transcript.py "$SESSION" "$ANSWER" "$TRANSCRIPT" --mode "rcaeval-${arm}" --model "$ARM_MODEL"
+          python - "$SESSION" "$TRANSCRIPT" "$EXIT" "$RESULT_ROOT/pi-${arm}-stderr.log" "$RESULT_ROOT/pi-${arm}-summary.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          from benchmarks.agent_investigation.run_result import build_run_result
+
+          session, transcript, exit_file, stderr_file, output = map(Path, sys.argv[1:])
+          events = [json.loads(x) for x in transcript.read_text(errors='replace').splitlines() if x.strip()]
+          model_events = [e for e in events if e.get('type') == 'model']
+          def total(key):
+              vals = [(e.get('usage') or {}).get(key) for e in model_events]
+              return sum(v for v in vals if isinstance(v, int) and not isinstance(v, bool))
+          context_cost = {
+              'reported_input_tokens': total('input_tokens'),
+              'reported_cached_input_tokens': total('cached_input_tokens'),
+              'reported_output_tokens': total('output_tokens'),
+              'model_calls': len(model_events),
+              'usage_source': 'model_events',
+          }
+          result = build_run_result(
+              {'context_cost': context_cost},
+              exit_code=int(exit_file.read_text().strip()),
+              stderr=stderr_file.read_text(errors='replace') if stderr_file.is_file() else '',
+              session_text=session.read_text(errors='replace'),
+              transcript_events=events,
+          )
+          result['evaluation_mode'] = 'manual_no_gold'
+          output.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(result, indent=2, sort_keys=True))
+          PY
+
+      - name: Verify TraceCite evidence channel
+        if: matrix.arm == 'tracecite' && always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          MCP="$RESULT_ROOT/tracecite-tracecite-runtime-log-access.jsonl"
+          NATIVE="$RESULT_ROOT/tracecite-native-runtime-evidence-access.jsonl"
+          mcp_calls=0
+          native_calls=0
+          [[ -f "$MCP" ]] && mcp_calls="$(grep -cve '^$' "$MCP" || true)"
+          [[ -f "$NATIVE" ]] && native_calls="$(grep -cve '^$' "$NATIVE" || true)"
+          printf '%s\n' "$mcp_calls" > "$RESULT_ROOT/mcp-call-count.txt"
+          printf '%s\n' "$native_calls" > "$RESULT_ROOT/native-evidence-access-count.txt"
+          echo "TraceCite MCP calls=$mcp_calls native evidence accesses=$native_calls"
+          test "$mcp_calls" -gt 0
+          test "$native_calls" -eq 0
+
+      - name: Fetch ground truth after agent completion
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$DATA_ROOT"
+          mkdir -p "$DATA_ROOT"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import hf_hub_download
+          case_id = "${{ github.event_name == 'workflow_dispatch' && inputs.case_id || 're3tt_ts-route-service_f3_6' }}"
+          idx_path = hf_hub_download(repo_id='phamquiluan/RCAEval', repo_type='dataset', filename='cases.parquet', local_dir=os.environ['DATA_ROOT'])
+          idx = pd.read_parquet(idx_path)
+          row = idx[idx['case'] == case_id]
+          if len(row) != 1:
+              raise SystemExit('case missing from official RCAEval case index')
+          r = row.iloc[0]
+          truth = {
+              'case': case_id,
+              'dataset': str(r['dataset']),
+              'root_cause_service': str(r['root_cause_service']),
+              'fault': str(r['fault']),
+              'fault_description': str(r['fault_description']),
+              'inject_time': int(r['inject_time']),
+              'n_logs': int(r['n_logs']),
+              'n_traces': int(r['n_traces']),
+          }
+          Path(os.environ['RESULT_ROOT'], 'ground-truth-after-run.json').write_text(json.dumps(truth, indent=2) + '\n')
+          print(json.dumps(truth, indent=2))
+          PY
+          rm -rf "$DATA_ROOT"
+
+      - name: Upload arm artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rcaeval-blind-${{ matrix.arm }}-${{ github.run_id }}
+          path: ${{ env.RESULT_ROOT }}
+          if-no-files-found: error
+          retention-days: 14
+
+  discover-candidates:
+    name: Discover MB-scale RCAEval candidates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Find large RE3 cases and measure actual log text bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install pandas pyarrow huggingface_hub
+          mkdir -p /tmp/rcaeval-candidates
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import hf_hub_download
+
+          root = Path('/tmp/rcaeval-candidates')
+          idx_path = hf_hub_download(repo_id='phamquiluan/RCAEval', repo_type='dataset', filename='cases.parquet', local_dir=root)
+          idx = pd.read_parquet(idx_path)
+          pool = idx[(idx['suite'] == 'RE3') & (idx['has_logs'] == True) & (idx['n_logs'] >= 15000)].copy()
+          # Prefer large cases while keeping different service/fault combinations.
+          pool = pool.sort_values('n_logs', ascending=False)
+          chosen = []
+          seen = set()
+          for _, r in pool.iterrows():
+              key = (str(r['system']), str(r['root_cause_service']), str(r['fault']))
+              if key in seen:
+                  continue
+              seen.add(key)
+              chosen.append(r)
+              if len(chosen) >= 8:
+                  break
+
+          results = []
+          fault_names = {
+              'f1': 'Incorrect parameter values',
+              'f2': 'Missing parameters',
+              'f3': 'Missing Function Call',
+              'f4': 'Incorrect Return Values',
+              'f5': 'Missing Exception Handlers',
+          }
+          for r in chosen:
+              case = str(r['case'])
+              p = Path(hf_hub_download(repo_id='phamquiluan/RCAEval', repo_type='dataset', filename=f'{case}/logs.parquet', local_dir=root))
+              df = pd.read_parquet(p)
+              temp = root / 'measure.jsonl'
+              df.to_json(temp, orient='records', lines=True, force_ascii=False)
+              results.append({
+                  'case': case,
+                  'dataset': str(r['dataset']),
+                  'system_name': str(r['system_name']),
+                  'root_cause_service': str(r['root_cause_service']),
+                  'fault': str(r['fault']),
+                  'fault_meaning': fault_names.get(str(r['fault'])),
+                  'n_logs': int(r['n_logs']),
+                  'n_traces': int(r['n_traces']),
+                  'parquet_bytes': p.stat().st_size,
+                  'jsonl_bytes': temp.stat().st_size,
+                  'jsonl_mib': round(temp.stat().st_size / 1024 / 1024, 2),
+              })
+              temp.unlink(missing_ok=True)
+          out = root / 'candidates.json'
+          out.write_text(json.dumps(results, indent=2) + '\n')
+          print(out.read_text())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rcaeval-candidate-survey-${{ github.run_id }}
+          path: /tmp/rcaeval-candidates/candidates.json
+          if-no-files-found: error
+          retention-days: 14
