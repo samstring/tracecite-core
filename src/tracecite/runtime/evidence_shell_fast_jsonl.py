@@ -5,20 +5,28 @@ only accelerates aggregate-only JSONL programs that can be evaluated in one
 streaming pass. It resolves the same immutable SessionSourceView and never emits
 raw Evidence bodies, so Agent-visible Evidence budget/provenance rules stay
 unchanged.
+
+Absolute ``since``/``until`` scopes are also mechanical predicates and stay in
+this streaming executor. Reference-relative clock scopes and ``last`` continue
+to fall back to the canonical path until the planner can prove an equivalent
+single-pass plan for them.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from functools import lru_cache
 import json
 import operator
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from tracecite_core.matcher import Matcher
-from tracecite_core.segmenter import detect_segmenter_kind
+from tracecite_core.segmenter import build_segmenter, detect_segmenter_kind
+from tracecite_core.text_filter import FilterError, parse_time_arg, record_timestamp
 
 from .evidence_shell import _budget_data, _payload_fits, _too_broad
 from .evidence_shell_compat import normalize_evidence_shell_program
@@ -61,6 +69,8 @@ _SPECIAL_FIELDS = {
 _PREDICATES = {"search", "regex", "exclude", "exclude-regex", "where", "exists", "missing", "all"}
 _AGGREGATES = {"count", "group", "distinct"}
 _POST = {"sort", "head", "take", "first"}
+_ABSOLUTE_TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]")
+_ABSOLUTE_TIME_REFERENCE = datetime(2000, 1, 1)
 
 
 @lru_cache(maxsize=256)
@@ -255,6 +265,76 @@ def _postprocess(aggregate: dict[str, Any], command: str, stages: Sequence[_Stag
     return result
 
 
+def _absolute_time_window(
+    request: EvidenceShellRequest,
+    *,
+    segmenter: Any,
+) -> tuple[datetime | None, datetime | None] | None:
+    """Resolve only reference-independent time bounds.
+
+    Full-date ISO values are parsed by the same Core ``parse_time_arg`` used by
+    canonical execution. Clock-only values depend on the source reference date,
+    and ``last`` depends on the final record timestamp, so those forms remain
+    canonical until a planner can preserve their semantics without a hidden
+    pre-scan.
+    """
+
+    if request.last is not None:
+        return None
+    for raw in (request.since, request.until):
+        if raw is not None and _ABSOLUTE_TIME_RE.match(str(raw).strip()) is None:
+            return None
+    try:
+        time_from = (
+            parse_time_arg(
+                str(request.since),
+                ref=_ABSOLUTE_TIME_REFERENCE,
+                segmenter=segmenter,
+            )
+            if request.since is not None
+            else None
+        )
+        time_to = (
+            parse_time_arg(
+                str(request.until),
+                ref=_ABSOLUTE_TIME_REFERENCE,
+                segmenter=segmenter,
+            )
+            if request.until is not None
+            else None
+        )
+    except FilterError:
+        return None
+    if time_from is not None and time_to is not None and time_from > time_to:
+        raise FilterError(f"时间窗口无效: time_from={time_from!s} > time_to={time_to!s}")
+    return time_from, time_to
+
+
+def _record_in_absolute_window(
+    record: Any,
+    *,
+    segmenter: Any,
+    time_from: datetime | None,
+    time_to: datetime | None,
+) -> bool:
+    if time_from is None and time_to is None:
+        return True
+    ts = record_timestamp(
+        record,
+        ref=_ABSOLUTE_TIME_REFERENCE,
+        segmenter=segmenter,
+    )
+    # Preserve canonical semantics: a Record with no parseable timestamp is
+    # conservatively retained by a time scope.
+    if ts is None:
+        return True
+    if time_from is not None and ts < time_from:
+        return False
+    if time_to is not None and ts > time_to:
+        return False
+    return True
+
+
 def try_run_fast_jsonl_aggregate(
     request: EvidenceShellRequest,
     *,
@@ -263,7 +343,7 @@ def try_run_fast_jsonl_aggregate(
 ) -> dict[str, Any] | None:
     """Return a fast aggregate payload, or None when canonical fallback is required."""
 
-    if request.fold or request.last is not None or request.since is not None or request.until is not None:
+    if request.fold:
         return None
     source = Path(request.source).expanduser().resolve()
     if not source.is_file():
@@ -271,6 +351,12 @@ def try_run_fast_jsonl_aggregate(
     kind = detect_segmenter_kind(source) if request.segmenter == "auto" else request.segmenter
     if not isinstance(kind, str) or kind.strip().lower() not in {"jsonline", "json", "jsonl"}:
         return None
+
+    selected_segmenter = build_segmenter(kind)
+    time_window = _absolute_time_window(request, segmenter=selected_segmenter)
+    if time_window is None:
+        return None
+    time_from, time_to = time_window
 
     normalized = normalize_evidence_shell_program(request.program)
     stages = _tokenize(normalized)
@@ -305,12 +391,26 @@ def try_run_fast_jsonl_aggregate(
         for stage in predicates
         if stage.command not in {"search", "regex", "exclude", "exclude-regex", "all"}
     ]
+    time_scoped = time_from is not None or time_to is not None
+
     for segment in view.segments:
-        with Path(segment.path).open("r", encoding="utf-8", errors="replace") as handle:
-            for raw in handle:
+        segment_path = Path(segment.path)
+        if time_scoped:
+            # Use the canonical JsonLineSegmenter to preserve timestamp parsing
+            # semantics. The aggregate executor still performs only one source
+            # scan and never builds a full RecordSet.
+            records = selected_segmenter.segment_file(segment_path, encoding="utf-8")
+            for record in records:
+                if not _record_in_absolute_window(
+                    record,
+                    segmenter=selected_segmenter,
+                    time_from=time_from,
+                    time_to=time_to,
+                ):
+                    continue
+                raw = record.text
                 if not raw.strip():
                     continue
-                # Do literal/regex predicates on raw text before JSON decoding when possible.
                 if any(not _matches({}, raw, stage) for stage in raw_only):
                     continue
                 try:
@@ -325,6 +425,26 @@ def try_run_fast_jsonl_aggregate(
                     value = _value(obj, str(aggregate_field))
                     key = "<missing>" if value is None else str(value)
                     counts[key] = counts.get(key, 0) + 1
+        else:
+            with segment_path.open("r", encoding="utf-8", errors="replace") as handle:
+                for raw in handle:
+                    if not raw.strip():
+                        continue
+                    # Do literal/regex predicates on raw text before JSON decoding when possible.
+                    if any(not _matches({}, raw, stage) for stage in raw_only):
+                        continue
+                    try:
+                        decoded = json.loads(raw)
+                        obj = decoded if isinstance(decoded, Mapping) else {}
+                    except json.JSONDecodeError:
+                        obj = {}
+                    if any(not _matches(obj, raw, stage) for stage in field_predicates):
+                        continue
+                    matched += 1
+                    if aggregate_stage.command != "count":
+                        value = _value(obj, str(aggregate_field))
+                        key = "<missing>" if value is None else str(value)
+                        counts[key] = counts.get(key, 0) + 1
 
     if aggregate_stage.command == "count":
         aggregate: dict[str, Any] = {"count": matched}
@@ -367,7 +487,16 @@ def try_run_fast_jsonl_aggregate(
             "source_view": view.to_dict(),
             "source_version": view.key,
             "evidence_budget": _budget_data(policy),
-            "execution_engine": "jsonl_single_pass_field_aggregate",
+            "execution_engine": (
+                "jsonl_single_pass_time_scoped_field_aggregate"
+                if time_scoped
+                else "jsonl_single_pass_field_aggregate"
+            ),
+            "time_scope": {
+                "since": request.since,
+                "until": request.until,
+                "last": request.last,
+            },
         },
     ).to_dict()
 
