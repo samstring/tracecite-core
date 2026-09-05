@@ -148,9 +148,75 @@ def test_absolute_time_scope_uses_shared_semantics_without_record_scan(tmp_path,
 
     assert result["status"] == "ok"
     groups = _output(result, "services")["aggregate"]["groups"]
-    # Preserve canonical time-scope semantics: records without a parseable
-    # timestamp are retained rather than silently excluded.
     assert groups == [
         {"key": "route", "count": 1},
         {"key": "untimestamped", "count": 1},
     ]
+    assert result["data"]["time_scope_resolution"] == {
+        "status": "applied",
+        "parseable_timestamp_records": 3,
+        "untimestamped_records": 1,
+        "retained_untimestamped_records": 1,
+    }
+
+
+def test_time_scope_with_no_canonical_timestamp_is_not_silently_unscoped(tmp_path) -> None:
+    source = _source(
+        tmp_path,
+        [
+            {"startTimeMillis": 1000, "service": "a"},
+            {"startTimeMillis": 2000, "service": "b"},
+            {"startTimeMillis": 3000, "service": "c"},
+        ],
+    )
+
+    result = run_evidence_compute(
+        EvidenceComputeRequest(
+            source=source,
+            since="2026-09-05T10:00:00Z",
+            until="2026-09-05T10:10:00Z",
+            analyses=(
+                EvidenceAnalysisSpec("rows", "count"),
+                EvidenceAnalysisSpec("services", "group service"),
+            ),
+        ),
+        policy=_policy(),
+    )
+
+    assert result["status"] == "partial"
+    assert result["data"]["execution_engine"] == "jsonl_time_scope_unresolved"
+    assert result["data"]["time_scope_resolution"] == {
+        "status": "unresolved",
+        "parseable_timestamp_records": 0,
+        "untimestamped_records": 3,
+        "retained_untimestamped_records": 3,
+    }
+    for output in result["data"]["outputs"]:
+        assert output["status"] == "error"
+        assert output["error_code"] == "time_scope_unresolved"
+        assert "aggregate" not in output
+
+
+def test_scope_resolution_is_source_wide_not_predicate_dependent(tmp_path) -> None:
+    source = _source(
+        tmp_path,
+        [
+            {"timestamp": "2026-09-05T10:05:00Z", "service": "a"},
+            {"timestamp": "2026-09-05T10:06:00Z", "service": "b"},
+        ],
+    )
+
+    result = run_evidence_compute(
+        EvidenceComputeRequest(
+            source=source,
+            since="2026-09-05T10:00:00Z",
+            until="2026-09-05T10:10:00Z",
+            analyses=(EvidenceAnalysisSpec("missing", "where service == z | count"),),
+        ),
+        policy=_policy(),
+    )
+
+    assert result["status"] == "ok"
+    assert _output(result, "missing")["aggregate"]["count"] == 0
+    assert result["data"]["time_scope_resolution"]["status"] == "applied"
+    assert result["data"]["time_scope_resolution"]["parseable_timestamp_records"] == 2
