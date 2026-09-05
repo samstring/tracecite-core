@@ -1,14 +1,14 @@
-trigger: 2026-09-05 distinct-sync pair-binding diagnostic after clean semantic/convergence failure
+trigger: 2026-09-05 sticky ordered orientation-hint diagnostic after clean semantic/convergence failure
 tracecite_only_tools: true
 runtime_agent_steering: false
 pi_agent_system_steering: full-tracecite-skill-contract-plus-literal-sync-query-firewall-plus-component-family-reciprocal
 correctness_gate: semantic_primary_scorer_auxiliary
 compact_transport_metadata: true
 source_inventory_on_error: true
-adaptive_stopping_skill: explicit-tracecite-activation-before-diagnosis-plus-stack-only-six-call-hard-stop-plus-all-invocations-count-plus-authoritative-host-count-plus-mandatory-sync-first-orientation-plus-distinct-sync-path-before-component-pair-binding-plus-structural-diversity-hint-first-reciprocal-plus-cross-component-reciprocal-closure-plus-nearest-application-component-pair-selection-plus-reciprocal-search-precedence-after-pair-naming-plus-no-same-block-expand-after-pair-naming-plus-reserved-final-outer-component-family-slot-plus-four-endpoint-membership-plus-exact-four-paragraph-final
+adaptive_stopping_skill: explicit-tracecite-activation-before-diagnosis-plus-stack-only-six-call-hard-stop-plus-all-invocations-count-plus-authoritative-host-count-plus-mandatory-sync-first-orientation-plus-sticky-ordered-orientation-diversity-handoff-plus-structural-diversity-hint-first-reciprocal-plus-cross-component-reciprocal-closure-plus-nearest-application-component-pair-selection-plus-reciprocal-search-precedence-after-pair-naming-plus-no-same-block-expand-after-pair-naming-plus-reserved-final-outer-component-family-slot-plus-four-endpoint-membership-plus-exact-four-paragraph-final
 skill_activation: full-skill-text-injected-into-system-prompt
 runtime_transport_guard: diagnosis-neutral-max-evidence-calls-6
 behavior_frozen: false
 formal_stability_round: 0/3
-diagnostic_focus: after the first representative synchronization path is materialized, do not bind its nearest caller as the reciprocal component; if orientation exposed an unmaterialized structurally distinct synchronization-bearing hint, materialize that hint next before WaitGroup branches, Lock/RLock spelling searches, duplicate expansion, or pair binding; only then bind the nearest application component pair and immediately search the outer component receiver/type family; preserve six-call ceiling and exact four-paragraph terminal serializer; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
+diagnostic_focus: preserve structural_diversity/navigation_hint candidates returned by synchronization orientation as a sticky ordered queue across representative expansion; immediately after the representative, materialize the first still-unmaterialized distinct candidate in TraceCite return order before any fresh method/function query, WaitGroup search, Lock/RLock spelling search, duplicate expansion, or model-selected later hint; if it is generic/non-reciprocal, use the next pending orientation candidate while budget remains; once a distinct synchronization path exposes the nearest application pair, immediately search the outer component receiver/type family; preserve six-call ceiling and exact four-paragraph terminal serializer; no pointer-derived identity, waiter-as-holder promotion, unsupported lifecycle/process/kernel story, starvation/deadlock promotion, or extra preamble
 agent_timeout_seconds: 900
