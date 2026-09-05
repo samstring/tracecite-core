@@ -98,7 +98,10 @@ def _sort_for_field(tokens: list[str], field: str) -> list[str] | None:
                 else:
                     return None
         result = ["sort", field, "desc" if reverse else "asc"]
-        if numeric:
+        # Canonical `timestamp` is an ISO-normalized temporal field. Lexicographic
+        # ordering is chronological, whereas forcing numeric mode would reject
+        # that representation. Preserve the Agent's chronological intent.
+        if numeric and field != "timestamp":
             result.append("numeric")
         return result
 
@@ -111,7 +114,8 @@ def _sort_for_field(tokens: list[str], field: str) -> list[str] | None:
     if len(args) > 2:
         if len(args) != 3 or args[2].lower() != "numeric":
             return None
-        result.append("numeric")
+        if field != "timestamp":
+            result.append("numeric")
     return result
 
 
