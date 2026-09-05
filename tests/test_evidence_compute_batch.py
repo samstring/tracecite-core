@@ -37,6 +37,10 @@ def _aggregate(result, name):
     return next(item["aggregate"] for item in outputs if item["name"] == name)
 
 
+def _output(result, name):
+    return next(item for item in result["data"]["outputs"] if item["name"] == name)
+
+
 def test_jsonl_batch_matches_independent_canonical_aggregates(tmp_path) -> None:
     source = _jsonl(
         tmp_path,
@@ -109,6 +113,112 @@ def test_batch_decodes_each_json_line_once_for_multiple_field_analyses(tmp_path,
 
     assert result["status"] == "ok"
     assert calls == 40
+
+
+def test_batch_shares_generic_bounded_min_max_projection_with_aggregates(tmp_path) -> None:
+    source = _jsonl(
+        tmp_path,
+        [
+            {"service": "edge", "startTimeMillis": 3000},
+            {"service": "route", "startTimeMillis": 1000},
+            {"service": "route", "startTimeMillis": 2000},
+        ],
+    )
+
+    result = run_evidence_compute(
+        EvidenceComputeRequest(
+            source=source,
+            analyses=(
+                EvidenceAnalysisSpec("rows", "count"),
+                EvidenceAnalysisSpec(
+                    "first",
+                    "sort startTimeMillis asc numeric | head 1 | project startTimeMillis",
+                ),
+                EvidenceAnalysisSpec(
+                    "last",
+                    "sort startTimeMillis desc numeric | head 1 | project startTimeMillis",
+                ),
+            ),
+        ),
+        policy=_policy(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["execution_engine"] == "jsonl_shared_scan_batch"
+    assert result["data"]["shared_scan_analyses"] == 3
+    assert result["data"]["canonical_remainder_analyses"] == 0
+    assert _aggregate(result, "rows")["count"] == 3
+    assert _aggregate(result, "first")["rows"][0]["value"] == 1000
+    assert _aggregate(result, "last")["rows"][0]["value"] == 3000
+    assert _output(result, "first")["execution_engine"] == "jsonl_shared_scan_topn_project"
+
+
+def test_unsupported_sibling_does_not_poison_shared_scan_batch(tmp_path) -> None:
+    source = _jsonl(
+        tmp_path,
+        [
+            {"service": "route", "n": 3},
+            {"service": "auth", "n": 1},
+            {"service": "route", "n": 2},
+        ],
+    )
+
+    result = run_evidence_compute(
+        EvidenceComputeRequest(
+            source=source,
+            analyses=(
+                EvidenceAnalysisSpec("services", "group service"),
+                # Sorting before a scalar count is mechanically valid but is
+                # intentionally outside the shared-scan compiler. It exercises
+                # partitioning without relying on any domain-specific pattern.
+                EvidenceAnalysisSpec("sorted_count", "sort n asc numeric | count"),
+            ),
+        ),
+        policy=_policy(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["execution_engine"] == "jsonl_partitioned_batch"
+    assert result["data"]["shared_scan_analyses"] == 1
+    assert result["data"]["canonical_remainder_analyses"] == 1
+    assert _aggregate(result, "services")["groups"][0] == {"key": "route", "count": 2}
+    assert _aggregate(result, "sorted_count")["count"] == 3
+    assert _output(result, "services")["execution_engine"] == "jsonl_shared_scan_aggregate"
+
+
+def test_compute_absolute_time_scope_is_explicit_and_shared(tmp_path) -> None:
+    source = _jsonl(
+        tmp_path,
+        [
+            {"timestamp": "2026-09-05T10:00:00Z", "service": "edge", "status": 200},
+            {"timestamp": "2026-09-05T10:05:00Z", "service": "route", "status": 503},
+            {"timestamp": "2026-09-05T10:10:00Z", "service": "route", "status": 500},
+            {"timestamp": "2026-09-05T10:20:00Z", "service": "auth", "status": 503},
+        ],
+    )
+
+    result = run_evidence_compute(
+        EvidenceComputeRequest(
+            source=source,
+            since="2026-09-05T10:04:00Z",
+            until="2026-09-05T10:15:00Z",
+            analyses=(
+                EvidenceAnalysisSpec("failures", "where status >= 500 | count"),
+                EvidenceAnalysisSpec("services", "where status >= 500 | group service"),
+            ),
+        ),
+        policy=_policy(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["execution_engine"] == "jsonl_shared_scan_batch"
+    assert result["data"]["time_scope"] == {
+        "last": None,
+        "since": "2026-09-05T10:04:00Z",
+        "until": "2026-09-05T10:15:00Z",
+    }
+    assert _aggregate(result, "failures")["count"] == 2
+    assert _aggregate(result, "services")["groups"] == [{"key": "route", "count": 2}]
 
 
 def test_batch_records_one_session_operation_and_reuses_bound_source_version(tmp_path) -> None:
