@@ -246,9 +246,9 @@ def run_pi(args: argparse.Namespace) -> int:
     if args.mode == "tracecite":
         command += ["--skill", str(skill_dir)]
 
-    # Deliberately no global --tools allowlist and no --no-skills. The Agent
-    # keeps normal non-evidence capabilities; the MCP host profile itself keeps
-    # the explicitly selected TraceCite runtime surface narrow and direct.
+    # Deliberately no --tools allowlist and no --no-skills. The Agent keeps its
+    # normal non-evidence capabilities; only the already-selected TraceCite MCP
+    # server advertises a narrow direct evidence hot path.
     command.append(task)
 
     env = os.environ.copy()
