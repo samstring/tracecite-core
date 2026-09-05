@@ -4,8 +4,8 @@ The canonical Runtime remains responsible for SourceVersion, Record recovery,
 Evidence budgets and RetrievalSession novelty. This thin layer improves the
 Agent transport contract only: familiar pipeline rewrites, structured program
 errors, compact receipts for Evidence already seen in the same session, and
-Runtime-side execution of safe mechanical aggregate work that would otherwise
-force extra model/tool round trips.
+Runtime-side execution of safe mechanical aggregate/top-N work that would
+otherwise force extra model/tool round trips or materialize large intermediates.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import Any, Mapping
 from .evidence_shell_agent_compat import normalize_agent_evidence_shell_program
 from .evidence_shell_compound import apply_compound_aggregate, split_compound_aggregate_program
 from .evidence_shell_fast_jsonl import try_run_fast_jsonl_aggregate
+from .evidence_shell_fast_topn import try_run_fast_topn
 from .evidence_shell_public import (
     DEFAULT_MAX_EVIDENCE_BYTES,
     DEFAULT_MAX_EVIDENCE_TOKENS,
@@ -194,6 +195,13 @@ def run_evidence_shell(
         # JSONL field aggregates are a common large-trace hot path. Evaluate
         # supported aggregate-only programs in one streaming JSON decode pass.
         payload = try_run_fast_jsonl_aggregate(prepared, policy=policy, session=session)
+
+        if payload is None:
+            # Terminal sort + explicit head/take/first is also mechanically
+            # bounded. Keep only the best N rows while scanning rather than
+            # sorting the whole matched set, while preserving the same explicit
+            # selection/budget/provenance/session semantics.
+            payload = try_run_fast_topn(prepared, policy=policy, session=session)
 
         if payload is None:
             # A compact aggregate can continue through mechanical sort/head
