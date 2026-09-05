@@ -1,0 +1,382 @@
+name: Pi RCAEval Serial 3x A/B 5x Budget
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature_for_agent_refacotr_shell
+    paths:
+      - .github/workflows/pi-rcaeval-serial-3x-5x-budget.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-rcaeval-serial-3x-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  serial-ab:
+    name: Serial 3x Native then TraceCite
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      GMI_BASE_URL: https://api.gmi-serving.com/v1
+      PI_CODING_AGENT_DIR: /tmp/pi-agent-rcaeval-serial-${{ github.run_id }}
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+      ROOT: /tmp/pi-rcaeval-serial
+      EVIDENCE_ROOT: /tmp/pi-rcaeval-serial/evidence
+      TRACECITE_MCP_REF: 5bae4f78a970c4e816186ec859191213a22df38d
+      # Experiment-only: 5x the previous Evidence body budget.
+      TRACECITE_EVIDENCE_MAX_TOKENS: "60000"
+      TRACECITE_EVIDENCE_MAX_BYTES: "327680"
+      # Keep materialization unchanged so only the too_broad Evidence gate is tested.
+      TRACECITE_MATERIALIZE_MAX_CHARS: "8000"
+
+    steps:
+      - name: Checkout TraceCite Core under test
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned TraceCite MCP
+        uses: actions/checkout@v4
+        with:
+          repository: samstring/tracecite-mcp
+          ref: ${{ env.TRACECITE_MCP_REF }}
+          path: tracecite-mcp
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install isolated Pi and benchmark dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          python -m pip install -e ".[dev]"
+          python -m pip install pandas pyarrow huggingface_hub 'mcp>=2,<3'
+          pi install npm:pi-mcp-adapter@2.27.0 --approve
+          python -m pip install -e ./tracecite-mcp --no-deps
+
+      - name: Verify optimized Core and MCP contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_evidence_shell.py \
+            tests/test_evidence_shell_unix_compat.py \
+            tests/test_evidence_shell_agent_regressions.py \
+            tests/test_evidence_shell_fast_jsonl.py \
+            tests/test_benchmark_run_result.py \
+            tests/test_benchmark_provider_retry_chain.py \
+            tests/test_pi_mcp_benchmark_boundary.py
+          python scripts/check_architecture.py
+          python -m pytest -q \
+            tracecite-mcp/tests/test_server.py \
+            tracecite-mcp/tests/test_shell_projection_agent_feedback.py
+
+      - name: Prepare one anonymous RCAEval telemetry image for all six runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT" /tmp/rcaeval-serial-download
+          mkdir -p "$EVIDENCE_ROOT" /tmp/rcaeval-serial-download
+          python - <<'PY'
+          import json, os, shutil
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import hf_hub_download
+
+          case = 're3tt_ts-route-service_f3_6'
+          download_root = Path('/tmp/rcaeval-serial-download')
+          evidence_root = Path(os.environ['EVIDENCE_ROOT'])
+
+          def fetch(name: str) -> Path:
+              return Path(hf_hub_download(
+                  repo_id='phamquiluan/RCAEval', repo_type='dataset',
+                  filename=f'{case}/{name}', local_dir=download_root,
+              ))
+
+          def scalar(value):
+              if value is None:
+                  return None
+              try:
+                  if pd.isna(value):
+                      return None
+              except Exception:
+                  pass
+              if hasattr(value, 'item'):
+                  try:
+                      value = value.item()
+                  except Exception:
+                      pass
+              if hasattr(value, 'isoformat'):
+                  try:
+                      return value.isoformat()
+                  except Exception:
+                      pass
+              return value
+
+          telemetry = {
+              'logs': ('logs.parquet', evidence_root / 'logs.jsonl'),
+              'traces': ('traces.parquet', evidence_root / 'traces.jsonl'),
+              'metrics': ('metrics.parquet', evidence_root / 'metrics.jsonl'),
+          }
+          stats = {}
+          for kind, (remote_name, out_path) in telemetry.items():
+              frame = pd.read_parquet(fetch(remote_name))
+              with out_path.open('w', encoding='utf-8') as handle:
+                  for row in frame.to_dict(orient='records'):
+                      payload = {'kind': kind[:-1] if kind.endswith('s') else kind}
+                      payload.update({str(k): scalar(v) for k, v in row.items()})
+                      handle.write(json.dumps(payload, ensure_ascii=False, separators=(',', ':'), default=str) + '\n')
+              stats[kind] = {'rows': int(len(frame)), 'bytes': out_path.stat().st_size}
+
+          inject = fetch('inject_time.txt').read_text(encoding='utf-8').strip()
+          (evidence_root / 'incident_time.txt').write_text(inject + '\n', encoding='utf-8')
+          (evidence_root / 'telemetry-stats.json').write_text(
+              json.dumps(stats, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          shutil.rmtree(download_root, ignore_errors=True)
+          PY
+
+      - name: Run three serial A/B repetitions
+        env:
+          NATIVE_MODEL: ${{ vars.GMI_MODEL }}
+          NATIVE_API_KEY: ${{ secrets.GMI_API_KEY }}
+          TRACECITE_MODEL: ${{ vars.GMI2_MODEL }}
+          TRACECITE_API_KEY: ${{ secrets.GMI2_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${NATIVE_MODEL:-}" && test -n "${NATIVE_API_KEY:-}"
+          test -n "${TRACECITE_MODEL:-}" && test -n "${TRACECITE_API_KEY:-}"
+
+          write_model_config() {
+            local model="$1"
+            ARM_MODEL="$model" python - <<'PY'
+          import json, os
+          from pathlib import Path
+          model = os.environ['ARM_MODEL']
+          payload = {'providers': {'gmi': {
+              'name': 'GMI OpenAI-compatible',
+              'baseUrl': os.environ['GMI_BASE_URL'],
+              'api': 'openai-completions',
+              'models': [{
+                  'id': model,
+                  'name': model,
+                  'reasoning': False,
+                  'input': ['text'],
+                  'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+                  'contextWindow': 1_000_000,
+                  'maxTokens': 4_096,
+                  'compat': {'supportsDeveloperRole': False, 'supportsReasoningEffort': False},
+              }],
+          }}}
+          path = Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json'
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+          }
+
+          build_summary() {
+            local result_root="$1"
+            local arm="$2"
+            local model="$3"
+            local round="$4"
+            local session
+            session="$(find "$result_root/pi-${arm}-session" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+            local answer="$result_root/pi-${arm}-answer.md"
+            local exit_file="$result_root/pi-${arm}-exit.txt"
+            if [[ -z "$session" || ! -f "$answer" || ! -f "$exit_file" ]]; then
+              return 0
+            fi
+            local transcript="$result_root/pi-${arm}-transcript.jsonl"
+            python benchmarks/agent-investigation/pi_session_to_transcript.py \
+              "$session" "$answer" "$transcript" \
+              --mode "pi-rcaeval-serial-r${round}-${arm}" --model "$model"
+            python - "$session" "$transcript" "$exit_file" "$result_root/no-gold-summary.json" "$round" "$arm" <<'PY'
+          import importlib.util, json, sys
+          from collections import Counter
+          from pathlib import Path
+
+          session_path, transcript_path, exit_path, output_path = map(Path, sys.argv[1:5])
+          round_no, arm = int(sys.argv[5]), sys.argv[6]
+          spec = importlib.util.spec_from_file_location('run_result', Path('benchmarks/agent-investigation/run_result.py'))
+          module = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          spec.loader.exec_module(module)
+
+          events = [json.loads(line) for line in transcript_path.read_text(encoding='utf-8').splitlines() if line.strip()]
+          usage = [event.get('usage') or {} for event in events if event.get('type') == 'model']
+          tools = [event for event in events if event.get('type') == 'tool']
+          session_text = session_path.read_text(encoding='utf-8', errors='replace')
+          incidents = module._provider_session_incidents(session_text)
+          unresolved = [item for item in incidents if not item['recovered']]
+          exit_code = int(exit_path.read_text(encoding='utf-8').strip())
+          tool_names = Counter(str(event.get('tool') or event.get('name') or '') for event in tools)
+          summary = {
+              'schema_version': 3,
+              'evaluation_mode': 'manual_no_gold',
+              'round': round_no,
+              'arm': arm,
+              'run_validity': {
+                  'exit_code': exit_code,
+                  'valid_for_comparison': exit_code == 0 and not unresolved,
+                  'provider_incidents': dict(Counter(str(x['kind']) for x in incidents)),
+                  'provider_recovered_incidents': dict(Counter(str(x['kind']) for x in incidents if x['recovered'])),
+                  'unresolved_provider_incidents': len(unresolved),
+              },
+              'token_usage': {
+                  'fresh_input_tokens': sum(int(x.get('input_tokens') or 0) for x in usage),
+                  'cached_input_tokens': sum(int(x.get('cached_input_tokens') or 0) for x in usage),
+                  'output_tokens': sum(int(x.get('output_tokens') or 0) for x in usage),
+                  'model_calls': len(usage),
+              },
+              'trajectory': module.trajectory_summary(events),
+              'tool_counts': dict(tool_names),
+              'answer_nonempty': bool(Path(str(transcript_path).replace('-transcript.jsonl', '-answer.md')).read_text(encoding='utf-8', errors='replace').strip()),
+          }
+          output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          PY
+          }
+
+          run_arm() {
+            local round="$1"
+            local arm="$2"
+            local model="$3"
+            local api_key="$4"
+            local result_root="$ROOT/r${round}/${arm}/result"
+            local work_root="$ROOT/r${round}/${arm}/workspace"
+            local state_root="$ROOT/r${round}/${arm}/mcp-state"
+            mkdir -p "$result_root" "$work_root" "$state_root"
+            cat > "$work_root/question.md" <<'EOF'
+          Investigate the supplied microservice failure using the telemetry in the evidence directory.
+          The directory contains logs.jsonl, traces.jsonl, metrics.jsonl, and incident_time.txt.
+          Identify the most likely root-cause service and the concrete failure mechanism/fault type.
+          Explain the causal chain and cite exact observed evidence using file:L<line> references.
+          Distinguish direct observations from inference. If the supplied telemetry cannot distinguish a more specific mechanism, state that evidence boundary rather than guessing. Do not use the web or external knowledge.
+          EOF
+            write_model_config "$model"
+            printf '%s\n' "$arm" > "$result_root/arm.txt"
+            printf '%s\n' "$round" > "$result_root/round.txt"
+            printf '%s\n' "$model" > "$result_root/model.txt"
+            printf '%s\n' '${{ github.sha }}' > "$result_root/core-commit.txt"
+            if [[ "$arm" == tracecite ]]; then
+              printf '%s\n' "$TRACECITE_MCP_REF" > "$result_root/tracecite-mcp-ref.txt"
+              printf '%s\n' "$TRACECITE_EVIDENCE_MAX_TOKENS" > "$result_root/evidence-max-tokens.txt"
+              printf '%s\n' "$TRACECITE_EVIDENCE_MAX_BYTES" > "$result_root/evidence-max-bytes.txt"
+            fi
+
+            local extra=()
+            if [[ "$arm" == tracecite ]]; then
+              extra=(
+                --skill-dir "$GITHUB_WORKSPACE/tracecite-mcp/skills/tracecite"
+                --mcp-evidence-root "$EVIDENCE_ROOT"
+                --mcp-state-dir "$state_root"
+              )
+            fi
+            set +e
+            python benchmarks/agent-investigation/agent_flow_runner.py \
+              --agent pi \
+              --mode "$arm" \
+              --workspace-kind evidence-only \
+              --source-root "$work_root" \
+              --runtime-log "$EVIDENCE_ROOT/logs.jsonl" \
+              --result-root "$result_root" \
+              --question-file "$work_root/question.md" \
+              --provider gmi \
+              --model "$model" \
+              --api-key "$api_key" \
+              --thinking off \
+              --timeout-seconds 1200 \
+              --host-extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_log_code_benchmark_host.ts" \
+              "${extra[@]}"
+            local code=$?
+            set -e
+            echo "round=$round arm=$arm runner exit=$code"
+            build_summary "$result_root" "$arm" "$model" "$round"
+
+            if [[ "$arm" == tracecite ]]; then
+              local mcp="$result_root/tracecite-tracecite-runtime-log-access.jsonl"
+              local native_access="$result_root/tracecite-native-runtime-evidence-access.jsonl"
+              local mcp_calls=0 native_calls=0
+              [[ -f "$mcp" ]] && mcp_calls="$(grep -cve '^$' "$mcp" || true)"
+              [[ -f "$native_access" ]] && native_calls="$(grep -cve '^$' "$native_access" || true)"
+              printf '%s\n' "$mcp_calls" > "$result_root/mcp-call-count.txt"
+              printf '%s\n' "$native_calls" > "$result_root/native-evidence-access-count.txt"
+              test "$mcp_calls" -gt 0
+              test "$native_calls" -eq 0
+            fi
+          }
+
+          # Strictly serial: each TraceCite arm starts only after its paired Native arm exits.
+          for round in 1 2 3; do
+            echo "===== ROUND $round: NATIVE ====="
+            run_arm "$round" native "$NATIVE_MODEL" "$NATIVE_API_KEY"
+            echo "===== ROUND $round: TRACECITE ====="
+            run_arm "$round" tracecite "$TRACECITE_MODEL" "$TRACECITE_API_KEY"
+          done
+
+      - name: Add review reference only after all six Agents exit
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$ROOT/review"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+          from huggingface_hub import hf_hub_download
+          case = 're3tt_ts-route-service_f3_6'
+          index_path = hf_hub_download(repo_id='phamquiluan/RCAEval', repo_type='dataset', filename='cases.parquet')
+          row = pd.read_parquet(index_path).loc[lambda frame: frame['case'] == case].iloc[0].to_dict()
+          keep = {key: row.get(key) for key in (
+              'case', 'dataset', 'root_cause_service', 'fault', 'fault_description',
+              'inject_time', 'n_logs', 'n_traces', 'n_metrics'
+          )}
+          Path('/tmp/pi-rcaeval-serial/review/rcaeval-review-reference.json').write_text(
+              json.dumps(keep, indent=2, default=str) + '\n', encoding='utf-8'
+          )
+          PY
+
+      - name: Build combined three-round efficiency report
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('/tmp/pi-rcaeval-serial')
+          rows = []
+          for round_no in (1, 2, 3):
+              for arm in ('native', 'tracecite'):
+                  path = root / f'r{round_no}' / arm / 'result' / 'no-gold-summary.json'
+                  if path.is_file():
+                      rows.append(json.loads(path.read_text(encoding='utf-8')))
+          out = {'schema_version': 1, 'order': 'r1 native -> tracecite -> r2 native -> tracecite -> r3 native -> tracecite', 'runs': rows}
+          (root / 'serial-3x-efficiency.json').write_text(json.dumps(out, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          print(json.dumps(out, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload all serial results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rcaeval-serial-3x-5x-budget
+          path: |
+            /tmp/pi-rcaeval-serial/r1
+            /tmp/pi-rcaeval-serial/r2
+            /tmp/pi-rcaeval-serial/r3
+            /tmp/pi-rcaeval-serial/review
+            /tmp/pi-rcaeval-serial/serial-3x-efficiency.json
+          if-no-files-found: error
+          retention-days: 14
