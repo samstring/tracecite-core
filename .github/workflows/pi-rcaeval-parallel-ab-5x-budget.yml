@@ -114,6 +114,10 @@ jobs:
       TRACECITE_EVIDENCE_MAX_TOKENS: "60000"
       TRACECITE_EVIDENCE_MAX_BYTES: "327680"
       TRACECITE_MATERIALIZE_MAX_CHARS: "4000"
+      # RCAEval telemetry is fully prepared before either arm starts and never
+      # mutates during the investigation. Declare that lifecycle truth to the
+      # TraceCite Host instead of paying mutable-source snapshot/copy overhead.
+      TRACECITE_SOURCE_MODE: "static"
       AGENT_TIMEOUT_SECONDS: "600"
       ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
       ARM_API_KEY: ${{ matrix.arm == 'native' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
@@ -153,7 +157,10 @@ jobs:
           python -m pytest -q \
             tests/test_evidence_compute_batch.py \
             tests/test_evidence_shell_fast_jsonl.py \
-            tests/test_evidence_shell_agent_regressions.py
+            tests/test_evidence_shell_agent_regressions.py \
+            tests/test_record_search_unscoped_fastpath.py \
+            tests/test_evidence_shell_fast_jsonl_matcher_cache.py \
+            tests/test_agent_flow_tracecite_hot_path.py
           python -m pytest -q \
             tracecite-mcp/tests/test_server.py \
             tracecite-mcp/tests/test_stdio_integration.py \
@@ -233,6 +240,7 @@ jobs:
             printf '%s\n' "$TRACECITE_EVIDENCE_MAX_BYTES" > "$RESULT_ROOT/evidence-max-bytes.txt"
             printf '%s\n' "$TRACECITE_MATERIALIZE_MAX_CHARS" > "$RESULT_ROOT/materialize-max-chars.txt"
             printf '%s\n' "$TRACECITE_MCP_SESSION_ID" > "$RESULT_ROOT/host-session-id.txt"
+            printf '%s\n' "$TRACECITE_SOURCE_MODE" > "$RESULT_ROOT/source-mode.txt"
           fi
           exit 0
       - name: Build no-gold summary
