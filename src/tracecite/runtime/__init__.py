@@ -22,6 +22,9 @@ from .evidence_shell_agent import (
     DEFAULT_MAX_EVIDENCE_BYTES, DEFAULT_MAX_EVIDENCE_TOKENS,
     EvidenceShellPolicy, EvidenceShellRequest, run_evidence_shell,
 )
+from .evidence_compute import (
+    MAX_BATCH_ANALYSES, EvidenceAnalysisSpec, EvidenceComputeRequest, run_evidence_compute,
+)
 from .source_versions import (
     QuestionSourceView, SourceFingerprint, SourceSegment, SourceVersionStore,
 )
@@ -50,6 +53,7 @@ __all__ = [
     "AcquisitionEndKind", "AcquisitionEndReason", "AggregateOperation", "AggregateRequest",
     "CanonicalTraversalResult", "CapabilityError", "CapabilitySpec", "CoverageStatus",
     "DEFAULT_MAX_EVIDENCE_BYTES", "DEFAULT_MAX_EVIDENCE_TOKENS",
+    "EvidenceAnalysisSpec", "EvidenceComputeRequest", "MAX_BATCH_ANALYSES",
     "EvidenceDelta", "EvidenceGap", "EvidenceIdentity", "EvidenceProgress",
     "EvidenceProgressTracker", "EvidenceRequest", "EvidenceRoute", "EvidenceRoutingPolicy",
     "EvidenceShellPolicy", "EvidenceShellRequest", "EvidenceTraversal", "ProviderTarget",
@@ -63,5 +67,5 @@ __all__ = [
     "BudgetExhausted", "BudgetPolicy", "InvestigationError", "InvestigationState",
     "InvestigationStore", "create_investigation", "load_investigation", "materialize",
     "pointer_source_key", "refine_route_after_result", "register_capability", "replay", "retrieve",
-    "run_evidence_shell", "traverse", "traverse_evidence", "verify",
+    "run_evidence_compute", "run_evidence_shell", "traverse", "traverse_evidence", "verify",
 ]
