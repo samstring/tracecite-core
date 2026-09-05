@@ -20,16 +20,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from tracecite_core.segmenter import build_segmenter, detect_segmenter_kind
+from tracecite_core.jsonline_semantics import JsonLineSemantics, extract_jsonline_semantics
+from tracecite_core.segmenter import JsonLineSegmenter, build_segmenter, detect_segmenter_kind
 from tracecite_core.state_file import state_lock
 
-from .evidence_shell import (
-    _budget_data,
-    _field_value as _canonical_field_value,
-    _payload_fits,
-    _predicate as _canonical_predicate,
-    _row as _canonical_row,
-)
+from .evidence_shell import _budget_data, _payload_fits
 from .evidence_shell_agent import run_evidence_shell
 from .evidence_shell_agent_compat import normalize_agent_evidence_shell_program
 from .evidence_shell_compat import normalize_evidence_shell_program
@@ -39,7 +34,6 @@ from .evidence_shell_fast_jsonl import (
     _absolute_time_window,
     _matches,
     _postprocess,
-    _record_in_absolute_window,
     _split,
     _tokenize,
     _value,
@@ -52,6 +46,7 @@ from .source_versions import SourceSegment, SourceVersionStore
 
 MAX_BATCH_ANALYSES = 16
 _HEAD_COMMANDS = {"head", "take", "first"}
+_SEMANTIC_JSON_FIELDS = {"timestamp", "level", "msg"}
 
 
 @dataclass(frozen=True)
@@ -115,8 +110,8 @@ class _CompiledJsonlAggregate:
             self.counts = {}
 
     @property
-    def needs_record(self) -> bool:
-        return bool(self.referenced_fields & _SPECIAL_FIELDS)
+    def needs_semantic_json(self) -> bool:
+        return bool(self.referenced_fields & _SEMANTIC_JSON_FIELDS)
 
     @property
     def needs_json(self) -> bool:
@@ -130,9 +125,10 @@ class _CompiledJsonlAggregate:
             for stage in self.field_predicates
             if _predicate_field(stage) is not None
         )
-        return normal_predicate_field or (
+        normal_aggregate_field = (
             aggregate_field is not None and aggregate_field not in _SPECIAL_FIELDS
         )
+        return normal_predicate_field or normal_aggregate_field or self.needs_semantic_json
 
 
 @dataclass
@@ -156,8 +152,8 @@ class _CompiledJsonlTopN:
             self.candidates = []
 
     @property
-    def needs_record(self) -> bool:
-        return bool(self.referenced_fields & _SPECIAL_FIELDS)
+    def needs_semantic_json(self) -> bool:
+        return bool(self.referenced_fields & _SEMANTIC_JSON_FIELDS)
 
     @property
     def needs_json(self) -> bool:
@@ -170,6 +166,7 @@ class _CompiledJsonlTopN:
             normal_predicate_field
             or self.sort_field not in _SPECIAL_FIELDS
             or any(field not in _SPECIAL_FIELDS for field in self.project_fields)
+            or self.needs_semantic_json
         )
 
 
@@ -301,16 +298,58 @@ def _compile_jsonl(spec: EvidenceAnalysisSpec) -> _CompiledJsonl | None:
     return _compile_jsonl_topn(spec, normalized, stages)
 
 
-def _field_value(
-    obj: Mapping[str, Any],
+def _special_field_value(
+    raw: str,
     field: str,
     *,
-    canonical_row: Any | None,
+    semantics: JsonLineSemantics | None,
+    segment: SourceSegment,
+    local_start_line: int,
+    local_end_line: int,
+) -> Any:
+    key = str(field).strip()
+    global_start = segment.line_base + max(0, local_start_line - 1)
+    global_end = segment.line_base + max(0, local_end_line - 1)
+    if key == "text":
+        return raw.rstrip("\n")
+    if key in {"line", "start_line", "global_line"}:
+        return global_start
+    if key == "end_line":
+        return global_end
+    if key == "local_start_line":
+        return local_start_line
+    if key == "local_end_line":
+        return local_end_line
+    if key == "timestamp":
+        if semantics is None or semantics.timestamp is None:
+            return None
+        return semantics.timestamp.isoformat(timespec="milliseconds")
+    if key == "source":
+        return segment.path
+    if key in {"level", "msg"}:
+        return semantics.fields.get(key) if semantics is not None else None
+    return None
+
+
+def _field_value(
+    obj: Mapping[str, Any],
+    raw: str,
+    field: str,
+    *,
+    semantics: JsonLineSemantics | None,
+    segment: SourceSegment,
+    local_start_line: int,
+    local_end_line: int,
 ) -> Any:
     if field in _SPECIAL_FIELDS:
-        if canonical_row is None:
-            return None
-        return _canonical_field_value(canonical_row, field)
+        return _special_field_value(
+            raw,
+            field,
+            semantics=semantics,
+            segment=segment,
+            local_start_line=local_start_line,
+            local_end_line=local_end_line,
+        )
     return _value(obj, field)
 
 
@@ -319,13 +358,23 @@ def _field_predicate_matches(
     raw: str,
     stage: Any,
     *,
-    canonical_row: Any | None,
+    semantics: JsonLineSemantics | None,
+    segment: SourceSegment,
+    local_start_line: int,
+    local_end_line: int,
 ) -> bool:
     field = _predicate_field(stage)
     if field in _SPECIAL_FIELDS:
-        if canonical_row is None:
-            return False
-        return bool(_canonical_predicate(canonical_row, stage))
+        special_value = _field_value(
+            obj,
+            raw,
+            str(field),
+            semantics=semantics,
+            segment=segment,
+            local_start_line=local_start_line,
+            local_end_line=local_end_line,
+        )
+        return _matches({str(field): special_value}, raw, stage)
     return _matches(obj, raw, stage)
 
 
@@ -362,14 +411,31 @@ def _update_topn(
     item: _CompiledJsonlTopN,
     *,
     obj: Mapping[str, Any],
-    canonical_row: Any | None,
+    raw: str,
+    semantics: JsonLineSemantics | None,
     segment: SourceSegment,
     local_start_line: int,
     local_end_line: int,
 ) -> None:
-    sort_value = _field_value(obj, item.sort_field, canonical_row=canonical_row)
+    sort_value = _field_value(
+        obj,
+        raw,
+        item.sort_field,
+        semantics=semantics,
+        segment=segment,
+        local_start_line=local_start_line,
+        local_end_line=local_end_line,
+    )
     values = {
-        field: _field_value(obj, field, canonical_row=canonical_row)
+        field: _field_value(
+            obj,
+            raw,
+            field,
+            semantics=semantics,
+            segment=segment,
+            local_start_line=local_start_line,
+            local_end_line=local_end_line,
+        )
         for field in item.project_fields
     }
     global_start = segment.line_base + max(0, local_start_line - 1)
@@ -594,6 +660,8 @@ def _try_partitioned_jsonl(
         return None
 
     selected_segmenter = build_segmenter(kind)
+    if not isinstance(selected_segmenter, JsonLineSegmenter):
+        return None
     scope = _scope_request(request)
     time_window = _absolute_time_window(scope, segmenter=selected_segmenter)
     scope_requested = any(value is not None for value in (request.last, request.since, request.until))
@@ -616,87 +684,88 @@ def _try_partitioned_jsonl(
         live_cut_timeout_seconds=policy.live_cut_timeout_seconds,
     )
 
-    needs_record = time_scoped or any(item.needs_record for item in compiled)
     for segment in view.segments:
         segment_path = Path(segment.path)
-        if needs_record:
-            records = selected_segmenter.segment_file(segment_path, encoding="utf-8")
-            iterator = (
-                (
-                    record.text,
-                    record.start_line,
-                    record.end_line,
-                    record,
-                    _canonical_row(record, segment),
-                )
-                for record in records
-            )
-        else:
-            def raw_rows():
-                with segment_path.open("r", encoding="utf-8", errors="replace") as handle:
-                    for line_number, raw in enumerate(handle, start=1):
-                        yield raw, line_number, line_number, None, None
-            iterator = raw_rows()
-
-        for raw, local_start, local_end, record, canonical_row in iterator:
-            if not raw.strip():
-                continue
-            if time_scoped:
-                assert record is not None
-                if not _record_in_absolute_window(
-                    record,
-                    segmenter=selected_segmenter,
-                    time_from=time_from,
-                    time_to=time_to,
-                ):
+        with segment_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line_number, raw in enumerate(handle, start=1):
+                if not raw.strip():
                     continue
 
-            raw_pass: list[_CompiledJsonl] = []
-            needs_json = False
-            for item in compiled:
-                if any(not _matches({}, raw, stage) for stage in item.raw_predicates):
+                raw_pass: list[_CompiledJsonl] = []
+                needs_json = time_scoped
+                needs_semantic_json = time_scoped
+                for item in compiled:
+                    if any(not _matches({}, raw, stage) for stage in item.raw_predicates):
+                        continue
+                    raw_pass.append(item)
+                    needs_json = needs_json or item.needs_json
+                    needs_semantic_json = needs_semantic_json or item.needs_semantic_json
+                if not raw_pass:
                     continue
-                raw_pass.append(item)
-                needs_json = needs_json or item.needs_json
-            if not raw_pass:
-                continue
 
-            obj: Mapping[str, Any] = {}
-            if needs_json:
-                try:
-                    decoded = json.loads(raw)
-                    obj = decoded if isinstance(decoded, Mapping) else {}
-                except json.JSONDecodeError:
-                    obj = {}
+                obj: Mapping[str, Any] = {}
+                if needs_json:
+                    try:
+                        decoded = json.loads(raw)
+                        obj = decoded if isinstance(decoded, Mapping) else {}
+                    except json.JSONDecodeError:
+                        obj = {}
 
-            for item in raw_pass:
-                if any(
-                    not _field_predicate_matches(
+                semantics: JsonLineSemantics | None = None
+                if needs_semantic_json:
+                    semantics = extract_jsonline_semantics(
                         obj,
-                        raw,
-                        stage,
-                        canonical_row=canonical_row,
+                        time_field=selected_segmenter._time_field,
+                        level_field=selected_segmenter._level_field,
+                        msg_field=selected_segmenter._msg_field,
                     )
-                    for stage in item.field_predicates
-                ):
-                    continue
-                if isinstance(item, _CompiledJsonlAggregate):
-                    item.matched += 1
-                    if item.aggregate_stage.command != "count":
-                        field = str(item.aggregate_stage.args[0])
-                        value = _field_value(obj, field, canonical_row=canonical_row)
-                        key = "<missing>" if value is None else str(value)
-                        assert item.counts is not None
-                        item.counts[key] = item.counts.get(key, 0) + 1
-                else:
-                    _update_topn(
-                        item,
-                        obj=obj,
-                        canonical_row=canonical_row,
-                        segment=segment,
-                        local_start_line=int(local_start),
-                        local_end_line=int(local_end),
-                    )
+
+                if time_scoped and semantics is not None and semantics.timestamp is not None:
+                    if time_from is not None and semantics.timestamp < time_from:
+                        continue
+                    if time_to is not None and semantics.timestamp > time_to:
+                        continue
+
+                for item in raw_pass:
+                    if any(
+                        not _field_predicate_matches(
+                            obj,
+                            raw,
+                            stage,
+                            semantics=semantics,
+                            segment=segment,
+                            local_start_line=line_number,
+                            local_end_line=line_number,
+                        )
+                        for stage in item.field_predicates
+                    ):
+                        continue
+                    if isinstance(item, _CompiledJsonlAggregate):
+                        item.matched += 1
+                        if item.aggregate_stage.command != "count":
+                            field = str(item.aggregate_stage.args[0])
+                            value = _field_value(
+                                obj,
+                                raw,
+                                field,
+                                semantics=semantics,
+                                segment=segment,
+                                local_start_line=line_number,
+                                local_end_line=line_number,
+                            )
+                            key = "<missing>" if value is None else str(value)
+                            assert item.counts is not None
+                            item.counts[key] = item.counts.get(key, 0) + 1
+                    else:
+                        _update_topn(
+                            item,
+                            obj=obj,
+                            raw=raw,
+                            semantics=semantics,
+                            segment=segment,
+                            local_start_line=line_number,
+                            local_end_line=line_number,
+                        )
 
     output_by_name = {
         item.spec.name: _finalize_compiled(item, policy=policy)
@@ -730,6 +799,11 @@ def _try_partitioned_jsonl(
         "execution_engine": engine,
         "shared_scan_analyses": len(compiled),
         "canonical_remainder_analyses": len(fallback_specs),
+        "physical_plan": {
+            "source_scan": "jsonl_raw_lines",
+            "json_decode": "shared_once_per_candidate_line",
+            "semantic_enrichment": "lazy_from_decoded_json",
+        },
         "time_scope": {
             "last": request.last,
             "since": request.since,
