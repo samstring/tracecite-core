@@ -7,8 +7,9 @@ per line, Top-K state has fixed capacity, and projection is deferred until after
 selection so discarded candidates stay cheap.
 
 Unsupported siblings are partitioned into the established canonical remainder
-instead of poisoning compatible work. This preserves the planner invariant that
-one analysis shape cannot silently downgrade another analysis's physical plan.
+instead of poisoning compatible work. Request-level time scopes are also
+observable: a JSONL source with zero parseable canonical timestamps cannot
+silently return unscoped aggregates as though the scope had been applied.
 """
 
 from __future__ import annotations
@@ -82,6 +83,27 @@ def _finalize_topn(
     }
 
 
+def _time_scope_unresolved_output(spec: legacy.EvidenceAnalysisSpec) -> dict[str, Any]:
+    prepared = legacy._normalize_spec(spec)
+    normalized = prepared[0] if prepared is not None else spec.program
+    return {
+        "name": spec.name,
+        "status": "error",
+        "program": normalized,
+        "coverage": {"complete": False, "match_records": 0},
+        "execution_engine": "jsonl_time_scope_unresolved",
+        "error_code": "time_scope_unresolved",
+        "error": (
+            "request-level time scope could not be applied because the source "
+            "exposed no parseable canonical record timestamp"
+        ),
+        "guidance": (
+            "Use explicit predicates on the source's own time field, or select a "
+            "segmenter configuration that maps that field to the canonical timestamp."
+        ),
+    }
+
+
 def try_run_jsonl_batch(
     request: legacy.EvidenceComputeRequest,
     *,
@@ -136,6 +158,8 @@ def try_run_jsonl_batch(
         id(item): FixedCapacityTopK(item.limit, descending=item.descending)
         for item in topn_items
     }
+    parseable_timestamp_records = 0
+    untimestamped_records = 0
 
     for segment in view.segments:
         with Path(segment.path).open("r", encoding="utf-8", errors="replace") as handle:
@@ -143,9 +167,38 @@ def try_run_jsonl_batch(
                 if not raw.strip():
                     continue
 
+                obj: Mapping[str, Any] = {}
+                semantics: JsonLineSemantics | None = None
+
+                # A request-level scope is logically before the analysis
+                # predicates. Decode every nonblank record so scope resolution is
+                # auditable even when a later raw predicate matches nothing.
+                if time_scoped:
+                    try:
+                        decoded = legacy.json.loads(raw)
+                        obj = decoded if isinstance(decoded, Mapping) else {}
+                    except legacy.json.JSONDecodeError:
+                        obj = {}
+                    semantics = extract_jsonline_semantics(
+                        obj,
+                        time_field=selected_segmenter._time_field,
+                        level_field=selected_segmenter._level_field,
+                        msg_field=selected_segmenter._msg_field,
+                    )
+                    if semantics.timestamp is None:
+                        # Preserve canonical semantics: untimestamped records are
+                        # retained when a source has a usable timestamp domain.
+                        untimestamped_records += 1
+                    else:
+                        parseable_timestamp_records += 1
+                        if time_from is not None and semantics.timestamp < time_from:
+                            continue
+                        if time_to is not None and semantics.timestamp > time_to:
+                            continue
+
                 raw_pass: list[Any] = []
-                needs_json = time_scoped
-                needs_semantics = time_scoped
+                needs_json = False
+                needs_semantics = False
                 raw_cache: dict[tuple[str, tuple[str, ...]], bool] = {}
                 for item in compiled:
                     passed = True
@@ -164,28 +217,19 @@ def try_run_jsonl_batch(
                 if not raw_pass:
                     continue
 
-                obj: Mapping[str, Any] = {}
-                if needs_json:
+                if not time_scoped and needs_json:
                     try:
                         decoded = legacy.json.loads(raw)
                         obj = decoded if isinstance(decoded, Mapping) else {}
                     except legacy.json.JSONDecodeError:
                         obj = {}
-
-                semantics: JsonLineSemantics | None = None
-                if needs_semantics:
+                if not time_scoped and needs_semantics:
                     semantics = extract_jsonline_semantics(
                         obj,
                         time_field=selected_segmenter._time_field,
                         level_field=selected_segmenter._level_field,
                         msg_field=selected_segmenter._msg_field,
                     )
-
-                if time_scoped and semantics is not None and semantics.timestamp is not None:
-                    if time_from is not None and semantics.timestamp < time_from:
-                        continue
-                    if time_to is not None and semantics.timestamp > time_to:
-                        continue
 
                 context = JsonlLineContext(
                     obj=obj,
@@ -212,6 +256,41 @@ def try_run_jsonl_batch(
                             topk_sort_key(sort_value, numeric=item.numeric),
                             context,
                         )
+
+    source_view = view.to_dict()
+    source_version = view.key
+    time_scope_resolution: dict[str, Any] | None = None
+    if time_scoped:
+        time_scope_resolution = {
+            "status": "applied" if parseable_timestamp_records else "unresolved",
+            "parseable_timestamp_records": parseable_timestamp_records,
+            "untimestamped_records": untimestamped_records,
+            "retained_untimestamped_records": untimestamped_records,
+        }
+        if parseable_timestamp_records == 0:
+            outputs = [_time_scope_unresolved_output(spec) for spec in request.analyses]
+            return AgentResult(
+                operation="evidence_compute",
+                status="partial",
+                outcome="not_assessed",
+                coverage={"complete": False},
+                data={
+                    "outputs": outputs,
+                    "analysis_count": len(outputs),
+                    "source_view": source_view,
+                    "source_version": source_version,
+                    "evidence_budget": _budget_data(policy),
+                    "execution_engine": "jsonl_time_scope_unresolved",
+                    "shared_scan_analyses": len(compiled),
+                    "canonical_remainder_analyses": len(fallback_specs),
+                    "time_scope": {
+                        "last": request.last,
+                        "since": request.since,
+                        "until": request.until,
+                    },
+                    "time_scope_resolution": time_scope_resolution,
+                },
+            ).to_dict()
 
     output_by_name: dict[str, dict[str, Any]] = {}
     for item in compiled:
@@ -241,13 +320,11 @@ def try_run_jsonl_batch(
 
     outputs = [output_by_name[spec.name] for spec in request.analyses]
     fits, token_count, byte_count = _payload_fits({"outputs": outputs}, policy)
-    source_view = view.to_dict()
-    source_version = view.key
     if not fits:
         return AgentResult(
             operation="evidence_compute",
             status="too_broad",
-            outcome="not_assessed",
+            outcome="unknown",
             coverage={"complete": False},
             data={
                 "reason": "BATCH_OUTPUT_BUDGET_EXCEEDED",
@@ -260,38 +337,42 @@ def try_run_jsonl_batch(
                 "execution_engine": (
                     "jsonl_shared_scan_batch" if not fallback_specs else "jsonl_partitioned_batch"
                 ),
+                "time_scope_resolution": time_scope_resolution,
             },
         ).to_dict()
 
     statuses = {str(item.get("status") or "") for item in outputs}
     engine = "jsonl_shared_scan_batch" if not fallback_specs else "jsonl_partitioned_batch"
+    data: dict[str, Any] = {
+        "outputs": outputs,
+        "analysis_count": len(outputs),
+        "source_view": source_view,
+        "source_version": source_version,
+        "evidence_budget": _budget_data(policy),
+        "execution_engine": engine,
+        "shared_scan_analyses": len(compiled),
+        "canonical_remainder_analyses": len(fallback_specs),
+        "physical_plan": {
+            "source_scan": "jsonl_raw_lines",
+            "json_decode": "shared_once_per_candidate_line",
+            "predicate_evaluation": "memoized_once_per_unique_stage_per_line",
+            "topk_projection": "post_selection" if topn_items else "none",
+            "semantic_enrichment": "lazy_from_decoded_json",
+        },
+        "time_scope": {
+            "last": request.last,
+            "since": request.since,
+            "until": request.until,
+        },
+    }
+    if time_scope_resolution is not None:
+        data["time_scope_resolution"] = time_scope_resolution
     return AgentResult(
         operation="evidence_compute",
         status="ok" if statuses == {"ok"} else "partial",
         outcome="not_assessed",
         coverage={"complete": all(item.get("status") == "ok" for item in outputs)},
-        data={
-            "outputs": outputs,
-            "analysis_count": len(outputs),
-            "source_view": source_view,
-            "source_version": source_version,
-            "evidence_budget": _budget_data(policy),
-            "execution_engine": engine,
-            "shared_scan_analyses": len(compiled),
-            "canonical_remainder_analyses": len(fallback_specs),
-            "physical_plan": {
-                "source_scan": "jsonl_raw_lines",
-                "json_decode": "shared_once_per_candidate_line",
-                "predicate_evaluation": "memoized_once_per_unique_stage_per_line",
-                "topk_projection": "post_selection" if topn_items else "none",
-                "semantic_enrichment": "lazy_from_decoded_json",
-            },
-            "time_scope": {
-                "last": request.last,
-                "since": request.since,
-                "until": request.until,
-            },
-        },
+        data=data,
     ).to_dict()
 
 
