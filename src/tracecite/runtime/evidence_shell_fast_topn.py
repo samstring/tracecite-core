@@ -28,6 +28,7 @@ from .evidence_shell import (
     _too_broad,
     _tokenize_program,
 )
+from .evidence_shell_compat import normalize_evidence_shell_program
 from .evidence_shell_public import (
     EvidenceShellPolicy,
     EvidenceShellRequest,
@@ -109,6 +110,20 @@ def _bounded_topn(rows: Iterable[Any], sort_stage: _Stage, n: int) -> list[Any]:
             key=lambda pair: (key(pair[1]), pair[0]),
         )
     return [row for _, row in selected]
+
+
+def _request_with_program(request: EvidenceShellRequest, program: str) -> EvidenceShellRequest:
+    if program == request.program:
+        return request
+    return EvidenceShellRequest(
+        source=request.source,
+        program=program,
+        segmenter=request.segmenter,
+        last=request.last,
+        since=request.since,
+        until=request.until,
+        fold=request.fold,
+    )
 
 
 def _evidence_payload(
@@ -245,17 +260,27 @@ def try_run_fast_topn(
 ) -> dict[str, Any] | None:
     """Return a bounded top-N payload, or ``None`` for canonical fallback."""
 
-    stages = _tokenize_program(request.program)
+    # The fast path must consume the same compatibility language as canonical
+    # Evidence Shell. If compatibility normalization cannot represent a program,
+    # leave it untouched for the canonical path to report the normal structured
+    # result instead of letting an optimization steal parser semantics.
+    try:
+        normalized_program = normalize_evidence_shell_program(request.program)
+        effective = _request_with_program(request, normalized_program)
+        stages = _tokenize_program(effective.program)
+    except ValueError:
+        return None
+
     query, regex, remaining = _simple_first_search(stages)
     parsed = _terminal_topn(list(remaining))
     if parsed is None:
         return None
     prefix, sort_stage, n = parsed
 
-    source = Path(request.source).expanduser().resolve()
+    source = Path(effective.source).expanduser().resolve()
     if not source.is_file():
         return None
-    kind = detect_segmenter_kind(source) if request.segmenter == "auto" else request.segmenter
+    kind = detect_segmenter_kind(source) if effective.segmenter == "auto" else effective.segmenter
     version_store = (
         SourceVersionStore.for_session(session)
         if session is not None
@@ -271,7 +296,7 @@ def try_run_fast_topn(
         query=query,
         regex=regex,
         kind=kind,
-        request=request,
+        request=effective,
     )
     for stage in prefix:
         if stage.command == "all":
@@ -279,7 +304,7 @@ def try_run_fast_topn(
         rows = _filter(rows, stage)
     selected = _bounded_topn(rows, sort_stage, n)
     return _evidence_payload(
-        request=request,
+        request=effective,
         policy=policy,
         session=session,
         view=view,
