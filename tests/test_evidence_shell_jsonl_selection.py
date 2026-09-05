@@ -42,7 +42,7 @@ def test_where_head_uses_streaming_jsonl_without_record_scan(tmp_path, monkeypat
 
     import tracecite.runtime.evidence_shell_jsonl_selection as selection
 
-    real_loads = selection.json.loads
+    real_loads = selection.json_loads
     decodes = 0
 
     def counted_loads(value):
@@ -50,7 +50,10 @@ def test_where_head_uses_streaming_jsonl_without_record_scan(tmp_path, monkeypat
         decodes += 1
         return real_loads(value)
 
-    monkeypatch.setattr(selection.json, "loads", counted_loads)
+    # Patch only the source-line decoder. Patching stdlib json.loads globally
+    # would also count SourceVersion/session state JSON and would not measure the
+    # physical source scan we are asserting here.
+    monkeypatch.setattr(selection, "json_loads", counted_loads)
 
     result = run_evidence_shell(
         EvidenceShellRequest(source=source, program="where spanID == target | head 3"),
@@ -90,8 +93,11 @@ def test_where_sort_head_uses_fixed_capacity_topk_without_record_scan(tmp_path, 
     )
 
     assert result["status"] == "ok"
-    assert result["data"]["execution_engine"] == "jsonl_streaming_fixed_topk"
+    # Keep the old transport-visible engine label while asserting the new
+    # physical implementation explicitly.
+    assert result["data"]["execution_engine"] == "bounded_terminal_topn"
     assert result["data"]["physical_plan"]["selection"] == "fixed_capacity_topk"
+    assert result["data"]["physical_plan"]["source_scan"] == "jsonl_raw_lines"
     # Equal sort keys preserve source order, matching canonical stable sort.
     assert [item["start_line"] for item in result["evidence"]] == [3, 4]
 
