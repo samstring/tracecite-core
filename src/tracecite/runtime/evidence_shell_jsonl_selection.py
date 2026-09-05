@@ -8,8 +8,8 @@ projection as canonical Evidence Shell.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
+from json import JSONDecodeError, loads as json_loads
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -53,7 +53,6 @@ class _SelectionPlan:
     @property
     def needs_semantics_for_match(self) -> bool:
         return bool(self.referenced_fields & SEMANTIC_JSON_FIELDS)
-
 
 
 def _compile(program: str) -> _SelectionPlan | None:
@@ -117,8 +116,8 @@ def _compile(program: str) -> _SelectionPlan | None:
 
 def _decode(raw: str) -> Mapping[str, Any]:
     try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
+        value = json_loads(raw)
+    except JSONDecodeError:
         return {}
     return value if isinstance(value, Mapping) else {}
 
@@ -289,8 +288,11 @@ def try_run_jsonl_selection(
         selected=selected,
     )
     data = dict(payload.get("data") or {})
+    # Keep the pre-existing agent-visible engine label for sorted Top-N so this
+    # physical optimization is transport-compatible.  The richer physical_plan
+    # below is the authoritative way to identify the new implementation.
     data["execution_engine"] = (
-        "jsonl_streaming_bounded_head" if topk is None else "jsonl_streaming_fixed_topk"
+        "jsonl_streaming_bounded_head" if topk is None else "bounded_terminal_topn"
     )
     data["physical_plan"] = {
         "source_scan": "jsonl_raw_lines",
