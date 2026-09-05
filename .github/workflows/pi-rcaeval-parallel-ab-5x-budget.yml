@@ -114,10 +114,6 @@ jobs:
       TRACECITE_EVIDENCE_MAX_TOKENS: "60000"
       TRACECITE_EVIDENCE_MAX_BYTES: "327680"
       TRACECITE_MATERIALIZE_MAX_CHARS: "4000"
-      # RCAEval telemetry is fully prepared before either arm starts and never
-      # mutates during the investigation. Declare that lifecycle truth to the
-      # TraceCite Host instead of paying mutable-source snapshot/copy overhead.
-      TRACECITE_SOURCE_MODE: "static"
       AGENT_TIMEOUT_SECONDS: "600"
       ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
       ARM_API_KEY: ${{ matrix.arm == 'native' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
@@ -201,8 +197,10 @@ jobs:
 
           extra=()
           if [[ "${{ matrix.arm }}" == tracecite ]]; then
-            # Only the real Agent run is host-pinned. Preflight tests retain the
-            # default caller-selected session semantics.
+            # This prepared benchmark fixture is immutable for the duration of
+            # the real Agent run. Scope the Host lifecycle declaration here so
+            # preflight still exercises the product's default mutable contract.
+            export TRACECITE_SOURCE_MODE="static"
             export TRACECITE_MCP_SESSION_ID="rcaeval-${GITHUB_RUN_ID}-tracecite"
             extra=(
               --skill-dir "$GITHUB_WORKSPACE/tracecite-mcp/skills/tracecite"
