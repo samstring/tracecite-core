@@ -138,7 +138,7 @@ _PREDICATES = frozenset(
     }
 )
 _SELECTIONS = frozenset({"take", "head", "first", "last", "tail", "near", "seek"})
-_AGGREGATES = frozenset({"count", "group", "distinct", "uniq"})
+_AGGREGATES = frozenset({"count", "group", "distinct", "uniq", "project"})
 _TRANSFORMS = frozenset({"sort", "reverse"})
 _SUPPORTED = _PREDICATES | _SELECTIONS | _AGGREGATES | _TRANSFORMS | frozenset({"emit", "all"})
 
@@ -173,6 +173,7 @@ def _simple_first_search(
     stages: Sequence[_Stage],
 ) -> tuple[str | None, bool, tuple[_Stage, ...]]:
     """Push a safe first literal/regex into the Record scanner when possible."""
+
     first = stages[0]
     if first.command == "all":
         return None, False, tuple(stages[1:])
@@ -212,6 +213,8 @@ def _json_value(text: str, field: str) -> Any:
 
 def _field_value(row: _RecordRow, field: str) -> Any:
     key = str(field).strip()
+    if key == "text":
+        return row.text.rstrip("\n")
     if key in {"line", "start_line", "global_line"}:
         return row.global_start_line
     if key == "end_line":
@@ -301,11 +304,7 @@ def _predicate(row: _RecordRow, stage: _Stage) -> bool:
         if not args:
             raise ValueError(f"{command} requires a pattern")
         pattern = " ".join(args)
-        matched = (
-            _safe_regex(pattern, row.text)
-            if command == "exclude-regex"
-            else pattern in row.text
-        )
+        matched = _safe_regex(pattern, row.text) if command == "exclude-regex" else pattern in row.text
         return not matched
     if command == "exists":
         if len(args) != 1:
@@ -363,12 +362,24 @@ def _sort_rows(rows: Iterable[_RecordRow], stage: _Stage) -> list[_RecordRow]:
         raise ValueError("sort requires a field")
     field = stage.args[0]
     direction = stage.args[1].lower() if len(stage.args) > 1 else "asc"
+    numeric = len(stage.args) > 2 and stage.args[2].lower() == "numeric"
     if direction not in {"asc", "desc"}:
         raise ValueError("sort direction must be asc or desc")
+    if len(stage.args) > 2 and not numeric:
+        raise ValueError("sort mode must be numeric when supplied")
+    if len(stage.args) > 3:
+        raise ValueError("sort syntax is: sort FIELD [asc|desc] [numeric]")
 
-    def key(row: _RecordRow) -> tuple[int, str]:
+    def key(row: _RecordRow) -> tuple[int, float | str]:
         value = _field_value(row, field)
-        return (1 if value is None else 0, "" if value is None else str(value))
+        if value is None:
+            return (1, 0.0 if numeric else "")
+        if numeric:
+            try:
+                return (0, float(str(value).strip()))
+            except ValueError:
+                return (1, 0.0)
+        return (0, str(value))
 
     return sorted(rows, key=key, reverse=direction == "desc")
 
@@ -423,12 +434,19 @@ def _select(rows: Iterable[_RecordRow], stage: _Stage) -> list[_RecordRow]:
             if len(selected) >= n:
                 break
         return selected
-    selected = []
+    selected: list[_RecordRow] = []
     for row in rows:
         selected.append(row)
         if len(selected) > n:
             del selected[0]
     return selected
+
+
+def _project_uri(row: _RecordRow) -> str:
+    fragment = f"#L{row.start_line}"
+    if row.end_line != row.start_line:
+        fragment += f"-L{row.end_line}"
+    return f"evidence://sha256/{row.sha256}{fragment}"
 
 
 def _aggregate(rows: Iterable[_RecordRow], stage: _Stage) -> tuple[dict[str, Any], int]:
@@ -439,6 +457,24 @@ def _aggregate(rows: Iterable[_RecordRow], stage: _Stage) -> tuple[dict[str, Any
     if not stage.args:
         raise ValueError(f"{stage.command} requires a field")
     field = stage.args[0]
+
+    if stage.command == "project":
+        projected: list[dict[str, Any]] = []
+        matched = 0
+        for row in rows:
+            matched += 1
+            projected.append(
+                {
+                    "value": _field_value(row, field),
+                    "uri": _project_uri(row),
+                    "source": row.source_path,
+                    "sha256": row.sha256,
+                    "start_line": row.global_start_line,
+                    "end_line": row.global_end_line,
+                }
+            )
+        return {"field": field, "rows": projected, "row_total": matched}, matched
+
     counts: dict[str, int] = {}
     matched = 0
     for row in rows:
@@ -481,8 +517,7 @@ def _payload_fits(value: Mapping[str, Any], policy: EvidenceShellPolicy) -> tupl
     byte_count = len(text.encode("utf-8"))
     token_count = max(1, estimate_tokens(text)) if text else 0
     return (
-        token_count <= policy.max_evidence_tokens
-        and byte_count <= policy.max_evidence_bytes,
+        token_count <= policy.max_evidence_tokens and byte_count <= policy.max_evidence_bytes,
         token_count,
         byte_count,
     )
@@ -749,10 +784,7 @@ def run_evidence_shell(
     final_rows, aggregate, matched, selected_subset = _execute_pipeline(rows, remaining)
 
     if aggregate is not None:
-        aggregate_payload = {
-            "aggregate": aggregate,
-            "match_records": matched,
-        }
+        aggregate_payload = {"aggregate": aggregate, "match_records": matched}
         fits, token_count, byte_count = _payload_fits(aggregate_payload, policy)
         if not fits:
             return _too_broad(
