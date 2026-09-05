@@ -81,6 +81,10 @@ def test_different_query_can_hit_only_old_evidence_without_being_exact_duplicate
     assert result["data"]["existing_evidence_summary"]["count"] == 1
 
 
+def _timestamp_values(result) -> list[str]:
+    return [str(row["value"]) for row in result["data"]["aggregate"]["rows"]]
+
+
 def test_project_sort_head_is_reordered_before_terminal_projection(tmp_path) -> None:
     source = _write_jsonl(
         tmp_path,
@@ -95,7 +99,10 @@ def test_project_sort_head_is_reordered_before_terminal_projection(tmp_path) -> 
     )
 
     assert result["status"] == "ok"
-    assert [row["value"] for row in result["data"]["aggregate"]["rows"]] == [10, 20]
+    assert _timestamp_values(result) == [
+        "1970-01-01T00:00:10.000",
+        "1970-01-01T00:00:20.000",
+    ]
     assert result["data"]["requested_program"].startswith("project timestamp")
     assert result["data"]["normalized_program"].endswith("project timestamp")
 
@@ -114,7 +121,10 @@ def test_jq_projection_sort_head_uses_projected_field_not_record_text(tmp_path) 
     )
 
     assert result["status"] == "ok"
-    assert [row["value"] for row in result["data"]["aggregate"]["rows"]] == [10, 20]
+    assert _timestamp_values(result) == [
+        "1970-01-01T00:00:10.000",
+        "1970-01-01T00:00:20.000",
+    ]
 
 
 def test_simple_jq_test_maps_to_structured_regex_filter(tmp_path) -> None:
