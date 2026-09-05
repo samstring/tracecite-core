@@ -67,6 +67,8 @@ def test_semantic_sibling_does_not_force_segment_file_record_scan(tmp_path, monk
     assert result["data"]["physical_plan"] == {
         "source_scan": "jsonl_raw_lines",
         "json_decode": "shared_once_per_candidate_line",
+        "predicate_evaluation": "memoized_once_per_unique_stage_per_line",
+        "topk_projection": "post_selection",
         "semantic_enrichment": "lazy_from_decoded_json",
     }
     assert _output(result, "first_time")["aggregate"]["rows"][0]["values"] == {
