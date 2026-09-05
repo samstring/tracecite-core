@@ -20,6 +20,14 @@ on:
       - .github/workflows/pi-dual-gmi-parallel-ab.yml
       - benchmarks/agent-investigation/agent_flow_runner.py
       - benchmarks/agent-investigation/pi_log_code_benchmark_host.ts
+      - benchmarks/agent-investigation/run_result.py
+      - src/tracecite/runtime/evidence_shell.py
+      - src/tracecite/runtime/evidence_shell_public.py
+      - src/tracecite/runtime/evidence_shell_compat.py
+      - tests/test_evidence_shell.py
+      - tests/test_evidence_shell_unix_compat.py
+      - tests/test_benchmark_run_result.py
+      - tests/test_benchmark_provider_retry_chain.py
 
 permissions:
   contents: read
@@ -52,7 +60,7 @@ jobs:
       WORK_ROOT: /tmp/pi-dual-gmi/${{ matrix.case_key }}/${{ matrix.arm }}/workspace
       PREP: /tmp/pi-dual-gmi/${{ matrix.case_key }}/${{ matrix.arm }}/prepared
       SOURCE_ROOT: /tmp/pi-dual-gmi/${{ matrix.case_key }}/${{ matrix.arm }}/source
-      TRACECITE_MCP_REF: 93ef8853cc15607b9f46c738eca4a61028ca84c9
+      TRACECITE_MCP_REF: 92bce8483dd734e6270d5d6a0a2fd2dbe69d185e
       TRACECITE_EVIDENCE_MAX_TOKENS: "12000"
       TRACECITE_EVIDENCE_MAX_BYTES: "65536"
       TRACECITE_MATERIALIZE_MAX_CHARS: "8000"
@@ -127,6 +135,9 @@ jobs:
             tests/test_session_novelty_regressions.py \
             tests/test_pi_session_to_transcript.py \
             tests/test_benchmark_run_result.py \
+            tests/test_benchmark_provider_retry_chain.py \
+            tests/test_evidence_shell.py \
+            tests/test_evidence_shell_unix_compat.py \
             tests/test_log_code_score.py
           if [[ "${{ matrix.arm }}" == tracecite ]]; then
             python -m pytest -q \
@@ -311,6 +322,23 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Require valid comparison arm
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          arm="${{ matrix.arm }}"
+          result="$RESULT_ROOT/pi-${arm}-run-result.json"
+          test -s "$result" || { echo "missing run result: $result" >&2; exit 1; }
+          python - "$result" <<'PY'
+          import json, sys
+          from pathlib import Path
+          result = json.loads(Path(sys.argv[1]).read_text())
+          validity = result.get('run_validity') or {}
+          if not validity.get('valid_for_comparison'):
+              raise SystemExit(f"invalid comparison arm: {validity.get('reason')}")
+          PY
+
   compare:
     name: Compare / ${{ matrix.case_key }}
     if: always()
@@ -444,6 +472,10 @@ jobs:
               raise SystemExit('A/B fairness boundary mismatch')
           if mcp_calls <= 0 or native_evidence_accesses != 0:
               raise SystemExit('TraceCite arm did not preserve clean MCP-only evidence channel')
+          if not (native.get('valid_for_comparison') and tracecite.get('valid_for_comparison')):
+              raise SystemExit(
+                  f"invalid A/B sample: native={native.get('validity_reason')} tracecite={tracecite.get('validity_reason')}"
+              )
           PY
 
       - name: Upload comparison artifact
