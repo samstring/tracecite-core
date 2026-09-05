@@ -222,3 +222,15 @@ Planner 行为：
 - Run #15 (`33976206687`) completed both jobs, but its TraceCite arm had 12 provider rate-limit incidents and no final answer, so it is an infrastructure-invalid quality comparison; a new paired run is required after this commit.
 
 Remaining highest-priority issue: measure the next paired run's final answer quality and model-visible context under the same blind protocol. If the new trace still shows multi-predicate numeric Top-K CPU cost, profile that path separately before changing the planner.
+
+### Iteration 4 — local large-log verification and scalar-cache type hardening
+
+- follow-up implementation commit: `5eecfd5`
+- local inputs rechecked before relying on CI: `traces.jsonl` 79,563,985 bytes (~76 MiB), `logs.jsonl` 41,264,282 bytes (~39 MiB), `metrics.jsonl` 22,447,829 bytes (~21 MiB)
+- local real-log batch: five trace analyses completed in `2.557s`, three log analyses in `0.598s`; both used `jsonl_shared_scan_batch` with `canonical_remainder=0`
+- local multi-predicate trace Top-5 returned five complete rows; the oversized `distinct message` values were transported as descriptors and remained recoverable through their representative Evidence URI
+- validation: Core `742 passed, 1 skipped`; focused regression `11 passed`; `git diff --check` passed
+- scalar timestamp cache now uses `typed=True`, with a regression proving boolean `True` and numeric `1` keep distinct parse semantics
+- Run #16 (`33977661276`) is in progress against commit `35e2a6d`; it is the paired benchmark for the substantive Iteration 3 changes. The follow-up `5eecfd5` is correctness-only and has been pushed after the run was already dispatched.
+
+Continuation state: wait for Run #16; then retrieve both arm results if available, classify provider incidents before judging quality, and inspect the TraceCite transcript/tool payload sizes. If the trace still identifies a generic multi-predicate Top-K bottleneck, reproduce that exact program locally against the downloaded telemetry and profile it before changing code.
