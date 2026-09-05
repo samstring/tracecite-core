@@ -110,10 +110,11 @@ jobs:
       RESULT_ROOT: /tmp/result-${{ matrix.arm }}
       WORK_ROOT: /tmp/work-${{ matrix.arm }}
       MCP_STATE_ROOT: /tmp/mcp-state-${{ matrix.arm }}
-      TRACECITE_MCP_REF: 35c7c3c2016439b076492c5f35f4b0a030d7045a
+      TRACECITE_MCP_REF: b83c3e64a1b5d8018ebb57a089ec1c5c96263d2a
       TRACECITE_EVIDENCE_MAX_TOKENS: "60000"
       TRACECITE_EVIDENCE_MAX_BYTES: "327680"
       TRACECITE_MATERIALIZE_MAX_CHARS: "4000"
+      AGENT_TIMEOUT_SECONDS: "420"
       ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
       ARM_API_KEY: ${{ matrix.arm == 'native' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
     steps:
@@ -145,13 +146,17 @@ jobs:
           python -m pip install -q 'mcp>=2,<3'
           pi install npm:pi-mcp-adapter@2.27.0 --approve
           python -m pip install -q -e ./tracecite-mcp --no-deps
-      - name: Verify optimized Core and MCP contract
+      - name: Verify vNext Core and MCP contract
         shell: bash
         run: |
           set -euo pipefail
-          python -m pytest -q tests/test_evidence_shell_fast_jsonl.py tests/test_evidence_shell_agent_regressions.py
+          python -m pytest -q \
+            tests/test_evidence_compute_batch.py \
+            tests/test_evidence_shell_fast_jsonl.py \
+            tests/test_evidence_shell_agent_regressions.py
           python -m pytest -q \
             tracecite-mcp/tests/test_server.py \
+            tracecite-mcp/tests/test_stdio_integration.py \
             tracecite-mcp/tests/test_shell_projection_agent_feedback.py \
             tracecite-mcp/tests/test_session_transport_regressions.py
       - name: Run ${{ matrix.label }}
@@ -212,7 +217,7 @@ jobs:
             --model "$ARM_MODEL" \
             --api-key "$ARM_API_KEY" \
             --thinking off \
-            --timeout-seconds 1200 \
+            --timeout-seconds "$AGENT_TIMEOUT_SECONDS" \
             --host-extension "$GITHUB_WORKSPACE/benchmarks/agent-investigation/pi_log_code_benchmark_host.ts" \
             "${extra[@]}"
           code=$?
@@ -221,6 +226,7 @@ jobs:
           printf '%s\n' "${{ matrix.arm }}" > "$RESULT_ROOT/arm.txt"
           printf '%s\n' "$ARM_MODEL" > "$RESULT_ROOT/model.txt"
           printf '%s\n' "${{ github.sha }}" > "$RESULT_ROOT/core-commit.txt"
+          printf '%s\n' "$AGENT_TIMEOUT_SECONDS" > "$RESULT_ROOT/agent-timeout-seconds.txt"
           if [[ "${{ matrix.arm }}" == tracecite ]]; then
             printf '%s\n' "$TRACECITE_MCP_REF" > "$RESULT_ROOT/tracecite-mcp-ref.txt"
             printf '%s\n' "$TRACECITE_EVIDENCE_MAX_TOKENS" > "$RESULT_ROOT/evidence-max-tokens.txt"
