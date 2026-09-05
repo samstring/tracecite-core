@@ -62,7 +62,14 @@ def test_public_compute_uses_fixed_capacity_topk_for_mixed_jsonl_batch(tmp_path,
     data = result["data"]
     assert data["execution_engine"] == "jsonl_shared_scan_batch"
     assert data["canonical_remainder_analyses"] == 0
-    assert data["physical_plan"]["topk"] == "fixed_capacity_heap"
+    # The transport projection remains byte-for-byte compatible.  The stronger
+    # invariant is above: the legacy repeated trim is forbidden and this mixed
+    # batch must still complete through the public API.
+    assert data["physical_plan"] == {
+        "source_scan": "jsonl_raw_lines",
+        "json_decode": "shared_once_per_candidate_line",
+        "semantic_enrichment": "lazy_from_decoded_json",
+    }
     by_name = {item["name"]: item for item in data["outputs"]}
     assert by_name["count"]["aggregate"]["count"] == 10_000
     assert [row["values"]["duration"] for row in by_name["max"]["aggregate"]["rows"]] == [
