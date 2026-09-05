@@ -1,9 +1,10 @@
 """Shared JSONL physical execution for Evidence Compute batches with Top-K work.
 
-This module is intentionally mechanical.  It reuses the existing Evidence
+This module is intentionally mechanical. It reuses the existing Evidence
 Compute compiler and output contract, but executes compatible aggregate + Top-K
 analyses in one raw JSONL scan with a true fixed-capacity Top-K accumulator.
-Unsupported programs fall back to the established planner.
+Repeated sibling predicates are evaluated once per line, and projection is
+deferred until after Top-K selection so discarded candidates stay cheap.
 """
 
 from __future__ import annotations
@@ -16,44 +17,17 @@ from tracecite_core.segmenter import JsonLineSegmenter, build_segmenter, detect_
 
 from . import evidence_compute as legacy
 from .evidence_shell import _budget_data, _payload_fits
-from .evidence_shell_fast_jsonl import _matches
 from .evidence_shell_public import EvidenceShellPolicy
-from .jsonl_physical import FixedCapacityTopK, field_predicate_matches, field_value, topk_sort_key
+from .jsonl_physical import FixedCapacityTopK, JsonlLineContext, topk_sort_key
 from .retrieval_session import RetrievalSessionStore
 from .schema import AgentResult
-from .source_versions import SourceSegment, SourceVersionStore
+from .source_versions import SourceVersionStore
 
 
-def _project_topn(
-    item: Any,
-    *,
-    obj: Mapping[str, Any],
-    raw: str,
-    semantics: JsonLineSemantics | None,
-    segment: SourceSegment,
-    line_number: int,
-) -> tuple[tuple[int, float | str], dict[str, Any]]:
-    sort_value = field_value(
-        obj,
-        raw,
-        item.sort_field,
-        semantics=semantics,
-        segment=segment,
-        local_start_line=line_number,
-        local_end_line=line_number,
-    )
-    values = {
-        field: field_value(
-            obj,
-            raw,
-            field,
-            semantics=semantics,
-            segment=segment,
-            local_start_line=line_number,
-            local_end_line=line_number,
-        )
-        for field in item.project_fields
-    }
+def _project_selected(item: Any, context: JsonlLineContext) -> dict[str, Any]:
+    values = {field: context.value(field) for field in item.project_fields}
+    segment = context.segment
+    line_number = context.line_number
     global_line = segment.line_base + max(0, line_number - 1)
     projected: dict[str, Any] = {
         "uri": f"evidence://sha256/{segment.sha256}#L{line_number}",
@@ -66,11 +40,16 @@ def _project_topn(
         projected["value"] = values[item.project_fields[0]]
     else:
         projected["values"] = values
-    return topk_sort_key(sort_value, numeric=item.numeric), projected
+    return projected
 
 
-def _finalize_topn(item: Any, accumulator: FixedCapacityTopK, *, policy: EvidenceShellPolicy) -> dict[str, Any]:
-    rows = accumulator.values()
+def _finalize_topn(
+    item: Any,
+    accumulator: FixedCapacityTopK,
+    *,
+    policy: EvidenceShellPolicy,
+) -> dict[str, Any]:
+    rows = [_project_selected(item, context) for context in accumulator.values()]
     aggregate: dict[str, Any] = {"rows": rows, "row_total": len(rows)}
     if len(item.project_fields) == 1:
         aggregate["field"] = item.project_fields[0]
@@ -161,8 +140,17 @@ def try_run_fixed_topk_jsonl_batch(
                 raw_pass: list[Any] = []
                 needs_json = time_scoped
                 needs_semantics = time_scoped
+                raw_cache: dict[tuple[str, tuple[str, ...]], bool] = {}
                 for item in compiled:
-                    if any(not _matches({}, raw, stage) for stage in item.raw_predicates):
+                    passed = True
+                    for stage in item.raw_predicates:
+                        stage_key = (str(stage.command), tuple(str(value) for value in stage.args))
+                        if stage_key not in raw_cache:
+                            raw_cache[stage_key] = legacy._matches({}, raw, stage)
+                        if not raw_cache[stage_key]:
+                            passed = False
+                            break
+                    if not passed:
                         continue
                     raw_pass.append(item)
                     needs_json = needs_json or item.needs_json
@@ -196,47 +184,31 @@ def try_run_fixed_topk_jsonl_batch(
                     if time_to is not None and semantics.timestamp > time_to:
                         continue
 
+                context = JsonlLineContext(
+                    obj=obj,
+                    raw=raw,
+                    semantics=semantics,
+                    segment=segment,
+                    line_number=line_number,
+                )
                 for item in raw_pass:
-                    if any(
-                        not field_predicate_matches(
-                            obj,
-                            raw,
-                            stage,
-                            semantics=semantics,
-                            segment=segment,
-                            local_start_line=line_number,
-                            local_end_line=line_number,
-                        )
-                        for stage in item.field_predicates
-                    ):
+                    if any(not context.predicate_matches(stage) for stage in item.field_predicates):
                         continue
 
                     if isinstance(item, legacy._CompiledJsonlAggregate):
                         item.matched += 1
                         if item.aggregate_stage.command != "count":
-                            field = str(item.aggregate_stage.args[0])
-                            value = field_value(
-                                obj,
-                                raw,
-                                field,
-                                semantics=semantics,
-                                segment=segment,
-                                local_start_line=line_number,
-                                local_end_line=line_number,
-                            )
+                            field_name = str(item.aggregate_stage.args[0])
+                            value = context.value(field_name)
                             key = "<missing>" if value is None else str(value)
                             assert item.counts is not None
                             item.counts[key] = item.counts.get(key, 0) + 1
                     else:
-                        key, projected = _project_topn(
-                            item,
-                            obj=obj,
-                            raw=raw,
-                            semantics=semantics,
-                            segment=segment,
-                            line_number=line_number,
+                        sort_value = context.value(item.sort_field)
+                        accumulators[id(item)].add(
+                            topk_sort_key(sort_value, numeric=item.numeric),
+                            context,
                         )
-                        accumulators[id(item)].add(key, projected)
 
     outputs: list[dict[str, Any]] = []
     for item in compiled:
@@ -283,6 +255,8 @@ def try_run_fixed_topk_jsonl_batch(
             "physical_plan": {
                 "source_scan": "jsonl_raw_lines",
                 "json_decode": "shared_once_per_candidate_line",
+                "predicate_evaluation": "memoized_once_per_unique_stage_per_line",
+                "topk_projection": "post_selection",
                 "semantic_enrichment": "lazy_from_decoded_json",
             },
             "time_scope": {
