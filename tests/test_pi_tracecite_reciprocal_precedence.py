@@ -59,3 +59,13 @@ def test_reciprocal_pair_preempts_remaining_orientation_hint_queue() -> None:
     assert "duplicate representative/writer paths, WaitGroup paths, or unrelated waiters" in skill
     assert "pending queue is only an orientation handoff" not in runtime
     assert "stop consuming the remaining orientation queue" not in runtime
+
+
+def test_pending_path_exclusively_binds_reciprocal_pair_before_impact_expansion() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "The pair must be extracted from that just-materialized pending candidate only" in skill
+    assert "Do not substitute a caller from the representative path, combine callers from both paths, or redefine `B` from task-impact context" in skill
+    assert "Until that reciprocal family search has been issued, re-expanding the representative path for caller/impact context is forbidden" in skill
+    assert "just-materialized pending candidate only" not in runtime
+    assert "re-expanding the representative path for caller/impact context is forbidden" not in runtime
