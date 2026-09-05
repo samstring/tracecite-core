@@ -62,12 +62,11 @@ def test_public_compute_uses_fixed_capacity_topk_for_mixed_jsonl_batch(tmp_path,
     data = result["data"]
     assert data["execution_engine"] == "jsonl_shared_scan_batch"
     assert data["canonical_remainder_analyses"] == 0
-    # The transport projection remains byte-for-byte compatible.  The stronger
-    # invariant is above: the legacy repeated trim is forbidden and this mixed
-    # batch must still complete through the public API.
     assert data["physical_plan"] == {
         "source_scan": "jsonl_raw_lines",
         "json_decode": "shared_once_per_candidate_line",
+        "predicate_evaluation": "memoized_once_per_unique_stage_per_line",
+        "topk_projection": "post_selection",
         "semantic_enrichment": "lazy_from_decoded_json",
     }
     by_name = {item["name"]: item for item in data["outputs"]}
@@ -78,3 +77,55 @@ def test_public_compute_uses_fixed_capacity_topk_for_mixed_jsonl_batch(tmp_path,
     assert [row["values"]["duration"] for row in by_name["min"]["aggregate"]["rows"]] == [
         0, 1, 2, 3, 4, 5, 6
     ]
+
+
+def test_public_compute_memoizes_shared_predicates_for_aggregate_only_batch(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "events.jsonl"
+    rows = [
+        {"service": "a" if index % 2 == 0 else "b", "kind": str(index % 5)}
+        for index in range(1000)
+    ]
+    path.write_text(
+        "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    def fail_legacy_partition(*args, **kwargs):
+        raise AssertionError("compatible aggregate-only JSONL batches must use the shared physical executor")
+
+    monkeypatch.setattr(legacy, "_try_partitioned_jsonl", fail_legacy_partition)
+
+    import tracecite.runtime.jsonl_physical as physical
+
+    real_matches = physical._matches
+    shared_predicate_evaluations = 0
+
+    def counted_matches(obj, raw, stage):
+        nonlocal shared_predicate_evaluations
+        if stage.command == "where" and tuple(stage.args) == ("service", "==", "a"):
+            shared_predicate_evaluations += 1
+        return real_matches(obj, raw, stage)
+
+    monkeypatch.setattr(physical, "_matches", counted_matches)
+
+    result = run_evidence_compute(
+        EvidenceComputeRequest(
+            source=path,
+            analyses=(
+                EvidenceAnalysisSpec(name="count", program="where service == a | count"),
+                EvidenceAnalysisSpec(name="group", program="where service == a | group kind"),
+                EvidenceAnalysisSpec(name="distinct", program="where service == a | distinct kind"),
+            ),
+        ),
+        policy=_policy(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["physical_plan"]["topk_projection"] == "none"
+    by_name = {item["name"]: item for item in result["data"]["outputs"]}
+    assert by_name["count"]["aggregate"]["count"] == 500
+    assert by_name["group"]["aggregate"]["group_total"] == 5
+    assert by_name["distinct"]["aggregate"]["distinct_total"] == 5
+    # Three sibling analyses share one predicate. The physical scan evaluates
+    # that predicate once per source line, not once per analysis per line.
+    assert shared_predicate_evaluations == 1000
