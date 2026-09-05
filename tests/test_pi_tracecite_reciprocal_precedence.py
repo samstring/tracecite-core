@@ -38,12 +38,24 @@ def test_skill_anchors_reciprocal_pair_to_nearest_application_component() -> Non
     assert "nearest non-library application receiver/type immediately above `A`" not in runtime
 
 
-def test_skill_has_hard_reciprocal_handoff_after_complementary_expand() -> None:
+def test_skill_has_hard_reciprocal_handoff_after_distinct_sync_path() -> None:
     skill = SKILL.read_text(encoding="utf-8")
     runtime = IMPL.read_text(encoding="utf-8")
     assert "Hard reciprocal handoff" in skill
-    assert "the next TraceCite invocation is fixed" in skill
-    assert "Do not expand the original representative block, the complementary block, or any already-materialized range first" in skill
+    assert "the very next TraceCite invocation must be `tracecite_search` for `B`'s receiver/type family" in skill
+    assert "Remaining pending hints are suspended and must not be consumed first" in skill
     assert "This handoff overrides the rest of the investigation heuristics below" in skill
     assert "Hard reciprocal handoff" not in runtime
-    assert "the next TraceCite invocation is fixed" not in runtime
+    assert "Remaining pending hints are suspended" not in runtime
+
+
+def test_reciprocal_pair_preempts_remaining_orientation_hint_queue() -> None:
+    skill = SKILL.read_text(encoding="utf-8")
+    runtime = IMPL.read_text(encoding="utf-8")
+    assert "The pending queue is only an orientation handoff" in skill
+    assert "as soon as any materialized pending candidate exposes a synchronization-bearing path" in skill
+    assert "stop consuming the remaining orientation queue" in skill
+    assert "Resume the pending queue only if that reciprocal receiver/type-family search yields no usable candidate" in skill
+    assert "duplicate representative/writer paths, WaitGroup paths, or unrelated waiters" in skill
+    assert "pending queue is only an orientation handoff" not in runtime
+    assert "stop consuming the remaining orientation queue" not in runtime
