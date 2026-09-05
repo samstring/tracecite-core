@@ -110,7 +110,7 @@ jobs:
       RESULT_ROOT: /tmp/result-${{ matrix.arm }}
       WORK_ROOT: /tmp/work-${{ matrix.arm }}
       MCP_STATE_ROOT: /tmp/mcp-state-${{ matrix.arm }}
-      TRACECITE_MCP_REF: 6a253ec8f12541a418fec6b6a8faf40e6d1c9d4b
+      TRACECITE_MCP_REF: 913a3c16cd6ca0de1d7e9c0419011c603de3e0ab
       TRACECITE_EVIDENCE_MAX_TOKENS: "60000"
       TRACECITE_EVIDENCE_MAX_BYTES: "327680"
       TRACECITE_MATERIALIZE_MAX_CHARS: "4000"
@@ -153,8 +153,11 @@ jobs:
           python -m pytest -q \
             tests/test_evidence_compute_batch.py \
             tests/test_evidence_compute_lazy_jsonl_semantics.py \
+            tests/test_evidence_compute_fixed_topk_public.py \
+            tests/test_jsonl_physical_topk.py \
             tests/test_jsonline_semantics_shared.py \
             tests/test_evidence_shell_fast_jsonl.py \
+            tests/test_evidence_shell_jsonl_selection.py \
             tests/test_evidence_shell_agent_regressions.py \
             tests/test_evidence_shell_agent_where_conjunction.py \
             tests/test_record_search_unscoped_fastpath.py \
@@ -166,7 +169,8 @@ jobs:
             tracecite-mcp/tests/test_analyze_time_scope.py \
             tracecite-mcp/tests/test_stdio_integration.py \
             tracecite-mcp/tests/test_shell_projection_agent_feedback.py \
-            tracecite-mcp/tests/test_session_transport_regressions.py
+            tracecite-mcp/tests/test_session_transport_regressions.py \
+            tracecite-mcp/tests/test_tracecite_skill_contract.py
       - name: Run ${{ matrix.label }}
         shell: bash
         run: |
