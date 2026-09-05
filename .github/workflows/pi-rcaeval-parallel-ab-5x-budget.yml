@@ -110,10 +110,13 @@ jobs:
       RESULT_ROOT: /tmp/result-${{ matrix.arm }}
       WORK_ROOT: /tmp/work-${{ matrix.arm }}
       MCP_STATE_ROOT: /tmp/mcp-state-${{ matrix.arm }}
-      TRACECITE_MCP_REF: 5bae4f78a970c4e816186ec859191213a22df38d
+      TRACECITE_MCP_REF: 735d0887efea3efc3ad1609213fae55761e8f9d9
       TRACECITE_EVIDENCE_MAX_TOKENS: "60000"
       TRACECITE_EVIDENCE_MAX_BYTES: "327680"
-      TRACECITE_MATERIALIZE_MAX_CHARS: "8000"
+      TRACECITE_MATERIALIZE_MAX_CHARS: "4000"
+      # Host-owned conversation boundary. The Agent may synthesize arbitrary
+      # per-call session_id strings; TraceCite maps them to this stable session.
+      TRACECITE_MCP_SESSION_ID: rcaeval-${{ github.run_id }}-${{ matrix.arm }}
       ARM_MODEL: ${{ matrix.arm == 'native' && vars.GMI_MODEL || vars.GMI2_MODEL }}
       ARM_API_KEY: ${{ matrix.arm == 'native' && secrets.GMI_API_KEY || secrets.GMI2_API_KEY }}
     steps:
@@ -150,7 +153,10 @@ jobs:
         run: |
           set -euo pipefail
           python -m pytest -q tests/test_evidence_shell_fast_jsonl.py tests/test_evidence_shell_agent_regressions.py
-          python -m pytest -q tracecite-mcp/tests/test_server.py tracecite-mcp/tests/test_shell_projection_agent_feedback.py
+          python -m pytest -q \
+            tracecite-mcp/tests/test_server.py \
+            tracecite-mcp/tests/test_shell_projection_agent_feedback.py \
+            tracecite-mcp/tests/test_session_transport_regressions.py
       - name: Run ${{ matrix.label }}
         shell: bash
         run: |
@@ -219,6 +225,8 @@ jobs:
             printf '%s\n' "$TRACECITE_MCP_REF" > "$RESULT_ROOT/tracecite-mcp-ref.txt"
             printf '%s\n' "$TRACECITE_EVIDENCE_MAX_TOKENS" > "$RESULT_ROOT/evidence-max-tokens.txt"
             printf '%s\n' "$TRACECITE_EVIDENCE_MAX_BYTES" > "$RESULT_ROOT/evidence-max-bytes.txt"
+            printf '%s\n' "$TRACECITE_MATERIALIZE_MAX_CHARS" > "$RESULT_ROOT/materialize-max-chars.txt"
+            printf '%s\n' "$TRACECITE_MCP_SESSION_ID" > "$RESULT_ROOT/host-session-id.txt"
           fi
           exit 0
       - name: Build no-gold summary
