@@ -9,6 +9,7 @@ unchanged.
 
 from __future__ import annotations
 
+from functools import lru_cache
 import json
 import operator
 import shlex
@@ -60,6 +61,13 @@ _SPECIAL_FIELDS = {
 _PREDICATES = {"search", "regex", "exclude", "exclude-regex", "where", "exists", "missing", "all"}
 _AGGREGATES = {"count", "group", "distinct"}
 _POST = {"sort", "head", "take", "first"}
+
+
+@lru_cache(maxsize=256)
+def _cached_matcher(pattern: str) -> Matcher:
+    """Compile one safe Matcher per distinct runtime pattern, not per input row."""
+
+    return Matcher(pattern)
 
 
 def _tokenize(program: str) -> list[_Stage]:
@@ -122,7 +130,7 @@ def _matches(obj: Mapping[str, Any], raw: str, stage: _Stage) -> bool:
     if command in {"regex", "exclude-regex"}:
         if not args:
             raise ValueError(f"{command} requires a pattern")
-        matched = Matcher(" ".join(args)).match(raw)[0]
+        matched = _cached_matcher(" ".join(args)).match(raw)[0]
         return not matched if command == "exclude-regex" else matched
     if command in {"exists", "missing"}:
         if len(args) != 1:
@@ -155,7 +163,7 @@ def _matches(obj: Mapping[str, Any], raw: str, stage: _Stage) -> bool:
                 return actual_text.startswith(expected)
             if op == "endswith":
                 return actual_text.endswith(expected)
-            return Matcher(expected).match(actual_text)[0]
+            return _cached_matcher(expected).match(actual_text)[0]
         raise ValueError(f"unsupported where operator: {op}")
     raise ValueError(f"unsupported fast JSONL predicate: {command}")
 
@@ -287,13 +295,22 @@ def try_run_fast_jsonl_aggregate(
     matched = 0
     counts: dict[str, int] = {}
     aggregate_field = aggregate_stage.args[0] if aggregate_stage.args else None
+    raw_only = [
+        stage
+        for stage in predicates
+        if stage.command in {"search", "regex", "exclude", "exclude-regex", "all"}
+    ]
+    field_predicates = [
+        stage
+        for stage in predicates
+        if stage.command not in {"search", "regex", "exclude", "exclude-regex", "all"}
+    ]
     for segment in view.segments:
         with Path(segment.path).open("r", encoding="utf-8", errors="replace") as handle:
             for raw in handle:
                 if not raw.strip():
                     continue
                 # Do literal/regex predicates on raw text before JSON decoding when possible.
-                raw_only = [stage for stage in predicates if stage.command in {"search", "regex", "exclude", "exclude-regex", "all"}]
                 if any(not _matches({}, raw, stage) for stage in raw_only):
                     continue
                 try:
@@ -301,7 +318,6 @@ def try_run_fast_jsonl_aggregate(
                     obj = decoded if isinstance(decoded, Mapping) else {}
                 except json.JSONDecodeError:
                     obj = {}
-                field_predicates = [stage for stage in predicates if stage.command not in {"search", "regex", "exclude", "exclude-regex", "all"}]
                 if any(not _matches(obj, raw, stage) for stage in field_predicates):
                     continue
                 matched += 1
