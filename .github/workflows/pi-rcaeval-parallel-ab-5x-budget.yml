@@ -1,5 +1,5 @@
 name: Pi RCAEval Parallel A/B 5x Budget
-# Iteration 14: validate sufficiency stopping and current Core planner correctness.
+# Iteration 15: validate the new model-to-mechanical-filtering flow on run11 telemetry.
 
 on:
   workflow_dispatch:
