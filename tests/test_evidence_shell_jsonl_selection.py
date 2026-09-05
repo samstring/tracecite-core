@@ -1,0 +1,121 @@
+from __future__ import annotations
+
+import json
+
+from tracecite.runtime import EvidenceShellPolicy, EvidenceShellRequest, run_evidence_shell
+from tracecite_core.segmenter import JsonLineSegmenter
+
+
+def _policy() -> EvidenceShellPolicy:
+    return EvidenceShellPolicy(
+        max_evidence_tokens=20_000,
+        max_evidence_bytes=200_000,
+        source_mode="static",
+    )
+
+
+def _source(tmp_path, rows) -> str:
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def test_where_head_uses_streaming_jsonl_without_record_scan(tmp_path, monkeypatch) -> None:
+    source = _source(
+        tmp_path,
+        [
+            {"spanID": "other", "seq": 1},
+            {"spanID": "target", "seq": 2},
+            {"spanID": "target", "seq": 3},
+            {"spanID": "target", "seq": 4},
+            *({"spanID": "target", "seq": index} for index in range(5, 5000)),
+        ],
+    )
+
+    def fail_segment_file(*args, **kwargs):
+        raise AssertionError("bounded JSONL selection must not construct Records")
+
+    monkeypatch.setattr(JsonLineSegmenter, "segment_file", fail_segment_file)
+
+    import tracecite.runtime.evidence_shell_jsonl_selection as selection
+
+    real_loads = selection.json.loads
+    decodes = 0
+
+    def counted_loads(value):
+        nonlocal decodes
+        decodes += 1
+        return real_loads(value)
+
+    monkeypatch.setattr(selection.json, "loads", counted_loads)
+
+    result = run_evidence_shell(
+        EvidenceShellRequest(source=source, program="where spanID == target | head 3"),
+        policy=_policy(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["execution_engine"] == "jsonl_streaming_bounded_head"
+    assert result["data"]["physical_plan"]["selection"] == "early_stop_head"
+    assert [item["start_line"] for item in result["evidence"]] == [2, 3, 4]
+    assert decodes == 4
+
+
+def test_where_sort_head_uses_fixed_capacity_topk_without_record_scan(tmp_path, monkeypatch) -> None:
+    source = _source(
+        tmp_path,
+        [
+            {"traceID": "x", "duration": 2, "name": "early-low"},
+            {"traceID": "other", "duration": 999, "name": "ignore"},
+            {"traceID": "x", "duration": 9, "name": "first-high"},
+            {"traceID": "x", "duration": 9, "name": "second-high"},
+            {"traceID": "x", "duration": 4, "name": "mid"},
+        ],
+    )
+
+    def fail_segment_file(*args, **kwargs):
+        raise AssertionError("sorted JSONL selection must not construct Records")
+
+    monkeypatch.setattr(JsonLineSegmenter, "segment_file", fail_segment_file)
+
+    result = run_evidence_shell(
+        EvidenceShellRequest(
+            source=source,
+            program="where traceID == x | sort duration desc numeric | head 2",
+        ),
+        policy=_policy(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["execution_engine"] == "jsonl_streaming_fixed_topk"
+    assert result["data"]["physical_plan"]["selection"] == "fixed_capacity_topk"
+    # Equal sort keys preserve source order, matching canonical stable sort.
+    assert [item["start_line"] for item in result["evidence"]] == [3, 4]
+
+
+def test_absolute_time_scope_keeps_untimestamped_records_like_canonical(tmp_path) -> None:
+    source = _source(
+        tmp_path,
+        [
+            {"timestamp": "2026-09-05T10:00:00Z", "kind": "x"},
+            {"timestamp": "2026-09-05T10:05:00Z", "kind": "x"},
+            {"kind": "x"},
+            {"timestamp": "2026-09-05T10:20:00Z", "kind": "x"},
+        ],
+    )
+
+    result = run_evidence_shell(
+        EvidenceShellRequest(
+            source=source,
+            program="where kind == x | head 3",
+            since="2026-09-05T10:04:00Z",
+            until="2026-09-05T10:10:00Z",
+        ),
+        policy=_policy(),
+    )
+
+    assert result["status"] == "ok"
+    assert [item["start_line"] for item in result["evidence"]] == [2, 3]

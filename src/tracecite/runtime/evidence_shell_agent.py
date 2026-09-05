@@ -17,6 +17,7 @@ from .evidence_shell_agent_compat import normalize_agent_evidence_shell_program
 from .evidence_shell_compound import apply_compound_aggregate, split_compound_aggregate_program
 from .evidence_shell_fast_jsonl import try_run_fast_jsonl_aggregate
 from .evidence_shell_fast_topn import try_run_fast_topn
+from .evidence_shell_jsonl_selection import try_run_jsonl_selection
 from .evidence_shell_public import (
     DEFAULT_MAX_EVIDENCE_BYTES,
     DEFAULT_MAX_EVIDENCE_TOKENS,
@@ -192,15 +193,17 @@ def run_evidence_shell(
         preprocessed = normalize_agent_evidence_shell_program(request.program)
         prepared = _request_with_program(request, preprocessed)
 
-        # JSONL field aggregates are a common large-trace hot path. Evaluate
-        # supported aggregate-only programs in one streaming JSON decode pass.
+        # Aggregate-only JSONL programs remain a streaming mechanical operation.
         payload = try_run_fast_jsonl_aggregate(prepared, policy=policy, session=session)
 
         if payload is None:
-            # Terminal sort + explicit head/take/first is also mechanically
-            # bounded. Keep only the best N rows while scanning rather than
-            # sorting the whole matched set, while preserving the same explicit
-            # selection/budget/provenance/session semantics.
+            # Predicate + bounded raw selection shares the JSONL physical scan
+            # instead of constructing one canonical Record per source line.
+            payload = try_run_jsonl_selection(prepared, policy=policy, session=session)
+
+        if payload is None:
+            # Generic non-JSONL terminal Top-N remains available as a canonical
+            # Record-backed fallback.
             payload = try_run_fast_topn(prepared, policy=policy, session=session)
 
         if payload is None:
