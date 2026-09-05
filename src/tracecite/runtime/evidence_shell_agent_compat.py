@@ -1,6 +1,6 @@
 """Agent-facing compatibility rewrites layered above canonical Evidence Shell.
 
-These rewrites never execute a host shell.  They only recognize familiar,
+These rewrites never execute a host shell. They only recognize familiar,
 read-only query shapes that are mechanically equivalent to canonical TraceCite
 Record-pipeline stages, then hand the rewritten program to the existing
 Evidence Shell compatibility/parser layer.
@@ -58,6 +58,12 @@ def _jq_projection(tokens: list[str]) -> str | None:
     if not re.fullmatch(r"\.[A-Za-z_][A-Za-z0-9_.-]*", expression):
         return None
     return expression[1:]
+
+
+def _projection_field(tokens: list[str]) -> str | None:
+    if tokens and tokens[0].lower() == "project" and len(tokens) == 2:
+        return tokens[1]
+    return _jq_projection(tokens)
 
 
 def _jq_test_filter(tokens: list[str]) -> list[str] | None:
@@ -119,6 +125,33 @@ def _sort_for_field(tokens: list[str], field: str) -> list[str] | None:
     return result
 
 
+def _sort_count_stage(tokens: list[str]) -> list[str] | None:
+    if not tokens or tokens[0].lower() != "sort":
+        return None
+    args = list(tokens[1:])
+    if not args:
+        return ["sort", "count", "asc", "numeric"]
+    if args[0].startswith("-"):
+        reverse = False
+        for token in args:
+            if not token.startswith("-"):
+                return None
+            for char in token[1:]:
+                if char == "r":
+                    reverse = True
+                elif char == "n":
+                    pass
+                else:
+                    return None
+        return ["sort", "count", "desc" if reverse else "asc", "numeric"]
+    if args[0] != "count":
+        return None
+    direction = args[1].lower() if len(args) > 1 else "asc"
+    if direction not in {"asc", "desc"}:
+        return None
+    return ["sort", "count", direction, "numeric"]
+
+
 def _is_count_stage(tokens: list[str]) -> bool:
     if not tokens:
         return False
@@ -143,16 +176,47 @@ def normalize_agent_evidence_shell_program(program: str) -> str:
         replaced.append(jq_filter if jq_filter is not None else stage)
     stages = replaced
 
+    # A very common shell investigation shape projects one field, sorts it,
+    # counts unique values, sorts by count and takes a top-N. TraceCite group is
+    # the same global mechanical computation and does not require those scalar
+    # intermediate rows to cross the model boundary.
+    index = 0
+    while index < len(stages):
+        field = _projection_field(stages[index])
+        if field is None:
+            index += 1
+            continue
+        cursor = index + 1
+        if cursor < len(stages) and stages[cursor][0].lower() == "sort":
+            cursor += 1
+        if cursor >= len(stages) or stages[cursor][0].lower() != "uniq" or stages[cursor][1:] not in (["-c"], ["--count"]):
+            index += 1
+            continue
+        cursor += 1
+        post_sort: list[str] | None = None
+        if cursor < len(stages) and stages[cursor][0].lower() == "sort":
+            post_sort = _sort_count_stage(stages[cursor])
+            if post_sort is None:
+                index += 1
+                continue
+            cursor += 1
+        limit = _head_count(stages[cursor]) if cursor < len(stages) else None
+        if limit is None:
+            index += 1
+            continue
+        replacement = [["group", field]]
+        if post_sort is not None:
+            replacement.append(post_sort)
+        replacement.append(["head", str(limit)])
+        stages[index : cursor + 1] = replacement
+        index += len(replacement)
+
     # Projection followed by sort/selection is mechanically equivalent to
     # sorting/selecting records first and projecting the selected field last.
     # This keeps project terminal without forcing Agents to learn that detail.
     index = 0
     while index + 2 < len(stages):
-        field: str | None = None
-        if stages[index][0].lower() == "project" and len(stages[index]) == 2:
-            field = stages[index][1]
-        else:
-            field = _jq_projection(stages[index])
+        field = _projection_field(stages[index])
         if field is None:
             index += 1
             continue
@@ -167,6 +231,18 @@ def normalize_agent_evidence_shell_program(program: str) -> str:
             ["project", field],
         ]
         index += 3
+
+    # Projection followed directly by head/take/first preserves row order, so
+    # select before the terminal projection and keep it in one tool call.
+    index = 0
+    while index + 1 < len(stages):
+        field = _projection_field(stages[index])
+        limit = _head_count(stages[index + 1]) if field is not None else None
+        if field is None or limit is None:
+            index += 1
+            continue
+        stages[index : index + 2] = [["head", str(limit)], ["project", field]]
+        index += 2
 
     # A scalar count piped through head/take/first is unchanged by that stage.
     # Accept the familiar spelling instead of returning a terminal-aggregate error.
