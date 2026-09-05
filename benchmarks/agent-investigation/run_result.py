@@ -121,36 +121,59 @@ def _assistant_error_payload(event: Mapping[str, Any]) -> tuple[Mapping[str, Any
     return message, text
 
 
-def _successful_assistant_child(event: Mapping[str, Any], parent_id: str) -> bool:
+def _successful_assistant_message(event: Mapping[str, Any]) -> bool:
     if str(event.get("type") or "").lower() != "message":
-        return False
-    if str(event.get("parentId") or "") != parent_id:
         return False
     message = event.get("message")
     if not isinstance(message, Mapping) or str(message.get("role") or "") != "assistant":
         return False
-    stop_reason = str(message.get("stopReason") or "").lower()
-    raw_stop_reason = str(message.get("rawStopReason") or "").lower()
-    if "error" in stop_reason or "error" in raw_stop_reason:
-        return False
-    if any(message.get(key) not in (None, "", [], {}) for key in ("error", "errorMessage", "error_message")):
+    if _assistant_error_payload(event) is not None:
         return False
     return message.get("content") not in (None, "", [], {})
+
+
+def _retry_chain_recovered(
+    event_id: str,
+    children: Mapping[str, list[Mapping[str, Any]]],
+) -> bool:
+    """Follow only assistant retry descendants until one succeeds."""
+
+    pending = [event_id]
+    seen: set[str] = set()
+    while pending:
+        parent_id = pending.pop()
+        if parent_id in seen:
+            continue
+        seen.add(parent_id)
+        for child in children.get(parent_id, []):
+            if _successful_assistant_message(child):
+                return True
+            if _assistant_error_payload(child) is None:
+                continue
+            child_id = str(child.get("id") or "")
+            if child_id:
+                pending.append(child_id)
+    return False
 
 
 def _provider_session_incidents(session_text: str) -> list[dict[str, Any]]:
     """Return structured provider failures and whether Pi recovered from each one.
 
-    Pi records a retry recovery as a later successful assistant message whose
-    ``parentId`` points at the assistant error event. A transient, recovered
-    provider failure is still important observability, but it should not make a
-    completed run invalid merely because the retry is preserved in session
-    history.
+    Pi may preserve retries as an assistant parent chain such as
+    ``429 -> 429 -> success``. Every provider error on that same retry chain is
+    recovered when a later assistant descendant succeeds. Unrelated branches
+    are not crossed.
     """
 
     events = _parse_jsonl_events(session_text)
+    children: dict[str, list[Mapping[str, Any]]] = {}
+    for event in events:
+        parent_id = str(event.get("parentId") or "")
+        if parent_id:
+            children.setdefault(parent_id, []).append(event)
+
     incidents: list[dict[str, Any]] = []
-    for index, event in enumerate(events):
+    for event in events:
         parsed = _assistant_error_payload(event)
         if parsed is None:
             continue
@@ -159,10 +182,7 @@ def _provider_session_incidents(session_text: str) -> list[dict[str, Any]]:
         if kind is None:
             continue
         event_id = str(event.get("id") or "")
-        recovered = bool(event_id) and any(
-            _successful_assistant_child(candidate, event_id)
-            for candidate in events[index + 1 :]
-        )
+        recovered = bool(event_id) and _retry_chain_recovered(event_id, children)
         incidents.append(
             {
                 "kind": kind,
@@ -317,8 +337,6 @@ def build_run_result(
         str(unresolved_incidents[0]["kind"]) if unresolved_incidents else None
     )
 
-    # Agent runner timeouts surface via exit=124/stderr. Do not interpret a
-    # recovered provider 504 preserved in session history as an Agent timeout.
     timed_out = exit_code == 124 or re.search(r"\b(?:timed out|timeout)\b", stderr, re.I) is not None
     if provider_contamination is not None:
         validity_reason = provider_contamination
@@ -358,7 +376,9 @@ def build_run_result(
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build the canonical Pi benchmark task_result/run_validity contract.")
+    parser = argparse.ArgumentParser(
+        description="Build the canonical Pi benchmark task_result/run_validity contract."
+    )
     parser.add_argument("--score", type=Path, required=True)
     parser.add_argument("--exit-code-file", type=Path, required=True)
     parser.add_argument("--stderr", type=Path)
@@ -382,7 +402,10 @@ def main() -> int:
         transcript_events=events,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.output.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
