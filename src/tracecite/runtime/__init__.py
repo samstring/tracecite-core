@@ -18,7 +18,7 @@ from .evidence_routing import (
     EvidenceRoute, EvidenceRoutingPolicy, RoutingDecision, decide_route,
     estimate_line_addressable_chars, refine_route_after_result,
 )
-from .evidence_shell_public import (
+from .evidence_shell_agent import (
     DEFAULT_MAX_EVIDENCE_BYTES, DEFAULT_MAX_EVIDENCE_TOKENS,
     EvidenceShellPolicy, EvidenceShellRequest, run_evidence_shell,
 )
